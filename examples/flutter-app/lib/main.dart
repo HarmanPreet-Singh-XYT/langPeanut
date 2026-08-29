@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_gen/gen_l10n/app_localizations.dart';
 
 void main() {
   runApp(const MyApp());
@@ -11,7 +10,7 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: AppLocalizations.of(context)!.flightpeanutMobile,
+      title: 'FlightPeanut Mobile',
       home: const HomeScreen(),
     );
   }
@@ -24,13 +23,13 @@ class HomeScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title:  Text(AppLocalizations.of(context)!.mainDashboard),
+        title: const Text("Dashboard"),
       ),
       body: Center(
         child: Column(
-          children:  [
-            Text(AppLocalizations.of(context)!.mainWelcomeback),
-            Tooltip(message: AppLocalizations.of(context)!.mainViewsettings),
+          children: const [
+            Text("Welcome back, {name}!"),
+            Tooltip(message: "View settings"),
           ],
         ),
       ),

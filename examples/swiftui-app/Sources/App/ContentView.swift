@@ -8,15 +8,15 @@ public struct ContentView: View {
     public var body: some View {
         NavigationStack {
             VStack(spacing: 20) {
-                Text("contentviewWelcomeback")
+                Text("Welcome back, {name}!")
                     .font(.headline)
                 
-                Button("contentviewSubmitorder") {
+                Button("Submit Order") {
                     print("Order clicked")
                 }
                 .buttonStyle(.borderedProminent)
             }
-            .navigationTitle("contentviewDashboard")
+            .navigationTitle("Dashboard")
         }
     }
 }

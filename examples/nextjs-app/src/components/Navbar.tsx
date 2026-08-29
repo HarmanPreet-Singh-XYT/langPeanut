@@ -1,5 +1,4 @@
 import React from 'react';
-import { useTranslation } from 'react-i18next';
 
 export interface NavbarProps {
   user?: { name: string; email: string };
@@ -11,22 +10,24 @@ export const Navbar: React.FC<NavbarProps> = ({ user, cartCount, onOpenCart }) =
   return (
     <header className="navbar-container">
       <div className="brand-logo">
-        <h1>{t('flightpeanutStore')}</h1>
+        <h1>FlightPeanut Store</h1>
       </div>
       <nav className="nav-links">
-        <a href="/flights">{t('navbarFlights')}</a>
-        <a href="/hotels">{t('navbarHotels')}</a>
-        <a href="/deals">{t('navbarDeals')}</a>
+        <a href="/flights">Flights</a>
+        <a href="/hotels">Hotels</a>
+        <a href="/deals">Deals</a>
       </nav>
       <div className="nav-actions">
-        <button onClick={onOpenCart} title={t('titleViewYourShoppingCart')}>{t('navbarCart', { cartCount })}</button>
+        <button onClick={onOpenCart} title="View your shopping cart">
+          Cart ({cartCount})
+        </button>
         {user ? (
           <div className="user-profile">
-            <span>{t('navbarWelcomeback', { name })}</span>
-            <button onClick={() => console.log('LOGOUT_TRIGGERED')}>{t('navbarSignout')}</button>
+            <span>Welcome back, {user.name}!</span>
+            <button onClick={() => console.log('LOGOUT_TRIGGERED')}>Sign Out</button>
           </div>
         ) : (
-          <button onClick={() => console.log('LOGIN_TRIGGERED')}>{t('navbarSignin')}</button>
+          <button onClick={() => console.log('LOGIN_TRIGGERED')}>Sign In</button>
         )}
       </div>
     </header>
