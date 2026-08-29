@@ -251,16 +251,21 @@
 * **User Directive**: *"can we have dedicated example flow in the app itself so we launch the app by installing dependencies, show raw example then after we add stuff to show them the after and before with ability to switch"*
 * **Actions Taken**:
   1. Implemented **`🎮 7. Interactive Live Demo & Example Flow`** in [pkg/tui/app.go](file:///Users/harmanpreetsingh/Public/Code/langTranslate/pkg/tui/app.go).
-  2. Created a 4-tab live interactive viewer:
-     - **Tab 1: `[1] 📄 RAW CODE (BEFORE)`**: Displays un-localized source code with hardcoded strings highlighted.
-     - **Tab 2: `[2] ✨ SURGICAL AST (AFTER)`**: Displays refactored source code with `{t('key')}` hooks and zero whitespace drift.
-     - **Tab 3: `[3] 🌐 GENERATED LOCALES`**: Displays synthesized French Gen-Z / Spanish / German JSON dictionaries.
-     - **Tab 4: `[4] 🛡️ 4-TIER CRITIC REPORT`**: Displays autonomous closed-loop verification results.
-  3. Added live interactive keyboard controls:
-     - `[Tab]` or `[1-4]`: Instantly toggle between Before, After, Locales, and Critic views.
-     - `[f]`: Switch between Next.js, Flutter, SwiftUI, and Android example projects.
-     - `[r]`: Trigger 1-Click Multi-Agent Localization live.
-     - `[c]`: 1-Click Reset back to raw state for repeatable demo recordings.
+  2. Created a 5-tab live interactive viewer (Raw Code Before, Refactored AST After, Unified Diff Highlights, Generated Locales, 4-Tier Critic Report).
+  3. Added live interactive keyboard controls (`[Tab/1-5]`, `[f]`, `[r]`, `[c]`, `[w]`).
+
+### Session Entry 21: Live Interactive Browser Web Demo & 1-Click Server (`langPeanut demo`)
+* **User Directive**: *"dude by interactive i meant launching the website itself not showing the code"*
+* **Actions Taken**:
+  1. Built an embedded zero-dependency high-performance HTTP web server in [pkg/web/server.go](file:///Users/harmanpreetsingh/Public/Code/langTranslate/pkg/web/server.go) serving the full interactive **FlightPeanut Store** web app at `http://localhost:3000`.
+  2. Added interactive browser features:
+     - **Real-Time Language Switcher**: Dynamically switches entire web application across English, French, Spanish, German, Japanese, Hindi, Punjabi, Arabic, Chinese, and Portuguese without page reloads.
+     - **Before vs After Toggle**: Clickable button switching the live website between raw hardcoded English copy and AST multi-agent localized copy.
+     - **Gen-Z Slang Mode Toggle**: On-the-fly persona switch applying cultural internet slang translations (*"La plateforme de voyage trop stylée ✨"*, *"Réserve direct tes bails de vol no cap 🔥"*).
+     - **Interactive Cart & Booking Components**: Add to cart, coupon application, and flight search with live translated alerts.
+  3. Added new CLI command `langPeanut demo` (and aliases `preview`, `serve`) in [cmd/langPeanut/demo.go](file:///Users/harmanpreetsingh/Public/Code/langTranslate/cmd/langPeanut/demo.go).
+  4. Added `[w]` 1-click browser launch shortcut inside the terminal TUI app.
+  5. Created 1-command startup script [scripts/launch_demo.sh](file:///Users/harmanpreetsingh/Public/Code/langTranslate/scripts/launch_demo.sh).
 
 ### Session Entry 16: Closing the Gap Between Claimed and Actual AST Parsing; Live-Measured Benchmark Baselines
 * **User Directive**: A code review flagged that despite the docs' repeated claims of "deterministic AST precision" and "tree-sitter" tooling, `pkg/platforms/*.go` actually extracted strings with regexes, and the benchmark's baseline comparison numbers (`42.0%` zero-shot, `55.0%` naive regex) were hardcoded constants, not measured. Directive: *"implement what the docs have"* — make both claims literally true.

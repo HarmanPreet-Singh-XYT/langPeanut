@@ -18,6 +18,7 @@ import (
 	"github.com/langPeanut/langPeanut/pkg/orchestrator"
 	"github.com/langPeanut/langPeanut/pkg/platforms"
 	"github.com/langPeanut/langPeanut/pkg/types"
+	"github.com/langPeanut/langPeanut/pkg/web"
 )
 
 // ViewState represents current active screen in the TUI app
@@ -449,6 +450,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "r":
 			if m.state == ViewExampleFlow {
 				m.runExampleLocalization()
+				return m, nil
+			}
+
+		case "w", "o":
+			if m.state == ViewExampleFlow {
+				go func() {
+					_ = web.StartInteractiveWebDemo(3000, true)
+				}()
+				m.statusMsg = "🌐 Launched Live Interactive Website Demo at http://localhost:3000 in your browser!"
 				return m, nil
 			}
 
@@ -1078,7 +1088,7 @@ Self-Correction Reflection Iterations: 0 retries needed`
 		s.WriteString(lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(primaryColor).Padding(0, 1).Render(criticReport) + "\n")
 	}
 
-	s.WriteString("\n" + lipgloss.NewStyle().Foreground(subtleColor).Render("Shortcuts: [Tab/1-5] Switch Tab | [f] Switch Framework | [r] Run Localization | [c] Reset | [Esc] Menu"))
+	s.WriteString("\n" + lipgloss.NewStyle().Bold(true).Foreground(accentColor).Render("Shortcuts: [w] 🌐 Launch Web App in Browser  |  [Tab/1-5] Switch Tabs  |  [f] Framework  |  [r] Run  |  [c] Reset  |  [Esc] Menu"))
 
 	return s.String()
 }
