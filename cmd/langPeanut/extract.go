@@ -29,7 +29,7 @@ var extractCmd = &cobra.Command{
 		registry := platforms.NewRegistry()
 		platform, _ := registry.AutoDetect(absRoot)
 
-		fmt.Printf("🥜 langPeanut Extract — Processing %s (%s)...\n\n", absRoot, platform.DisplayName())
+		fmt.Printf("langPeanut Extract — Processing %s (%s)...\n\n", absRoot, platform.DisplayName())
 
 		supervisor, err := agents.NewSupervisorAgent(absRoot, platform)
 		if err != nil {
@@ -73,7 +73,7 @@ var refactorCmd = &cobra.Command{
 		registry := platforms.NewRegistry()
 		platform, _ := registry.AutoDetect(absRoot)
 
-		fmt.Printf("⚡ langPeanut Refactor — Rewriting %s (%s)...\n\n", absRoot, platform.DisplayName())
+		fmt.Printf("langPeanut Refactor — Rewriting %s (%s)...\n\n", absRoot, platform.DisplayName())
 
 		supervisor, err := agents.NewSupervisorAgent(absRoot, platform)
 		if err != nil {

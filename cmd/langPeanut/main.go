@@ -20,19 +20,19 @@ var (
 
 var rootCmd = &cobra.Command{
 	Use:   "langPeanut [directory]",
-	Short: "langPeanut — Universal Multi-Agent Localization Workflow & Interactive App",
-	Long: `🥜 langPeanut — Universal Multi-Agent Localization System for Developers
+	Short: "langPeanut — Universal Multi-Agent Localization Workflow & Engineering Studio",
+	Long: `langPeanut — Universal Multi-Agent Localization System for Developers
 
 Effortlessly find hardcoded UI strings, apply surgical AST patches with 0 syntax drift, 
 and translate your app into 36+ languages with automated 4-Tier Critic verification.
 
-⚡ QUICK START EXAMPLES:
+QUICK START EXAMPLES:
   langPeanut                          Launch the full interactive TUI app
-  langPeanut ./examples/nextjs-app    Launch TUI targeting a specific project
-  langPeanut scan ./examples/nextjs-app Scan and audit hardcoded strings
+  langPeanut web                      Launch the Web Mode Studio in your browser (http://localhost:3000)
+  langPeanut ui                       Alias for Web Mode Studio
+  langPeanut run ./examples/nextjs    Execute full 1-click autonomous localization
+  langPeanut audit                    Audit project for hardcoded strings
   langPeanut translate -l fr,es,ja    Translate into French, Spanish & Japanese
-  langPeanut demo                     Launch live interactive browser demo
-  langPeanut reset                    Reset demo apps to fresh unlocalized state
   langPeanut benchmark                Run 10-Case Adversarial Benchmark Suite`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		targetDir := projectRoot
@@ -75,7 +75,6 @@ func init() {
 
 func main() {
 	// Best-effort: load API keys and config from a local .env file if present.
-	// Never overrides variables already set in the environment.
 	_ = godotenv.Load()
 
 	if err := rootCmd.Execute(); err != nil {

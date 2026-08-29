@@ -71,7 +71,7 @@ func TestBuildPullRequest_NeedsReview(t *testing.T) {
 	if len(labels) != 2 || labels[1] != LabelNeedsReview {
 		t.Errorf("labels = %v, want [%s %s]", labels, LabelAutomation, LabelNeedsReview)
 	}
-	if !strings.Contains(body, "## ⚠️ Needs manual review") {
+	if !strings.Contains(body, "## Needs manual review") {
 		t.Errorf("body missing needs-review section:\n%s", body)
 	}
 	if !strings.Contains(body, "src/App.tsx:42") {

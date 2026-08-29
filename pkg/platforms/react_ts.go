@@ -88,6 +88,22 @@ var (
 		"header": true, "subtitle": true, "caption": true, "buttonText": true,
 	}
 
+	// UI Object Properties commonly used in custom hooks & dialog props
+	uiObjectProperties = map[string]bool{
+		"title": true, "message": true, "description": true, "label": true,
+		"confirmLabel": true, "cancelLabel": true, "confirmText": true, "cancelText": true,
+		"header": true, "subtitle": true, "placeholder": true, "error": true,
+		"helperText": true, "tooltip": true, "buttonText": true, "emptyText": true,
+		"successMessage": true, "errorMessage": true,
+	}
+
+	// UI Call expressions used in notification/alert/toast hooks
+	uiCallCallees = map[string]bool{
+		"toast": true, "toast.success": true, "toast.error": true, "toast.info": true, "toast.warning": true,
+		"notify": true, "alert": true, "showNotification": true, "openModal": true,
+		"showToast": true, "confirm": true, "useToast": true,
+	}
+
 	// Call expressions whose string/template-literal arguments are never UI-facing.
 	skipCallCallees = map[string]bool{
 		"console.log": true, "console.warn": true, "console.error": true, "console.debug": true,
@@ -153,6 +169,14 @@ func (ex *reactExtractor) walk(n *sitter.Node) {
 		if ex.isInsideJSX(n) && !ex.isInsideSkippedCall(n) && !ex.isInsideJSXAttribute(n) {
 			ex.extractTemplateString(n)
 		}
+	case "string":
+		if ex.isInsideJSXExpression(n) && !ex.isInsideSkippedCall(n) && !ex.isInsideJSXAttribute(n) {
+			ex.extractJSXExpressionString(n)
+		}
+	case "pair":
+		ex.extractObjectPair(n)
+	case "call_expression":
+		ex.extractUICall(n)
 	}
 
 	for i := uint(0); i < n.NamedChildCount(); i++ {
@@ -433,6 +457,163 @@ func (ex *reactExtractor) isInsideSkippedCall(n *sitter.Node) bool {
 	return skipCallCallees[callee.Utf8Text(ex.src)]
 }
 
+func (ex *reactExtractor) isInsideJSXExpression(n *sitter.Node) bool {
+	p := n.Parent()
+	for p != nil {
+		if p.Kind() == "jsx_expression" {
+			return true
+		}
+		if p.Kind() == "jsx_element" || p.Kind() == "statement_block" {
+			return false
+		}
+		p = p.Parent()
+	}
+	return false
+}
+
+func (ex *reactExtractor) extractJSXExpressionString(n *sitter.Node) {
+	fragment := stringFragment(n)
+	if fragment == nil {
+		return
+	}
+	cleanVal := strings.TrimSpace(fragment.Utf8Text(ex.src))
+	if !isValidUIString(cleanVal) {
+		return
+	}
+
+	startByte := int(n.StartByte())
+	endByte := int(n.EndByte())
+	startLine, startCol := getLineAndCol(ex.src, startByte)
+	endLine, endCol := getLineAndCol(ex.src, endByte)
+
+	parentKind := "JSXExpressionString"
+	if n.Parent() != nil && n.Parent().Kind() == "ternary_expression" {
+		parentKind = "TernaryBranch"
+	}
+
+	ex.candidates = append(ex.candidates, types.StringCandidate{
+		ID:             fmt.Sprintf("%s:%d:%d", filepath.Base(ex.filePath), startLine, startCol),
+		FilePath:       ex.filePath,
+		StartByte:      startByte,
+		EndByte:        endByte,
+		StartLine:      startLine,
+		StartCol:       startCol,
+		EndLine:        endLine,
+		EndCol:         endCol,
+		RawValue:       string(ex.src[startByte:endByte]),
+		CleanValue:     cleanVal,
+		Key:            ToCamelCase(cleanVal),
+		ParentNodeType: parentKind,
+		ContextHint:    getSurroundingContext(ex.lines, startLine),
+		Classification: types.ClassLocalizable,
+		Confidence:     0.95,
+		Approved:       true,
+	})
+}
+
+func (ex *reactExtractor) extractObjectPair(n *sitter.Node) {
+	keyNode := n.ChildByFieldName("key")
+	if keyNode == nil {
+		return
+	}
+	propName := keyNode.Utf8Text(ex.src)
+	if !uiObjectProperties[propName] {
+		return
+	}
+
+	valNode := n.ChildByFieldName("value")
+	if valNode == nil || valNode.Kind() != "string" {
+		return
+	}
+
+	fragment := stringFragment(valNode)
+	if fragment == nil {
+		return
+	}
+	cleanVal := strings.TrimSpace(fragment.Utf8Text(ex.src))
+	if !isValidUIString(cleanVal) {
+		return
+	}
+
+	startByte := int(valNode.StartByte())
+	endByte := int(valNode.EndByte())
+	startLine, startCol := getLineAndCol(ex.src, startByte)
+	endLine, endCol := getLineAndCol(ex.src, endByte)
+
+	ex.candidates = append(ex.candidates, types.StringCandidate{
+		ID:             fmt.Sprintf("%s:%d:%d", filepath.Base(ex.filePath), startLine, startCol),
+		FilePath:       ex.filePath,
+		StartByte:      startByte,
+		EndByte:        endByte,
+		StartLine:      startLine,
+		StartCol:       startCol,
+		EndLine:        endLine,
+		EndCol:         endCol,
+		RawValue:       string(ex.src[startByte:endByte]),
+		CleanValue:     cleanVal,
+		Key:            ToCamelCase(propName + " " + cleanVal),
+		ParentNodeType: fmt.Sprintf("ObjectProperty(%s)", propName),
+		ContextHint:    getSurroundingContext(ex.lines, startLine),
+		Classification: types.ClassLocalizable,
+		Confidence:     0.95,
+		Approved:       true,
+	})
+}
+
+func (ex *reactExtractor) extractUICall(n *sitter.Node) {
+	funcNode := n.ChildByFieldName("function")
+	if funcNode == nil {
+		return
+	}
+	calleeName := funcNode.Utf8Text(ex.src)
+	if !uiCallCallees[calleeName] {
+		return
+	}
+
+	argsNode := n.ChildByFieldName("arguments")
+	if argsNode == nil || argsNode.NamedChildCount() == 0 {
+		return
+	}
+
+	firstArg := argsNode.NamedChild(0)
+	if firstArg == nil || firstArg.Kind() != "string" {
+		return
+	}
+
+	fragment := stringFragment(firstArg)
+	if fragment == nil {
+		return
+	}
+	cleanVal := strings.TrimSpace(fragment.Utf8Text(ex.src))
+	if !isValidUIString(cleanVal) {
+		return
+	}
+
+	startByte := int(firstArg.StartByte())
+	endByte := int(firstArg.EndByte())
+	startLine, startCol := getLineAndCol(ex.src, startByte)
+	endLine, endCol := getLineAndCol(ex.src, endByte)
+
+	ex.candidates = append(ex.candidates, types.StringCandidate{
+		ID:             fmt.Sprintf("%s:%d:%d", filepath.Base(ex.filePath), startLine, startCol),
+		FilePath:       ex.filePath,
+		StartByte:      startByte,
+		EndByte:        endByte,
+		StartLine:      startLine,
+		StartCol:       startCol,
+		EndLine:        endLine,
+		EndCol:         endCol,
+		RawValue:       string(ex.src[startByte:endByte]),
+		CleanValue:     cleanVal,
+		Key:            ToCamelCase(cleanVal),
+		ParentNodeType: "CallArgument",
+		ContextHint:    getSurroundingContext(ex.lines, startLine),
+		Classification: types.ClassLocalizable,
+		Confidence:     0.95,
+		Approved:       true,
+	})
+}
+
 // isInsideJSXAttribute prevents double-extraction when a template string is used
 // as an attribute value expression (handled separately, if at all).
 func (ex *reactExtractor) isInsideJSXAttribute(n *sitter.Node) bool {
@@ -488,7 +669,7 @@ func (p *ReactPlatform) GenerateRefactorPlan(filePath string, content []byte, ca
 			} else {
 				replacement = fmt.Sprintf("{t('%s')}", c.Key)
 			}
-		} else if c.ParentNodeType == "TemplateLiteral" {
+		} else if c.ParentNodeType == "TemplateLiteral" || c.ParentNodeType == "TernaryBranch" || c.ParentNodeType == "JSXExpressionString" || strings.HasPrefix(c.ParentNodeType, "ObjectProperty") || c.ParentNodeType == "CallArgument" {
 			if len(c.Variables) > 0 {
 				varsMap := formatTSXVars(c.Variables)
 				replacement = fmt.Sprintf("t('%s', %s)", c.Key, varsMap)

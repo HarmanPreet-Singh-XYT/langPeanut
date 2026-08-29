@@ -45,6 +45,18 @@ func NewClient(provider ProviderType, model string) *MultiProviderClient {
 	return NewClientWithConfig(provider, model, "", "")
 }
 
+func NewClientWithAPIKey(provider ProviderType, model string, apiKey string) *MultiProviderClient {
+	c := NewClientWithConfig(provider, model, "", "")
+	if apiKey != "" {
+		c.apiKey = apiKey
+	}
+	return c
+}
+
+func (c *MultiProviderClient) SetAPIKey(apiKey string) {
+	c.apiKey = apiKey
+}
+
 func NewClientWithConfig(provider ProviderType, model string, customDescription string, customEndpoint string) *MultiProviderClient {
 	apiKey := ""
 	desc := customDescription

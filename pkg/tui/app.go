@@ -58,16 +58,16 @@ type ProjectPreset struct {
 
 // Model represents the Bubble Tea TUI state
 type Model struct {
-	state          ViewState
-	cursor         int
-	projectRoot    string
-	platform       platforms.Platform
-	supervisor     *agents.SupervisorAgent
-	spinner        spinner.Model
-	loading        bool
-	loadingStage   string
-	statusMsg      string
-	progChan       chan string
+	state        ViewState
+	cursor       int
+	projectRoot  string
+	platform     platforms.Platform
+	supervisor   *agents.SupervisorAgent
+	spinner      spinner.Model
+	loading      bool
+	loadingStage string
+	statusMsg    string
+	progChan     chan string
 
 	// AI Setup & Onboarding Wizard state
 	onboardingStep int
@@ -111,28 +111,26 @@ type Model struct {
 	height int
 }
 
+// Color palette — a single restrained accent plus semantic status colors,
+// modeled after well-made terminal tools (gh, lazygit, k9s) rather than a
+// decorative theme. Text defaults to the terminal's own foreground.
 var (
-	// Lip Gloss Color Palette
-	primaryColor = lipgloss.Color("#FF79C6") // Pink / Purple
-	accentColor  = lipgloss.Color("#50FA7B") // Bright Green
-	cyanColor    = lipgloss.Color("#8BE9FD") // Cyan
-	yellowColor  = lipgloss.Color("#F1FA8C") // Yellow
-	subtleColor  = lipgloss.Color("#6272A4") // Slate Gray
-	bgColor      = lipgloss.Color("#282A36") // Dark Background
-	dangerColor  = lipgloss.Color("#FF5555") // Red
-	badgeColor   = lipgloss.Color("#BD93F9") // Light Purple
+	accentColor  = lipgloss.Color("#5FAFD7") // muted blue — selection / focus
+	mutedColor   = lipgloss.Color("#6C7086") // secondary text / help
+	borderColor  = lipgloss.Color("#3B4048") // panel borders, dividers
+	successColor = lipgloss.Color("#6BAF6B") // ok / approved / passed
+	warnColor    = lipgloss.Color("#D7A55F") // pending / attention
+	dangerColor  = lipgloss.Color("#C0605D") // error / skipped / failed
+	dimTextColor = lipgloss.Color("#9199A8") // deemphasized body text
 
 	// Styles
 	titleStyle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color("#F8F8F2")).
-			Background(lipgloss.Color("#BD93F9")).
-			Padding(0, 1).
-			MarginBottom(1)
+			Foreground(accentColor)
 
 	headerCard = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(primaryColor).
+			Border(lipgloss.NormalBorder()).
+			BorderForeground(borderColor).
 			Padding(0, 1).
 			MarginBottom(1)
 
@@ -142,24 +140,29 @@ var (
 			PaddingLeft(2)
 
 	inactiveItemStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("#F8F8F2")).
 				PaddingLeft(2)
 
 	helpStyle = lipgloss.NewStyle().
-			Foreground(subtleColor).
+			Foreground(mutedColor).
 			MarginTop(1)
 
 	successBadge = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color("#282A36")).
-			Background(accentColor).
-			Padding(0, 1)
+			Foreground(successColor)
 
 	cardBox = lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(cyanColor).
+		Border(lipgloss.NormalBorder()).
+		BorderForeground(borderColor).
 		Padding(0, 1).
 		MarginBottom(1)
+)
+
+const (
+	cursorMark = ">"
+	checkMark  = "x"
+	dotFilled  = "*"
+	dotEmpty   = "o"
+	arrowRight = "->"
 )
 
 func findRepoRoot(startDir string) string {
@@ -199,7 +202,7 @@ func NewApp(projectRoot string) *Model {
 
 	s := spinner.New()
 	s.Spinner = spinner.Dot
-	s.Style = lipgloss.NewStyle().Foreground(primaryColor)
+	s.Style = lipgloss.NewStyle().Foreground(accentColor)
 
 	defaultProvider := llm.ProviderLocal
 	defaultModel := "Deterministic ICU Engine"
@@ -240,25 +243,25 @@ func NewApp(projectRoot string) *Model {
 		exampleFramework: "nextjs",
 		exampleTab:       "before",
 		menuChoices: []MainMenuChoice{
-			{Number: "0", Title: "✨ 0. AI Provider Setup & Onboarding Wizard", Desc: "Configure LLM engine (Claude, OpenAI, Gemini, Ollama) and workspace preferences", State: ViewOnboarding},
-			{Number: "1", Title: "🚀 1. Run Full AI Localization (Quick Setup & Run)", Desc: "Quick wizard confirms Languages, Tone & Safety mode before executing full pipeline", State: ViewRunWizard},
-			{Number: "2", Title: "🔍 2. Scan & Audit Codebase", Desc: "Inspect hardcoded UI strings with zero file modifications", State: ViewAudit},
-			{Number: "3", Title: "⚡ 3. Interactive Review Queue", Desc: "Review, approve, or skip synthesized keys with variable hints", State: ViewReview},
-			{Number: "4", Title: "🌐 4. Multi-Locale Translation", Desc: "Translate to 36+ languages with 4-Tier Critic & Reflection", State: ViewTranslate},
-			{Number: "5", Title: "📁 5. Switch Target Project / Directory ([p])", Desc: "Target real apps (e.g. pingroute-web, your workspace, or demos)", State: ViewProjectSelect},
-			{Number: "6", Title: "🧪 6. Run 10-Case Adversarial Benchmark", Desc: "Execute the official micro1 evaluation test harness (100% pass)", State: ViewBenchmark},
-			{Number: "7", Title: "⏪ 7. Checkpoints & Rollback", Desc: "Browse snapshots and restore files with 1-click", State: ViewCheckpoints},
-			{Number: "8", Title: "⚙️ 8. Settings & Style Memory", Desc: "Configure LLM providers, API keys, Gen-Z slang, and glossaries", State: ViewSettings},
-			{Number: "9", Title: "📊 9. AI Token Usage & Cost Analytics ([t])", Desc: "Inspect real-time prompt/completion token consumption, model breakdowns & cost metrics", State: ViewTokenStats},
+			{Number: "0", Title: "AI Provider Setup & Onboarding", Desc: "Configure LLM engine (Claude, OpenAI, Gemini, Ollama) and workspace preferences", State: ViewOnboarding},
+			{Number: "1", Title: "Run Full AI Localization", Desc: "Quick wizard confirms languages, tone & safety mode before executing full pipeline", State: ViewRunWizard},
+			{Number: "2", Title: "Scan & Audit Codebase", Desc: "Inspect hardcoded UI strings with zero file modifications", State: ViewAudit},
+			{Number: "3", Title: "Interactive Review Queue", Desc: "Review, approve, or skip synthesized keys with variable hints", State: ViewReview},
+			{Number: "4", Title: "Multi-Locale Translation", Desc: "Translate to 36+ languages with 4-tier critic & reflection", State: ViewTranslate},
+			{Number: "5", Title: "Switch Target Project / Directory", Desc: "Target real apps (e.g. pingroute-web, your workspace, or demos) [p]", State: ViewProjectSelect},
+			{Number: "6", Title: "Run 10-Case Adversarial Benchmark", Desc: "Execute the official micro1 evaluation test harness (100% pass)", State: ViewBenchmark},
+			{Number: "7", Title: "Checkpoints & Rollback", Desc: "Browse snapshots and restore files with 1-click", State: ViewCheckpoints},
+			{Number: "8", Title: "Settings & Style Memory", Desc: "Configure LLM providers, API keys, tone presets, and glossaries", State: ViewSettings},
+			{Number: "9", Title: "AI Token Usage & Cost Analytics", Desc: "Inspect real-time prompt/completion token consumption, model breakdowns & cost metrics [t]", State: ViewTokenStats},
 		},
 		projectPresets: []ProjectPreset{
-			{Name: "📁 Current Directory (.)", RelPath: ".", Framework: "Auto-Detect", Desc: "Scan the current working directory"},
-			{Name: "🌐 pingroute-web (Real App)", RelPath: "/Users/harmanpreetsingh/Public/Code/pingroute-web", Framework: "React / Next.js", Desc: "Live Next.js production web app (300+ keys)"},
-			{Name: "⚛️  React / Next.js Demo App", RelPath: "examples/nextjs-app", Framework: "React / TSX", Desc: "Full web storefront with Navbar, Hero, Cart modal & i18next hooks"},
-			{Name: "📱 Flutter Mobile Demo App", RelPath: "examples/flutter-app", Framework: "Flutter / Dart", Desc: "Dart widget tree with const-stripping & ARB catalogs"},
-			{Name: "🍏 iOS SwiftUI Demo App", RelPath: "examples/swiftui-app", Framework: "iOS SwiftUI", Desc: "SwiftUI views with String Catalog .xcstrings format"},
-			{Name: "🤖 Android Compose Demo App", RelPath: "examples/android-app", Framework: "Android Kotlin", Desc: "Jetpack Compose UI with strings.xml and XML entity escaping"},
-			{Name: "🧪 10-Case Adversarial Benchmark", RelPath: "benchmark/workspace", Framework: "Multi-Platform", Desc: "10 edge-case test components for micro1 evaluation suite"},
+			{Name: "Current Directory (.)", RelPath: ".", Framework: "Auto-Detect", Desc: "Scan the current working directory"},
+			{Name: "pingroute-web (Real App)", RelPath: "/Users/harmanpreetsingh/Public/Code/pingroute-web", Framework: "React / Next.js", Desc: "Live Next.js production web app (300+ keys)"},
+			{Name: "React / Next.js Demo App", RelPath: "examples/nextjs-app", Framework: "React / TSX", Desc: "Full web storefront with Navbar, Hero, Cart modal & i18next hooks"},
+			{Name: "Flutter Mobile Demo App", RelPath: "examples/flutter-app", Framework: "Flutter / Dart", Desc: "Dart widget tree with const-stripping & ARB catalogs"},
+			{Name: "iOS SwiftUI Demo App", RelPath: "examples/swiftui-app", Framework: "iOS SwiftUI", Desc: "SwiftUI views with String Catalog .xcstrings format"},
+			{Name: "Android Compose Demo App", RelPath: "examples/android-app", Framework: "Android Kotlin", Desc: "Jetpack Compose UI with strings.xml and XML entity escaping"},
+			{Name: "10-Case Adversarial Benchmark", RelPath: "benchmark/workspace", Framework: "Multi-Platform", Desc: "10 edge-case test components for micro1 evaluation suite"},
 		},
 	}
 
@@ -272,7 +275,7 @@ func (m *Model) Init() tea.Cmd {
 func (m *Model) switchTargetProject(targetPath string) {
 	abs, err := filepath.Abs(targetPath)
 	if err != nil {
-		m.statusMsg = fmt.Sprintf("❌ Invalid path: %v", err)
+		m.statusMsg = fmt.Sprintf("Invalid path: %v", err)
 		return
 	}
 
@@ -280,7 +283,7 @@ func (m *Model) switchTargetProject(targetPath string) {
 	platform, _ := registry.AutoDetect(abs)
 	sup, err := agents.NewSupervisorAgent(abs, platform)
 	if err != nil {
-		m.statusMsg = fmt.Sprintf("❌ Error initializing supervisor: %v", err)
+		m.statusMsg = fmt.Sprintf("Error initializing supervisor: %v", err)
 		return
 	}
 
@@ -290,7 +293,7 @@ func (m *Model) switchTargetProject(targetPath string) {
 	m.candidates = nil
 	m.state = ViewMainMenu
 	m.cursor = 0
-	m.statusMsg = fmt.Sprintf("✓ Switched target to: %s (%s)", filepath.Base(abs), platform.DisplayName())
+	m.statusMsg = fmt.Sprintf("Switched target to: %s (%s)", filepath.Base(abs), platform.DisplayName())
 }
 
 func (m *Model) resetAllDemoExamples() {
@@ -311,7 +314,7 @@ func (m *Model) resetAllDemoExamples() {
 
 	m.loadExampleFlow()
 	m.candidates = nil
-	m.statusMsg = "✓ Reset all demo example projects back to fresh unlocalized baseline code!"
+	m.statusMsg = "Reset all demo example projects back to fresh unlocalized baseline code."
 }
 
 // Async Bubble Tea Message Types for zero-freeze UI
@@ -379,20 +382,20 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case scanDoneMsg:
 		m.loading = false
 		if msg.err != nil {
-			m.statusMsg = fmt.Sprintf("❌ Scan failed: %v", msg.err)
+			m.statusMsg = fmt.Sprintf("Scan failed: %v", msg.err)
 		} else {
 			m.candidates = msg.candidates
 			m.candidateIdx = 0
 			m.auditScrollOffset = 0
 			m.state = ViewAudit
-			m.statusMsg = fmt.Sprintf("✓ Scan Complete — %d candidate strings discovered in %s", len(m.candidates), filepath.Base(m.projectRoot))
+			m.statusMsg = fmt.Sprintf("Scan complete — %d candidate strings discovered in %s", len(m.candidates), filepath.Base(m.projectRoot))
 		}
 		return m, nil
 
 	case fullLocDoneMsg:
 		m.loading = false
 		if msg.err != nil {
-			m.statusMsg = fmt.Sprintf("❌ Localization failed: %v", msg.err)
+			m.statusMsg = fmt.Sprintf("Localization failed: %v", msg.err)
 		} else {
 			repairInfo := ""
 			if len(msg.result.CodeRepairs) > 0 {
@@ -403,13 +406,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				}
 				if healedCount > 0 {
-					repairInfo = fmt.Sprintf(" (🔧 Auto-healed %d compiler issue(s))", healedCount)
+					repairInfo = fmt.Sprintf(" (auto-healed %d compiler issue(s))", healedCount)
 				}
 				if len(msg.result.UnresolvedErrors) > 0 {
-					repairInfo += fmt.Sprintf(" [⚠️ %d issue(s) need manual review]", len(msg.result.UnresolvedErrors))
+					repairInfo += fmt.Sprintf(" [%d issue(s) need manual review]", len(msg.result.UnresolvedErrors))
 				}
 			}
-			m.statusMsg = fmt.Sprintf("🎉 1-Click Localization Complete! Refactored %d files, generated %d locale files (%d keys)%s",
+			m.statusMsg = fmt.Sprintf("Localization complete — refactored %d files, generated %d locale files (%d keys)%s",
 				len(msg.result.RefactoredFiles), len(msg.result.GeneratedLocales)+1, msg.result.UniqueKeysCount, repairInfo)
 			return m, m.startScan()
 		}
@@ -418,7 +421,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case refactorDoneMsg:
 		m.loading = false
 		if msg.err != nil {
-			m.statusMsg = fmt.Sprintf("❌ Refactor failed: %v", msg.err)
+			m.statusMsg = fmt.Sprintf("Refactor failed: %v", msg.err)
 		} else {
 			repairInfo := ""
 			if len(msg.result.CodeRepairs) > 0 {
@@ -429,13 +432,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				}
 				if healedCount > 0 {
-					repairInfo = fmt.Sprintf(" (🔧 Auto-healed %d compiler issue(s))", healedCount)
+					repairInfo = fmt.Sprintf(" (auto-healed %d compiler issue(s))", healedCount)
 				}
 				if len(msg.result.UnresolvedErrors) > 0 {
-					repairInfo += fmt.Sprintf(" [⚠️ %d issue(s) need manual review]", len(msg.result.UnresolvedErrors))
+					repairInfo += fmt.Sprintf(" [%d issue(s) need manual review]", len(msg.result.UnresolvedErrors))
 				}
 			}
-			m.statusMsg = fmt.Sprintf("✓ Surgically refactored %d source file(s)%s", len(msg.result.RefactoredFiles), repairInfo)
+			m.statusMsg = fmt.Sprintf("Surgically refactored %d source file(s)%s", len(msg.result.RefactoredFiles), repairInfo)
 			return m, m.startScan()
 		}
 		return m, nil
@@ -443,9 +446,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case translateDoneMsg:
 		m.loading = false
 		if msg.err != nil {
-			m.statusMsg = fmt.Sprintf("❌ Translation failed: %v", msg.err)
+			m.statusMsg = fmt.Sprintf("Translation failed: %v", msg.err)
 		} else {
-			m.statusMsg = fmt.Sprintf("✓ Translated %d keys to [%s] with 4-Tier Critic Verification!",
+			m.statusMsg = fmt.Sprintf("Translated %d keys to [%s] — 4-tier critic verification passed",
 				msg.result.ExtractedCandidates, strings.Join(msg.targetLocales, ", "))
 		}
 		return m, nil
@@ -453,11 +456,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case benchmarkDoneMsg:
 		m.loading = false
 		if msg.err != nil {
-			m.statusMsg = fmt.Sprintf("❌ Benchmark failed: %v", msg.err)
+			m.statusMsg = fmt.Sprintf("Benchmark failed: %v", msg.err)
 		} else {
 			m.benchResults = msg.results
 			m.state = ViewBenchmark
-			m.statusMsg = "🏆 10-Case Adversarial Benchmark Complete (100.0% Pass Rate)!"
+			m.statusMsg = "10-case adversarial benchmark complete (100.0% pass rate)"
 		}
 		return m, nil
 
@@ -509,7 +512,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			go func() {
 				_ = web.StartInteractiveWebDemo(3000, true)
 			}()
-			m.statusMsg = "🌐 Launched Live Interactive Website Demo at http://localhost:3000 in your browser!"
+			m.statusMsg = "Launched web studio at http://localhost:3000 in your browser"
 			return m, nil
 
 		// Main menu direct number shortcuts
@@ -541,7 +544,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				for _, loc := range m.availableLocales {
 					m.selectedLocales[loc] = (loc == "es" || loc == "fr" || loc == "de" || loc == "ja")
 				}
-				m.statusMsg = "✓ Selected Top 4 Locales: ES, FR, DE, JA"
+				m.statusMsg = "Selected top 4 locales: ES, FR, DE, JA"
 				return m, nil
 			}
 
@@ -561,7 +564,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				for _, loc := range m.availableLocales {
 					m.selectedLocales[loc] = top10[loc]
 				}
-				m.statusMsg = "✓ Selected Top 10 Global Locales"
+				m.statusMsg = "Selected top 10 global locales"
 				return m, nil
 			}
 
@@ -731,7 +734,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "r", "R":
 			if m.state == ViewTokenStats {
 				llm.GetGlobalTracker().Reset()
-				m.statusMsg = "✓ AI token usage & historical metrics reset to 0."
+				m.statusMsg = "AI token usage & historical metrics reset to 0."
 				return m, nil
 			} else if m.state == ViewExampleFlow {
 				m.runExampleLocalization()
@@ -755,10 +758,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				for _, loc := range m.availableLocales {
 					m.selectedLocales[loc] = true
 				}
-				m.statusMsg = "✓ Selected all 36 languages"
+				m.statusMsg = "Selected all 36 languages"
 			} else if m.state == ViewReview && len(m.candidates) > 0 {
 				m.candidates[m.candidateIdx].Approved = true
-				m.statusMsg = fmt.Sprintf("✓ Approved '%s'", m.candidates[m.candidateIdx].Key)
+				m.statusMsg = fmt.Sprintf("Approved '%s'", m.candidates[m.candidateIdx].Key)
 				if m.candidateIdx < len(m.candidates)-1 {
 					m.candidateIdx++
 				}
@@ -769,7 +772,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				for i := range m.candidates {
 					m.candidates[i].Approved = true
 				}
-				m.statusMsg = fmt.Sprintf("✓ Approved all %d candidate strings", len(m.candidates))
+				m.statusMsg = fmt.Sprintf("Approved all %d candidate strings", len(m.candidates))
 			}
 
 		case "n":
@@ -783,7 +786,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "s":
 			if m.state == ViewReview && len(m.candidates) > 0 {
 				m.candidates[m.candidateIdx].Approved = false
-				m.statusMsg = fmt.Sprintf("⊘ Skipped '%s'", m.candidates[m.candidateIdx].Key)
+				m.statusMsg = fmt.Sprintf("Skipped '%s'", m.candidates[m.candidateIdx].Key)
 				if m.candidateIdx < len(m.candidates)-1 {
 					m.candidateIdx++
 				}
@@ -794,7 +797,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				for i := range m.candidates {
 					m.candidates[i].Approved = false
 				}
-				m.statusMsg = fmt.Sprintf("⊘ Skipped all %d candidate strings", len(m.candidates))
+				m.statusMsg = fmt.Sprintf("Skipped all %d candidate strings", len(m.candidates))
 			}
 		}
 	}
@@ -929,7 +932,7 @@ func (m *Model) handleOnboardingEnter() (tea.Model, tea.Cmd) {
 		// Step 4: Complete & return to menu
 		m.state = ViewMainMenu
 		m.cursor = 0
-		m.statusMsg = "✨ AI Engine & Workspace Onboarding Setup Complete!"
+		m.statusMsg = "AI engine & workspace onboarding complete."
 		return m, nil
 	}
 	return m, nil
@@ -1085,7 +1088,7 @@ func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 		if len(m.checkpoints) > 0 && m.cursor < len(m.checkpoints) {
 			targetID := m.checkpoints[m.cursor].ID
 			_ = m.supervisor.Checkpoint.RestoreCheckpoint(targetID)
-			m.statusMsg = fmt.Sprintf("✓ Restored codebase to snapshot: %s", targetID)
+			m.statusMsg = fmt.Sprintf("Restored codebase to snapshot: %s", targetID)
 		}
 
 	case ViewSettings:
@@ -1095,27 +1098,27 @@ func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 			case 0:
 				m.activeProvider = llm.ProviderClaude
 				m.activeModel = "claude-3-7-sonnet"
-				m.statusMsg = "✓ Activated: Anthropic Claude (claude-3-7-sonnet)"
+				m.statusMsg = "Activated: Anthropic Claude (claude-3-7-sonnet)"
 			case 1:
 				m.activeProvider = llm.ProviderOpenAI
 				m.activeModel = "gpt-4o"
-				m.statusMsg = "✓ Activated: OpenAI (gpt-4o)"
+				m.statusMsg = "Activated: OpenAI (gpt-4o)"
 			case 2:
 				m.activeProvider = llm.ProviderGemini
 				m.activeModel = "gemini-2.5-flash"
-				m.statusMsg = "✓ Activated: Google Gemini (gemini-2.5-flash)"
+				m.statusMsg = "Activated: Google Gemini (gemini-2.5-flash)"
 			case 3:
 				m.activeProvider = llm.ProviderDeepL
 				m.activeModel = "deepl-v2"
-				m.statusMsg = "✓ Activated: DeepL Neural MT API"
+				m.statusMsg = "Activated: DeepL Neural MT API"
 			case 4:
 				m.activeProvider = llm.ProviderCustom
 				m.activeModel = "Ollama / Custom Endpoint (localhost:11434)"
-				m.statusMsg = "✓ Activated: Custom Model Endpoint (OpenAI-compatible / Ollama / vLLM)"
+				m.statusMsg = "Activated: Custom Model Endpoint (OpenAI-compatible / Ollama / vLLM)"
 			case 5:
 				m.activeProvider = llm.ProviderLocal
 				m.activeModel = "Deterministic ICU Engine"
-				m.statusMsg = "✓ Activated: Local Deterministic Engine (Offline Mode)"
+				m.statusMsg = "Activated: Local Deterministic Engine (Offline Mode)"
 			}
 		} else {
 			// Style Preset choices
@@ -1127,7 +1130,7 @@ func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 					m.supervisor.ProjectMemory.Style = m.currentStyle
 					_ = m.supervisor.ProjectMemory.Save()
 				}
-				m.statusMsg = fmt.Sprintf("✓ Style Memory updated to: %s", m.currentStyle)
+				m.statusMsg = fmt.Sprintf("Style memory updated to: %s", m.currentStyle)
 			}
 		}
 	}
@@ -1203,7 +1206,7 @@ func (m *Model) runExampleLocalization() {
 	p, _ := registry.AutoDetect(exampleDir)
 	sup, err := agents.NewSupervisorAgent(exampleDir, p)
 	if err != nil {
-		m.statusMsg = fmt.Sprintf("❌ Error initializing supervisor: %v", err)
+		m.statusMsg = fmt.Sprintf("Error initializing supervisor: %v", err)
 		return
 	}
 
@@ -1213,7 +1216,7 @@ func (m *Model) runExampleLocalization() {
 
 	res, err := sup.RunEndToEnd(context.Background(), "en", []string{"fr", "es", "de", "ja"}, false)
 	if err != nil {
-		m.statusMsg = fmt.Sprintf("❌ Error: %v", err)
+		m.statusMsg = fmt.Sprintf("Error: %v", err)
 		return
 	}
 
@@ -1238,18 +1241,18 @@ func (m *Model) runExampleLocalization() {
 	}
 
 	m.exampleTab = "after"
-	m.statusMsg = fmt.Sprintf("✓ Localized %d strings into 4 languages with 4-Tier Critic passing 100%%!", res.ExtractedCandidates)
+	m.statusMsg = fmt.Sprintf("Localized %d strings into 4 languages — 4-tier critic passing 100%%", res.ExtractedCandidates)
 }
 
 func (m *Model) resetExampleFlow() {
 	m.resetAllDemoExamples()
 	m.exampleTab = "before"
-	m.statusMsg = "✓ Reset example back to raw unlocalized code state!"
+	m.statusMsg = "Reset example back to raw unlocalized code state."
 }
 
 func (m *Model) startScan() tea.Cmd {
 	m.loading = true
-	m.loadingStage = "🔍 Scanning AST & profiling component elements..."
+	m.loadingStage = "Scanning AST & profiling component elements..."
 	sup := m.supervisor
 	root := m.projectRoot
 	return tea.Batch(m.spinner.Tick, func() tea.Msg {
@@ -1272,7 +1275,7 @@ func (m *Model) startScan() tea.Cmd {
 
 func (m *Model) startFullLocalization() tea.Cmd {
 	m.loading = true
-	m.loadingStage = "🚀 Initializing 1-Click AI Localization..."
+	m.loadingStage = "Initializing 1-click AI localization..."
 	sup := m.supervisor
 	root := m.projectRoot
 	style := m.currentStyle
@@ -1321,7 +1324,7 @@ func (m *Model) startFullLocalization() tea.Cmd {
 
 func (m *Model) startRefactor() tea.Cmd {
 	m.loading = true
-	m.loadingStage = "⚡ Initializing surgical AST byte-range refactoring..."
+	m.loadingStage = "Initializing surgical AST byte-range refactoring..."
 	sup := m.supervisor
 	root := m.projectRoot
 
@@ -1365,7 +1368,7 @@ func (m *Model) startTranslation() tea.Cmd {
 		targetList = []string{"fr", "es", "de", "ja"}
 	}
 
-	m.loadingStage = fmt.Sprintf("🌐 Initializing translation for [%s]...", strings.Join(targetList, ", "))
+	m.loadingStage = fmt.Sprintf("Initializing translation for [%s]...", strings.Join(targetList, ", "))
 	sup := m.supervisor
 	style := m.currentStyle
 
@@ -1397,7 +1400,7 @@ func (m *Model) startTranslation() tea.Cmd {
 
 func (m *Model) startBenchmark() tea.Cmd {
 	m.loading = true
-	m.loadingStage = "🧪 Executing 10-Case Adversarial Benchmark Suite..."
+	m.loadingStage = "Executing 10-case adversarial benchmark suite..."
 	repoRoot := findRepoRoot(m.projectRoot)
 	benchDir := filepath.Join(repoRoot, "benchmark", "workspace")
 
@@ -1429,7 +1432,7 @@ func (m *Model) View() string {
 	var b strings.Builder
 
 	// Top Banner
-	banner := titleStyle.Render(" 🥜 langPeanut v1.0.0 — Universal Multi-Agent Localization System ")
+	banner := titleStyle.Render("langPeanut") + helpStyle.Render("  v1.0.0 — Universal Multi-Agent Localization System")
 	b.WriteString(banner + "\n")
 
 	relTarget, _ := filepath.Rel(findRepoRoot(m.projectRoot), m.projectRoot)
@@ -1438,34 +1441,34 @@ func (m *Model) View() string {
 	}
 
 	headerCard := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(cyanColor).
+		Border(lipgloss.NormalBorder()).
+		BorderForeground(borderColor).
 		Padding(0, 1).
 		MarginBottom(1).
-		Render(fmt.Sprintf("📁 Project: %s  │  ⚡ Framework: %s  │  🎭 Tone: %s  │  🌐 Locales: %d active",
-			lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#F8F8F2")).Render(relTarget),
+		Render(fmt.Sprintf("Project: %s  │  Framework: %s  │  Tone: %s  │  Locales: %d active",
+			lipgloss.NewStyle().Bold(true).Render(relTarget),
 			lipgloss.NewStyle().Bold(true).Foreground(accentColor).Render(m.platform.DisplayName()),
-			lipgloss.NewStyle().Bold(true).Foreground(primaryColor).Render(string(m.currentStyle)),
+			lipgloss.NewStyle().Bold(true).Render(string(m.currentStyle)),
 			m.countSelectedLocales(),
 		))
 	b.WriteString(headerCard + "\n")
 
 	// Global quick-action hint
-	globalHints := lipgloss.NewStyle().Foreground(subtleColor).Render("Shortcuts: [p] Switch Project  │  [c] Reset Demo Code  │  [w] Web App (Browser)  │  [q] Quit")
+	globalHints := lipgloss.NewStyle().Foreground(mutedColor).Render("Shortcuts: [p] Switch Project  │  [c] Reset Demo Code  │  [w] Web App (Browser)  │  [q] Quit")
 	b.WriteString(globalHints + "\n\n")
 
 	// If background operation is active, show animated loading screen
 	if m.loading {
 		loadingBox := lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(primaryColor).
+			Border(lipgloss.NormalBorder()).
+			BorderForeground(borderColor).
 			Padding(1, 4).
 			Margin(1, 0)
 
 		content := fmt.Sprintf("\n%s  %s\n\n%s\n",
 			m.spinner.View(),
-			lipgloss.NewStyle().Bold(true).Foreground(accentColor).Render(m.loadingStage),
-			lipgloss.NewStyle().Foreground(subtleColor).Render("Please wait — running multi-agent workflow in background (zero freeze)..."),
+			lipgloss.NewStyle().Bold(true).Render(m.loadingStage),
+			lipgloss.NewStyle().Foreground(mutedColor).Render("Running multi-agent workflow in the background..."),
 		)
 		b.WriteString(loadingBox.Render(content) + "\n\n")
 		b.WriteString(m.renderFooter())
@@ -1502,7 +1505,7 @@ func (m *Model) View() string {
 
 	// Status Message / Alert
 	if m.statusMsg != "" {
-		b.WriteString("\n" + lipgloss.NewStyle().Bold(true).Foreground(yellowColor).Render(m.statusMsg) + "\n")
+		b.WriteString("\n" + lipgloss.NewStyle().Bold(true).Foreground(warnColor).Render(m.statusMsg) + "\n")
 	}
 
 	// Bottom Navigation Bar
@@ -1513,52 +1516,52 @@ func (m *Model) View() string {
 
 func (m *Model) renderStepBadgeOnboarding(step int, label string) string {
 	if m.onboardingStep == step {
-		return lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#1E1E2E")).Background(primaryColor).Padding(0, 1).Render(label)
+		return lipgloss.NewStyle().Bold(true).Foreground(accentColor).Render("[" + label + "]")
 	} else if m.onboardingStep > step {
-		return lipgloss.NewStyle().Bold(true).Foreground(accentColor).Render("✓ " + label)
+		return lipgloss.NewStyle().Foreground(successColor).Render(checkMark + " " + label)
 	}
-	return lipgloss.NewStyle().Foreground(subtleColor).Render(label)
+	return lipgloss.NewStyle().Foreground(mutedColor).Render(label)
 }
 
 func (m *Model) renderOnboardingView() string {
 	var s strings.Builder
 
-	s.WriteString(lipgloss.NewStyle().Bold(true).Foreground(primaryColor).Render("✨ AI Provider Setup & Workspace Onboarding Wizard") + "\n")
+	s.WriteString(lipgloss.NewStyle().Bold(true).Render("AI Provider Setup & Workspace Onboarding") + "\n")
 
-	stepBar := fmt.Sprintf("  %s ──► %s ──► %s ──► %s",
-		m.renderStepBadgeOnboarding(0, "1. AI Engine"),
-		m.renderStepBadgeOnboarding(1, "2. API Keys"),
-		m.renderStepBadgeOnboarding(2, "3. Defaults"),
+	stepBar := fmt.Sprintf("  %s %s %s %s %s %s %s",
+		m.renderStepBadgeOnboarding(0, "1. AI Engine"), arrowRight,
+		m.renderStepBadgeOnboarding(1, "2. API Keys"), arrowRight,
+		m.renderStepBadgeOnboarding(2, "3. Defaults"), arrowRight,
 		m.renderStepBadgeOnboarding(3, "4. Complete"),
 	)
 	s.WriteString(stepBar + "\n\n")
 
 	switch m.onboardingStep {
 	case 0:
-		s.WriteString(lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#F8F8F2")).Render("🤖 Step 1 of 4: Select your primary AI Translation Engine") + "\n")
-		s.WriteString(lipgloss.NewStyle().Foreground(subtleColor).Render("Choose which LLM provider or local engine will power multi-locale translation & critic:") + "\n\n")
+		s.WriteString(lipgloss.NewStyle().Bold(true).Render("Step 1 of 4: Select your primary AI translation engine") + "\n")
+		s.WriteString(lipgloss.NewStyle().Foreground(mutedColor).Render("Choose which LLM provider or local engine will power multi-locale translation & critic:") + "\n\n")
 
 		opts := []struct{ title, desc string }{
-			{"1. 🤖 Anthropic Claude (claude-3-7-sonnet) [Recommended]", "Industry-leading cultural fluency, slang translation, and ICU syntax preservation"},
-			{"2. 🧠 OpenAI (gpt-5.4-mini-2026-03-17 / gpt-4o)", "Frontier multilingual model with 16k output tokens & native JSON guarantee"},
-			{"3. ⚡ Google Gemini (gemini-2.5-flash / gemini-1.5-pro)", "Ultra-fast response latency with large batch token processing"},
-			{"4. 🦙 Local Ollama / vLLM (llama3.3 / mistral / deepseek)", "100% air-gapped on-premise execution (zero cloud data transmission)"},
-			{"5. ⚡ Built-in High-Speed Deterministic Engine", "Sub-millisecond AST parser & offline linguistic matrix (no network calls)"},
+			{"1. Anthropic Claude (claude-3-7-sonnet) [Recommended]", "Industry-leading cultural fluency, slang translation, and ICU syntax preservation"},
+			{"2. OpenAI (gpt-5.4-mini-2026-03-17 / gpt-4o)", "Frontier multilingual model with 16k output tokens & native JSON guarantee"},
+			{"3. Google Gemini (gemini-2.5-flash / gemini-1.5-pro)", "Ultra-fast response latency with large batch token processing"},
+			{"4. Local Ollama / vLLM (llama3.3 / mistral / deepseek)", "100% air-gapped on-premise execution (zero cloud data transmission)"},
+			{"5. Built-in High-Speed Deterministic Engine", "Sub-millisecond AST parser & offline linguistic matrix (no network calls)"},
 		}
 		for i, opt := range opts {
 			if i == m.cursor {
-				s.WriteString(activeItemStyle.Render(fmt.Sprintf("👉 [%s]", opt.title)) + "\n")
-				s.WriteString(lipgloss.NewStyle().Foreground(cyanColor).PaddingLeft(7).Render(opt.desc) + "\n\n")
+				s.WriteString(activeItemStyle.Render(fmt.Sprintf("%s [%s]", cursorMark, opt.title)) + "\n")
+				s.WriteString(lipgloss.NewStyle().Foreground(dimTextColor).PaddingLeft(4).Render(opt.desc) + "\n\n")
 			} else {
-				s.WriteString(inactiveItemStyle.Render(fmt.Sprintf("   [%s]", opt.title)) + "\n")
-				s.WriteString(lipgloss.NewStyle().Foreground(subtleColor).PaddingLeft(7).Render(opt.desc) + "\n\n")
+				s.WriteString(inactiveItemStyle.Render(fmt.Sprintf("  [%s]", opt.title)) + "\n")
+				s.WriteString(lipgloss.NewStyle().Foreground(mutedColor).PaddingLeft(4).Render(opt.desc) + "\n\n")
 			}
 		}
-		s.WriteString(lipgloss.NewStyle().Foreground(cyanColor).Render("Press [1]-[5] or [Enter] Next  │  [Esc] Cancel to Menu"))
+		s.WriteString(lipgloss.NewStyle().Foreground(mutedColor).Render("Press [1]-[5] or [Enter] Next  │  [Esc] Cancel to Menu"))
 
 	case 1:
-		s.WriteString(lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#F8F8F2")).Render("🔑 Step 2 of 4: Environment API Key Detection & Verification") + "\n")
-		s.WriteString(lipgloss.NewStyle().Foreground(subtleColor).Render("Detected environment variables on your system:") + "\n\n")
+		s.WriteString(lipgloss.NewStyle().Bold(true).Render("Step 2 of 4: Environment API key detection & verification") + "\n")
+		s.WriteString(lipgloss.NewStyle().Foreground(mutedColor).Render("Detected environment variables on your system:") + "\n\n")
 
 		keys := []struct {
 			Name   string
@@ -1571,52 +1574,52 @@ func (m *Model) renderOnboardingView() string {
 		}
 
 		for _, k := range keys {
-			status := lipgloss.NewStyle().Foreground(subtleColor).Render("○ Not Set (export " + k.EnvVar + "=...)")
+			status := lipgloss.NewStyle().Foreground(mutedColor).Render(dotEmpty + " Not set (export " + k.EnvVar + "=...)")
 			if os.Getenv(k.EnvVar) != "" {
-				status = lipgloss.NewStyle().Bold(true).Foreground(accentColor).Render("● Active & Detected")
+				status = lipgloss.NewStyle().Bold(true).Foreground(successColor).Render(dotFilled + " Active & detected")
 			}
-			s.WriteString(fmt.Sprintf("   • %-16s %s\n", k.Name+":", status))
+			s.WriteString(fmt.Sprintf("   %-16s %s\n", k.Name+":", status))
 		}
 		s.WriteString("\n")
 
 		opts := []struct{ title, desc string }{
-			{"1. ✅ Continue with Detected Environment Keys [Recommended]", "Use currently detected environment keys for autonomous agent calls"},
-			{"2. 🛡️  Run in Offline / Deterministic Mode", "Bypass network calls and use local rule & tag-profiling engine"},
+			{"1. Continue with Detected Environment Keys [Recommended]", "Use currently detected environment keys for autonomous agent calls"},
+			{"2. Run in Offline / Deterministic Mode", "Bypass network calls and use local rule & tag-profiling engine"},
 		}
 		for i, opt := range opts {
 			if i == m.cursor {
-				s.WriteString(activeItemStyle.Render(fmt.Sprintf("👉 [%s]", opt.title)) + "\n")
-				s.WriteString(lipgloss.NewStyle().Foreground(cyanColor).PaddingLeft(7).Render(opt.desc) + "\n\n")
+				s.WriteString(activeItemStyle.Render(fmt.Sprintf("%s [%s]", cursorMark, opt.title)) + "\n")
+				s.WriteString(lipgloss.NewStyle().Foreground(dimTextColor).PaddingLeft(4).Render(opt.desc) + "\n\n")
 			} else {
-				s.WriteString(inactiveItemStyle.Render(fmt.Sprintf("   [%s]", opt.title)) + "\n")
-				s.WriteString(lipgloss.NewStyle().Foreground(subtleColor).PaddingLeft(7).Render(opt.desc) + "\n\n")
+				s.WriteString(inactiveItemStyle.Render(fmt.Sprintf("  [%s]", opt.title)) + "\n")
+				s.WriteString(lipgloss.NewStyle().Foreground(mutedColor).PaddingLeft(4).Render(opt.desc) + "\n\n")
 			}
 		}
-		s.WriteString(lipgloss.NewStyle().Foreground(cyanColor).Render("Press [1]-[2] or [Enter] Next  │  [b] Back  │  [Esc] Cancel"))
+		s.WriteString(lipgloss.NewStyle().Foreground(mutedColor).Render("Press [1]-[2] or [Enter] Next  │  [b] Back  │  [Esc] Cancel"))
 
 	case 2:
-		s.WriteString(lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#F8F8F2")).Render("🌐 Step 3 of 4: Workspace Default Languages & Tone") + "\n")
-		s.WriteString(lipgloss.NewStyle().Foreground(subtleColor).Render("Select your team's baseline translation profile:") + "\n\n")
+		s.WriteString(lipgloss.NewStyle().Bold(true).Render("Step 3 of 4: Workspace default languages & tone") + "\n")
+		s.WriteString(lipgloss.NewStyle().Foreground(mutedColor).Render("Select your team's baseline translation profile:") + "\n\n")
 
 		opts := []struct{ title, desc string }{
-			{"1. 💼 Top 4 Global (ES, FR, DE, JA) + Professional Tone [Recommended]", "Standard SaaS baseline covering ~70% of global user base with clean phrasing"},
-			{"2. 😊 Top 10 Global (ES, FR, DE, JA, ZH, HI, AR, PT, KO, IT) + Casual Tone", "Broad worldwide coverage with friendly, conversational voice"},
-			{"3. ⚡ Top 4 Global + Gen-Z / Slang Tone", "Playful internet-first phrasing with cultural slang translation"},
-			{"4. 🗺️  All 36 Supported World Languages + Standard Tone", "Complete translation matrix across European, Asian, Indic, and Arabic markets"},
+			{"1. Top 4 Global (ES, FR, DE, JA) + Professional Tone [Recommended]", "Standard SaaS baseline covering ~70% of global user base with clean phrasing"},
+			{"2. Top 10 Global (ES, FR, DE, JA, ZH, HI, AR, PT, KO, IT) + Casual Tone", "Broad worldwide coverage with friendly, conversational voice"},
+			{"3. Top 4 Global + Gen-Z / Slang Tone", "Playful internet-first phrasing with cultural slang translation"},
+			{"4. All 36 Supported World Languages + Standard Tone", "Complete translation matrix across European, Asian, Indic, and Arabic markets"},
 		}
 		for i, opt := range opts {
 			if i == m.cursor {
-				s.WriteString(activeItemStyle.Render(fmt.Sprintf("👉 [%s]", opt.title)) + "\n")
-				s.WriteString(lipgloss.NewStyle().Foreground(cyanColor).PaddingLeft(7).Render(opt.desc) + "\n\n")
+				s.WriteString(activeItemStyle.Render(fmt.Sprintf("%s [%s]", cursorMark, opt.title)) + "\n")
+				s.WriteString(lipgloss.NewStyle().Foreground(dimTextColor).PaddingLeft(4).Render(opt.desc) + "\n\n")
 			} else {
-				s.WriteString(inactiveItemStyle.Render(fmt.Sprintf("   [%s]", opt.title)) + "\n")
-				s.WriteString(lipgloss.NewStyle().Foreground(subtleColor).PaddingLeft(7).Render(opt.desc) + "\n\n")
+				s.WriteString(inactiveItemStyle.Render(fmt.Sprintf("  [%s]", opt.title)) + "\n")
+				s.WriteString(lipgloss.NewStyle().Foreground(mutedColor).PaddingLeft(4).Render(opt.desc) + "\n\n")
 			}
 		}
-		s.WriteString(lipgloss.NewStyle().Foreground(cyanColor).Render("Press [1]-[4] or [Enter] Next  │  [b] Back  │  [Esc] Cancel"))
+		s.WriteString(lipgloss.NewStyle().Foreground(mutedColor).Render("Press [1]-[4] or [Enter] Next  │  [b] Back  │  [Esc] Cancel"))
 
 	case 3:
-		s.WriteString(lipgloss.NewStyle().Bold(true).Foreground(accentColor).Render("🎉 Step 4 of 4: Onboarding Complete & Ready!") + "\n\n")
+		s.WriteString(lipgloss.NewStyle().Bold(true).Foreground(successColor).Render("Step 4 of 4: Onboarding complete") + "\n\n")
 
 		var selectedList []string
 		for loc, sel := range m.selectedLocales {
@@ -1626,15 +1629,15 @@ func (m *Model) renderOnboardingView() string {
 		}
 
 		summaryBox := lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(accentColor).
+			Border(lipgloss.NormalBorder()).
+			BorderForeground(borderColor).
 			Padding(1, 3).
 			Render(fmt.Sprintf(
-				"🤖 Active AI Engine:   %s (%s)\n"+
-					"📁 Target Project:    %s (%s)\n"+
-					"🌐 Default Locales:   [%s] (%d languages)\n"+
-					"🎭 Default Tone:      %s\n"+
-					"💾 Locale Catalog:    %s",
+				"Active AI Engine:  %s (%s)\n"+
+					"Target Project:    %s (%s)\n"+
+					"Default Locales:   [%s] (%d languages)\n"+
+					"Default Tone:      %s\n"+
+					"Locale Catalog:    %s",
 				m.activeProvider, m.activeModel,
 				filepath.Base(m.projectRoot), m.platform.DisplayName(),
 				strings.Join(selectedList, ", "), len(selectedList),
@@ -1643,8 +1646,8 @@ func (m *Model) renderOnboardingView() string {
 			))
 
 		s.WriteString(summaryBox + "\n\n")
-		s.WriteString(lipgloss.NewStyle().Bold(true).Foreground(accentColor).Render("👉 Press [Enter] to Save & Go to Dashboard!") + "\n")
-		s.WriteString(lipgloss.NewStyle().Foreground(subtleColor).Render("   [1] Run 1-Click Localization Pipeline Now  │  [b] Back"))
+		s.WriteString(lipgloss.NewStyle().Bold(true).Foreground(accentColor).Render("Press [Enter] to save & go to dashboard") + "\n")
+		s.WriteString(lipgloss.NewStyle().Foreground(mutedColor).Render("   [1] Run 1-Click Localization Pipeline Now  │  [b] Back"))
 	}
 
 	return s.String()
@@ -1652,91 +1655,91 @@ func (m *Model) renderOnboardingView() string {
 
 func (m *Model) renderStepBadge(step int, label string) string {
 	if m.wizardStep == step {
-		return lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#1E1E2E")).Background(accentColor).Padding(0, 1).Render(label)
+		return lipgloss.NewStyle().Bold(true).Foreground(accentColor).Render("[" + label + "]")
 	} else if m.wizardStep > step {
-		return lipgloss.NewStyle().Bold(true).Foreground(accentColor).Render("✓ " + label)
+		return lipgloss.NewStyle().Foreground(successColor).Render(checkMark + " " + label)
 	}
-	return lipgloss.NewStyle().Foreground(subtleColor).Render(label)
+	return lipgloss.NewStyle().Foreground(mutedColor).Render(label)
 }
 
 func (m *Model) renderRunWizardView() string {
 	var s strings.Builder
 
-	s.WriteString(lipgloss.NewStyle().Bold(true).Foreground(accentColor).Render("🚀 Autonomous AI Localization Setup Wizard") + "\n")
+	s.WriteString(lipgloss.NewStyle().Bold(true).Render("Run Full AI Localization — Setup Wizard") + "\n")
 
-	stepBar := fmt.Sprintf("  %s ──► %s ──► %s ──► %s",
-		m.renderStepBadge(0, "1. Languages"),
-		m.renderStepBadge(1, "2. Tone & Style"),
-		m.renderStepBadge(2, "3. Safety Mode"),
+	stepBar := fmt.Sprintf("  %s %s %s %s %s %s %s",
+		m.renderStepBadge(0, "1. Languages"), arrowRight,
+		m.renderStepBadge(1, "2. Tone & Style"), arrowRight,
+		m.renderStepBadge(2, "3. Safety Mode"), arrowRight,
 		m.renderStepBadge(3, "4. Confirm & Run"),
 	)
 	s.WriteString(stepBar + "\n\n")
 
 	switch m.wizardStep {
 	case 0:
-		s.WriteString(lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#F8F8F2")).Render("🌐 Step 1 of 4: Which languages do you want to translate into?") + "\n")
-		s.WriteString(lipgloss.NewStyle().Foreground(subtleColor).Render("Choose a target locale bundle or customize your language list:") + "\n\n")
+		s.WriteString(lipgloss.NewStyle().Bold(true).Render("Step 1 of 4: Which languages do you want to translate into?") + "\n")
+		s.WriteString(lipgloss.NewStyle().Foreground(mutedColor).Render("Choose a target locale bundle or customize your language list:") + "\n\n")
 
 		opts := []struct{ title, desc string }{
-			{"1. 🌐 Top 4 Global Markets (Spanish, French, German, Japanese) [Recommended]", "Covers ~70% of global software user markets (es, fr, de, ja)"},
-			{"2. 🌍 Top 10 Global Languages (ES, FR, DE, JA, ZH, HI, AR, PT, KO, IT)", "Complete global multilingual coverage across Americas, Europe, and Asia"},
-			{"3. 🗺️  All 36 Supported World Languages", "Full global translation matrix including Nordic, Indic, Slavic, and SEA languages"},
-			{"4. ✏️  Custom Language Selector (Pick individual languages)", "Open the interactive 36-language checkbox matrix"},
+			{"1. Top 4 Global Markets (Spanish, French, German, Japanese) [Recommended]", "Covers ~70% of global software user markets (es, fr, de, ja)"},
+			{"2. Top 10 Global Languages (ES, FR, DE, JA, ZH, HI, AR, PT, KO, IT)", "Complete global multilingual coverage across Americas, Europe, and Asia"},
+			{"3. All 36 Supported World Languages", "Full global translation matrix including Nordic, Indic, Slavic, and SEA languages"},
+			{"4. Custom Language Selector (Pick individual languages)", "Open the interactive 36-language checkbox matrix"},
 		}
 		for i, opt := range opts {
 			if i == m.cursor {
-				s.WriteString(activeItemStyle.Render(fmt.Sprintf("👉 [%s]", opt.title)) + "\n")
-				s.WriteString(lipgloss.NewStyle().Foreground(subtleColor).PaddingLeft(8).Render(opt.desc) + "\n\n")
+				s.WriteString(activeItemStyle.Render(fmt.Sprintf("%s [%s]", cursorMark, opt.title)) + "\n")
+				s.WriteString(lipgloss.NewStyle().Foreground(dimTextColor).PaddingLeft(4).Render(opt.desc) + "\n\n")
 			} else {
-				s.WriteString(inactiveItemStyle.Render(fmt.Sprintf("   [%s]", opt.title)) + "\n")
-				s.WriteString(lipgloss.NewStyle().Foreground(subtleColor).PaddingLeft(8).Render(opt.desc) + "\n\n")
+				s.WriteString(inactiveItemStyle.Render(fmt.Sprintf("  [%s]", opt.title)) + "\n")
+				s.WriteString(lipgloss.NewStyle().Foreground(mutedColor).PaddingLeft(4).Render(opt.desc) + "\n\n")
 			}
 		}
-		s.WriteString(lipgloss.NewStyle().Foreground(cyanColor).Render("Press [1]-[4] or [Enter] Next  |  [Esc] Cancel to Menu"))
+		s.WriteString(lipgloss.NewStyle().Foreground(mutedColor).Render("Press [1]-[4] or [Enter] Next  |  [Esc] Cancel to Menu"))
 
 	case 1:
-		s.WriteString(lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#F8F8F2")).Render("🎭 Step 2 of 4: What tone should the translations use?") + "\n")
-		s.WriteString(lipgloss.NewStyle().Foreground(subtleColor).Render("The AI Translator adapts phrasing, idioms, and vocabulary to match your brand:") + "\n\n")
+		s.WriteString(lipgloss.NewStyle().Bold(true).Render("Step 2 of 4: What tone should the translations use?") + "\n")
+		s.WriteString(lipgloss.NewStyle().Foreground(mutedColor).Render("The AI translator adapts phrasing, idioms, and vocabulary to match your brand:") + "\n\n")
 
 		opts := []struct{ title, desc string }{
-			{"1. 💼 Professional / Standard [Recommended]", "Clean, polished phrasing ideal for SaaS, web apps, and modern developer tools"},
-			{"2. 😊 Friendly & Conversational", "Warm, approachable phrasing for consumer apps, social platforms, and communities"},
-			{"3. ⚡ Gen-Z & Casual Slang", "Ultra-modern, playful phrasing (e.g. 'no cap', 'slaps', 'vibe check')"},
-			{"4. 😄 Witty & Humorous", "Playful, lighthearted, entertaining voice for games and entertainment apps"},
-			{"5. 🏛️  Formal & Enterprise", "Traditional, highly formal grammar for B2B, healthcare, and enterprise software"},
+			{"1. Professional / Standard [Recommended]", "Clean, polished phrasing ideal for SaaS, web apps, and modern developer tools"},
+			{"2. Friendly & Conversational", "Warm, approachable phrasing for consumer apps, social platforms, and communities"},
+			{"3. Gen-Z & Casual Slang", "Ultra-modern, playful phrasing (e.g. 'no cap', 'slaps', 'vibe check')"},
+			{"4. Witty & Humorous", "Playful, lighthearted, entertaining voice for games and entertainment apps"},
+			{"5. Formal & Enterprise", "Traditional, highly formal grammar for B2B, healthcare, and enterprise software"},
 		}
 		for i, opt := range opts {
 			if i == m.cursor {
-				s.WriteString(activeItemStyle.Render(fmt.Sprintf("👉 [%s]", opt.title)) + "\n")
-				s.WriteString(lipgloss.NewStyle().Foreground(subtleColor).PaddingLeft(8).Render(opt.desc) + "\n\n")
+				s.WriteString(activeItemStyle.Render(fmt.Sprintf("%s [%s]", cursorMark, opt.title)) + "\n")
+				s.WriteString(lipgloss.NewStyle().Foreground(dimTextColor).PaddingLeft(4).Render(opt.desc) + "\n\n")
 			} else {
-				s.WriteString(inactiveItemStyle.Render(fmt.Sprintf("   [%s]", opt.title)) + "\n")
-				s.WriteString(lipgloss.NewStyle().Foreground(subtleColor).PaddingLeft(8).Render(opt.desc) + "\n\n")
+				s.WriteString(inactiveItemStyle.Render(fmt.Sprintf("  [%s]", opt.title)) + "\n")
+				s.WriteString(lipgloss.NewStyle().Foreground(mutedColor).PaddingLeft(4).Render(opt.desc) + "\n\n")
 			}
 		}
-		s.WriteString(lipgloss.NewStyle().Foreground(cyanColor).Render("Press [1]-[5] or [Enter] Next  |  [b] Back  |  [Esc] Cancel"))
+		s.WriteString(lipgloss.NewStyle().Foreground(mutedColor).Render("Press [1]-[5] or [Enter] Next  |  [b] Back  |  [Esc] Cancel"))
 
 	case 2:
-		s.WriteString(lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#F8F8F2")).Render("🛡️ Step 3 of 4: Execution & Safety Mode") + "\n")
-		s.WriteString(lipgloss.NewStyle().Foreground(subtleColor).Render("Choose how changes should be applied to your codebase:") + "\n\n")
+		s.WriteString(lipgloss.NewStyle().Bold(true).Render("Step 3 of 4: Execution & safety mode") + "\n")
+		s.WriteString(lipgloss.NewStyle().Foreground(mutedColor).Render("Choose how changes should be applied to your codebase:") + "\n\n")
 
 		opts := []struct{ title, desc string }{
-			{"1. 🚀 Apply Directly to Codebase [Recommended]", "Surgically refactors source code & creates a 1-click rollback snapshot"},
-			{"2. 🔍 Dry-Run Preview Only", "Scans, synthesizes keys, and previews AST diffs without writing to disk"},
+			{"1. Apply Directly to Codebase [Recommended]", "Surgically refactors source code & creates a 1-click rollback snapshot"},
+			{"2. Dry-Run Preview Only", "Scans, synthesizes keys, and previews AST diffs without writing to disk"},
 		}
 		for i, opt := range opts {
 			if i == m.cursor {
-				s.WriteString(activeItemStyle.Render(fmt.Sprintf("👉 [%s]", opt.title)) + "\n")
-				s.WriteString(lipgloss.NewStyle().Foreground(subtleColor).PaddingLeft(8).Render(opt.desc) + "\n\n")
+				s.WriteString(activeItemStyle.Render(fmt.Sprintf("%s [%s]", cursorMark, opt.title)) + "\n")
+				s.WriteString(lipgloss.NewStyle().Foreground(dimTextColor).PaddingLeft(4).Render(opt.desc) + "\n\n")
 			} else {
-				s.WriteString(inactiveItemStyle.Render(fmt.Sprintf("   [%s]", opt.title)) + "\n")
-				s.WriteString(lipgloss.NewStyle().Foreground(subtleColor).PaddingLeft(8).Render(opt.desc) + "\n\n")
+				s.WriteString(inactiveItemStyle.Render(fmt.Sprintf("  [%s]", opt.title)) + "\n")
+				s.WriteString(lipgloss.NewStyle().Foreground(mutedColor).PaddingLeft(4).Render(opt.desc) + "\n\n")
 			}
 		}
-		s.WriteString(lipgloss.NewStyle().Foreground(cyanColor).Render("Press [1]-[2] or [Enter] Next  |  [b] Back  |  [Esc] Cancel"))
+		s.WriteString(lipgloss.NewStyle().Foreground(mutedColor).Render("Press [1]-[2] or [Enter] Next  |  [b] Back  |  [Esc] Cancel"))
 
 	case 3:
-		s.WriteString(lipgloss.NewStyle().Bold(true).Foreground(accentColor).Render("✨ Step 4 of 4: Configuration Summary — Ready to Execute!") + "\n\n")
+		s.WriteString(lipgloss.NewStyle().Bold(true).Foreground(successColor).Render("Step 4 of 4: Configuration summary — ready to execute") + "\n\n")
 
 		var selectedList []string
 		for loc, sel := range m.selectedLocales {
@@ -1745,21 +1748,21 @@ func (m *Model) renderRunWizardView() string {
 			}
 		}
 
-		modeStr := "🚀 Direct Apply (Rollback Snapshot Active)"
+		modeStr := "Direct Apply (rollback snapshot active)"
 		if m.wizardDryRun {
-			modeStr = "🔍 Dry-Run (Preview Only)"
+			modeStr = "Dry-Run (preview only)"
 		}
 
 		summaryBox := lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(accentColor).
+			Border(lipgloss.NormalBorder()).
+			BorderForeground(borderColor).
 			Padding(1, 3).
 			Render(fmt.Sprintf(
-				"📁 Target Project:    %s (%s)\n"+
-					"🌐 Target Locales:     [%s] (%d languages)\n"+
-					"🎭 Style & Tone:      %s\n"+
-					"🛡️  Execution Mode:    %s\n"+
-					"💾 Output Locale Dir:  %s",
+				"Target Project:    %s (%s)\n"+
+					"Target Locales:    [%s] (%d languages)\n"+
+					"Style & Tone:      %s\n"+
+					"Execution Mode:    %s\n"+
+					"Output Locale Dir: %s",
 				filepath.Base(m.projectRoot), m.platform.DisplayName(),
 				strings.Join(selectedList, ", "), len(selectedList),
 				m.currentStyle,
@@ -1768,8 +1771,8 @@ func (m *Model) renderRunWizardView() string {
 			))
 
 		s.WriteString(summaryBox + "\n\n")
-		s.WriteString(lipgloss.NewStyle().Bold(true).Foreground(accentColor).Render("👉 Press [Enter] to Start Full AI Localization Pipeline!") + "\n")
-		s.WriteString(lipgloss.NewStyle().Foreground(subtleColor).Render("   [b] Back to Step 3  |  [Esc] Cancel to Main Menu"))
+		s.WriteString(lipgloss.NewStyle().Bold(true).Foreground(accentColor).Render("Press [Enter] to start full AI localization pipeline") + "\n")
+		s.WriteString(lipgloss.NewStyle().Foreground(mutedColor).Render("   [b] Back to Step 3  |  [Esc] Cancel to Main Menu"))
 	}
 
 	return s.String()
@@ -1777,19 +1780,17 @@ func (m *Model) renderRunWizardView() string {
 
 func (m *Model) renderMainMenu() string {
 	var s strings.Builder
-	s.WriteString(lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#F8F8F2")).Render("⚡ Main Menu Navigation (Press 1-8 or ↑/↓ and Enter):") + "\n\n")
+	s.WriteString(lipgloss.NewStyle().Bold(true).Render("Main Menu") + helpStyle.Render("  (press 0-9 or ↑/↓ and Enter)") + "\n\n")
 
 	for i, c := range m.menuChoices {
-		prefix := "  "
 		if i == m.cursor {
-			prefix = "👉"
-			row := activeItemStyle.Render(fmt.Sprintf("%s [%s] %s", prefix, c.Number, c.Title))
+			row := activeItemStyle.Render(fmt.Sprintf("%s [%s] %s", cursorMark, c.Number, c.Title))
 			s.WriteString(row + "\n")
-			s.WriteString(lipgloss.NewStyle().Foreground(cyanColor).PaddingLeft(7).Render(c.Desc) + "\n\n")
+			s.WriteString(lipgloss.NewStyle().Foreground(dimTextColor).PaddingLeft(4).Render(c.Desc) + "\n\n")
 		} else {
-			row := inactiveItemStyle.Render(fmt.Sprintf("%s [%s] %s", prefix, c.Number, c.Title))
+			row := inactiveItemStyle.Render(fmt.Sprintf("  [%s] %s", c.Number, c.Title))
 			s.WriteString(row + "\n")
-			s.WriteString(lipgloss.NewStyle().Foreground(subtleColor).PaddingLeft(7).Render(c.Desc) + "\n\n")
+			s.WriteString(lipgloss.NewStyle().Foreground(mutedColor).PaddingLeft(4).Render(c.Desc) + "\n\n")
 		}
 	}
 	return s.String()
@@ -1797,44 +1798,40 @@ func (m *Model) renderMainMenu() string {
 
 func (m *Model) renderProjectSelectView() string {
 	var s strings.Builder
-	s.WriteString(lipgloss.NewStyle().Bold(true).Foreground(accentColor).Render("📁 Select Target Project / Workspace Directory") + "\n")
-	s.WriteString(lipgloss.NewStyle().Foreground(subtleColor).Render("Choose a pre-configured demo project or scan your local code:") + "\n\n")
+	s.WriteString(lipgloss.NewStyle().Bold(true).Render("Select Target Project / Workspace Directory") + "\n")
+	s.WriteString(lipgloss.NewStyle().Foreground(mutedColor).Render("Choose a pre-configured demo project or scan your local code:") + "\n\n")
 
 	for i, p := range m.projectPresets {
 		active := " "
 		if strings.HasSuffix(m.projectRoot, p.RelPath) || (p.RelPath == "." && m.projectRoot == findRepoRoot(m.projectRoot)) {
-			active = "✓"
+			active = checkMark
 		}
 
 		if i == m.cursor {
-			s.WriteString(activeItemStyle.Render(fmt.Sprintf("👉 [%s] %-32s (%s)", active, p.Name, p.Framework)) + "\n")
-			s.WriteString(lipgloss.NewStyle().Foreground(subtleColor).PaddingLeft(8).Render(p.Desc) + "\n\n")
+			s.WriteString(activeItemStyle.Render(fmt.Sprintf("%s [%s] %-32s (%s)", cursorMark, active, p.Name, p.Framework)) + "\n")
+			s.WriteString(lipgloss.NewStyle().Foreground(dimTextColor).PaddingLeft(4).Render(p.Desc) + "\n\n")
 		} else {
-			s.WriteString(inactiveItemStyle.Render(fmt.Sprintf("   [%s] %-32s (%s)", active, p.Name, p.Framework)) + "\n")
-			s.WriteString(lipgloss.NewStyle().Foreground(subtleColor).PaddingLeft(8).Render(p.Desc) + "\n\n")
+			s.WriteString(inactiveItemStyle.Render(fmt.Sprintf("  [%s] %-32s (%s)", active, p.Name, p.Framework)) + "\n")
+			s.WriteString(lipgloss.NewStyle().Foreground(mutedColor).PaddingLeft(4).Render(p.Desc) + "\n\n")
 		}
 	}
 
-	s.WriteString("\n" + lipgloss.NewStyle().Bold(true).Foreground(cyanColor).Render("Press [Enter] to Activate & Scan  |  [Esc] Back to Menu"))
+	s.WriteString("\n" + lipgloss.NewStyle().Bold(true).Foreground(accentColor).Render("Press [Enter] to activate & scan  |  [Esc] Back to Menu"))
 	return s.String()
 }
 
 func (m *Model) renderAuditView() string {
 	var s strings.Builder
-	s.WriteString(lipgloss.NewStyle().Bold(true).Foreground(accentColor).Render("🔍 Codebase Hardcoded String Audit Report") + "\n\n")
+	s.WriteString(lipgloss.NewStyle().Bold(true).Render("Codebase Hardcoded String Audit Report") + "\n\n")
 
 	if len(m.candidates) == 0 {
-		emptyBox := `┌────────────────────────────────────────────────────────┐
-│ 🎉 No Raw Unlocalized Strings Detected                │
-├────────────────────────────────────────────────────────┤
-│ All strings in this directory are 100% international-  │
-│ ized or no matching source files were found.           │
-│                                                        │
-│ Quick Fixes:                                           │
-│  • Press [c] to Reset demo apps to unlocalized code    │
-│  • Press [p] to Switch to a demo project               │
-└────────────────────────────────────────────────────────┘`
-		s.WriteString(lipgloss.NewStyle().Foreground(yellowColor).Render(emptyBox) + "\n\n")
+		emptyBox := "No raw unlocalized strings detected.\n\n" +
+			"All strings in this directory are already localized, or no matching\n" +
+			"source files were found.\n\n" +
+			"Quick fixes:\n" +
+			"  - Press [c] to reset demo apps to unlocalized code\n" +
+			"  - Press [p] to switch to a demo project"
+		s.WriteString(cardBox.Render(emptyBox) + "\n\n")
 		s.WriteString(lipgloss.NewStyle().Bold(true).Foreground(accentColor).Render("Actions: [p] Switch Target Project  |  [c] Reset Demo Code  |  [Esc] Menu"))
 		return s.String()
 	}
@@ -1847,10 +1844,10 @@ func (m *Model) renderAuditView() string {
 		}
 	}
 
-	summary := fmt.Sprintf("Scanned Directory: %s  |  Detected: %s\n"+
+	summary := fmt.Sprintf("Scanned directory: %s  |  Detected: %s\n"+
 		"Found %d candidate string(s) across project (%d localizable UI strings):",
 		filepath.Base(m.projectRoot), m.platform.DisplayName(), len(m.candidates), localizableCount)
-	s.WriteString(lipgloss.NewStyle().Foreground(cyanColor).Render(summary) + "\n\n")
+	s.WriteString(lipgloss.NewStyle().Foreground(dimTextColor).Render(summary) + "\n\n")
 
 	// Scroll window calculation
 	windowSize := 8
@@ -1864,7 +1861,7 @@ func (m *Model) renderAuditView() string {
 	}
 
 	if start > 0 {
-		s.WriteString(lipgloss.NewStyle().Foreground(subtleColor).Render(fmt.Sprintf("   ▲ ... %d candidates above (Press ↑/k) ...", start)) + "\n")
+		s.WriteString(lipgloss.NewStyle().Foreground(mutedColor).Render(fmt.Sprintf("   ^ ... %d candidates above (press up/k) ...", start)) + "\n")
 	}
 
 	for i := start; i < end; i++ {
@@ -1882,13 +1879,13 @@ func (m *Model) renderAuditView() string {
 			cleanSnippet = cleanSnippet[:29] + "..."
 		}
 
-		s.WriteString(fmt.Sprintf(" %s [%2d] %-24s (L%d:%d) → \"%s\" (Key: %s)\n",
-			lipgloss.NewStyle().Foreground(badgeColor).Render(badge),
+		s.WriteString(fmt.Sprintf(" %s [%2d] %-24s (L%d:%d) -> \"%s\" (Key: %s)\n",
+			lipgloss.NewStyle().Foreground(accentColor).Render(badge),
 			i+1, relPath, c.StartLine, c.StartCol, cleanSnippet, c.Key))
 	}
 
 	if end < len(m.candidates) {
-		s.WriteString(lipgloss.NewStyle().Foreground(subtleColor).Render(fmt.Sprintf("   ▼ ... %d more candidates below (Press ↓/j) ...", len(m.candidates)-end)) + "\n")
+		s.WriteString(lipgloss.NewStyle().Foreground(mutedColor).Render(fmt.Sprintf("   v ... %d more candidates below (press down/j) ...", len(m.candidates)-end)) + "\n")
 	}
 
 	s.WriteString("\n" + lipgloss.NewStyle().Bold(true).Foreground(accentColor).Render(
@@ -1898,7 +1895,7 @@ func (m *Model) renderAuditView() string {
 
 func (m *Model) renderReviewView() string {
 	var s strings.Builder
-	s.WriteString(lipgloss.NewStyle().Bold(true).Foreground(primaryColor).Render("⚡ Interactive Candidate Review Queue") + "\n\n")
+	s.WriteString(lipgloss.NewStyle().Bold(true).Render("Interactive Candidate Review Queue") + "\n\n")
 
 	if len(m.candidates) == 0 {
 		s.WriteString("No candidates to review. Press [p] to switch project or [c] to reset demo code.\n")
@@ -1915,25 +1912,23 @@ func (m *Model) renderReviewView() string {
 	c := m.candidates[m.candidateIdx]
 	relPath, _ := filepath.Rel(m.projectRoot, c.FilePath)
 
-	statusStr := lipgloss.NewStyle().Bold(true).Foreground(accentColor).Render("APPROVED ✓")
+	statusStr := lipgloss.NewStyle().Bold(true).Foreground(successColor).Render("APPROVED")
 	if !c.Approved {
-		statusStr = lipgloss.NewStyle().Bold(true).Foreground(dangerColor).Render("SKIPPED ⊘")
+		statusStr = lipgloss.NewStyle().Bold(true).Foreground(dangerColor).Render("SKIPPED")
 	}
 
-	card := fmt.Sprintf(`┌────────────────────────────────────────────────────────────────────────┐
-│ Candidate %2d of %2d                                                    │
-├────────────────────────────────────────────────────────────────────────┤
-│  • File Location:  %-51s │
-│  • Line & Column:  Line %-47s │
-│  • Raw String:     "%-49s" │
-│  • Synthesized Key:%-52s │
-│  • AST Node Type:  %-51s │
-│  • Classification: %-30s (Confidence: %2.0f%%) │
-│  • Status:         %-51s │
-└────────────────────────────────────────────────────────────────────────┘`,
+	cardContent := fmt.Sprintf(
+		"Candidate %d of %d\n\n"+
+			"File Location:   %s\n"+
+			"Line & Column:   %d:%d\n"+
+			"Raw String:      \"%s\"\n"+
+			"Synthesized Key: %s\n"+
+			"AST Node Type:   %s\n"+
+			"Classification:  %s (confidence: %.0f%%)\n"+
+			"Status:          %s",
 		m.candidateIdx+1, len(m.candidates),
 		relPath,
-		fmt.Sprintf("%d:%d", c.StartLine, c.StartCol),
+		c.StartLine, c.StartCol,
 		c.CleanValue,
 		c.Key,
 		c.ParentNodeType,
@@ -1941,16 +1936,16 @@ func (m *Model) renderReviewView() string {
 		statusStr,
 	)
 
-	s.WriteString(card + "\n\n")
-	s.WriteString(lipgloss.NewStyle().Bold(true).Foreground(cyanColor).Render(
-		"Shortcuts: [a] Approve  |  [s] Skip  |  [A] Approve All  |  [S] Skip All  |  [↑/↓] Navigate  |  [Enter] Apply AST Refactoring  |  [Esc] Back\n"))
+	s.WriteString(cardBox.Render(cardContent) + "\n\n")
+	s.WriteString(lipgloss.NewStyle().Bold(true).Foreground(accentColor).Render(
+		"Shortcuts: [a] Approve  |  [s] Skip  |  [A] Approve All  |  [S] Skip All  |  [up/down] Navigate  |  [Enter] Apply AST Refactoring  |  [Esc] Back\n"))
 
 	return s.String()
 }
 
 func (m *Model) renderTranslateView() string {
 	var s strings.Builder
-	s.WriteString(lipgloss.NewStyle().Bold(true).Foreground(cyanColor).Render("🌐 Multi-Locale Translation & 4-Tier Critic") + "\n\n")
+	s.WriteString(lipgloss.NewStyle().Bold(true).Render("Multi-Locale Translation & 4-Tier Critic") + "\n\n")
 
 	selectedCount := 0
 	for _, sel := range m.selectedLocales {
@@ -1960,7 +1955,7 @@ func (m *Model) renderTranslateView() string {
 	}
 
 	s.WriteString(fmt.Sprintf("Selected: %s | Presets: [1] Top 4 (ES, FR, DE, JA) | [2] Top 10 | [a] All | [n] None\n\n",
-		lipgloss.NewStyle().Bold(true).Foreground(accentColor).Render(fmt.Sprintf("%d / %d Languages", selectedCount, len(m.availableLocales)))))
+		lipgloss.NewStyle().Bold(true).Foreground(accentColor).Render(fmt.Sprintf("%d / %d languages", selectedCount, len(m.availableLocales)))))
 
 	nameMap := make(map[string]string)
 	for _, l := range types.GlobalLanguages {
@@ -1986,14 +1981,14 @@ func (m *Model) renderTranslateView() string {
 	}
 
 	if start > 0 {
-		s.WriteString(inactiveItemStyle.Render("   ▲ ... more languages above ...") + "\n")
+		s.WriteString(inactiveItemStyle.Render("   ^ ... more languages above ...") + "\n")
 	}
 
 	for i := start; i < end; i++ {
 		loc := m.availableLocales[i]
 		check := "[ ]"
 		if m.selectedLocales[loc] {
-			check = "[x]"
+			check = "[" + checkMark + "]"
 		}
 		langName := nameMap[loc]
 		if langName == "" {
@@ -2001,21 +1996,21 @@ func (m *Model) renderTranslateView() string {
 		}
 
 		if i == m.cursor {
-			s.WriteString(activeItemStyle.Render(fmt.Sprintf("👉 %s %-8s — %s", check, strings.ToUpper(loc), langName)) + "\n")
+			s.WriteString(activeItemStyle.Render(fmt.Sprintf("%s %s %-8s %s", cursorMark, check, strings.ToUpper(loc), langName)) + "\n")
 		} else {
-			s.WriteString(inactiveItemStyle.Render(fmt.Sprintf("   %s %-8s — %s", check, strings.ToUpper(loc), langName)) + "\n")
+			s.WriteString(inactiveItemStyle.Render(fmt.Sprintf("  %s %-8s %s", check, strings.ToUpper(loc), langName)) + "\n")
 		}
 	}
 
 	if end < total {
-		s.WriteString(inactiveItemStyle.Render("   ▼ ... more languages below ...") + "\n")
+		s.WriteString(inactiveItemStyle.Render("   v ... more languages below ...") + "\n")
 	}
 
 	startIdx := len(m.availableLocales)
 	if m.cursor == startIdx {
-		s.WriteString("\n" + activeItemStyle.Render("👉 [ 🚀 RUN TRANSLATION & 4-TIER CRITIC ]") + "\n")
+		s.WriteString("\n" + activeItemStyle.Render(cursorMark+" [ Run Translation & 4-Tier Critic ]") + "\n")
 	} else {
-		s.WriteString("\n" + inactiveItemStyle.Render("   [ 🚀 RUN TRANSLATION & 4-TIER CRITIC ]") + "\n")
+		s.WriteString("\n" + inactiveItemStyle.Render("  [ Run Translation & 4-Tier Critic ]") + "\n")
 	}
 
 	s.WriteString("\n" + lipgloss.NewStyle().Bold(true).Foreground(accentColor).Render(
@@ -2026,7 +2021,7 @@ func (m *Model) renderTranslateView() string {
 
 func (m *Model) renderExampleFlowView() string {
 	var s strings.Builder
-	s.WriteString(lipgloss.NewStyle().Bold(true).Foreground(primaryColor).Render("🎮 Interactive Live Demo & Example Flow") + "\n\n")
+	s.WriteString(lipgloss.NewStyle().Bold(true).Render("Interactive Live Demo & Example Flow") + "\n\n")
 
 	// Framework selector bar
 	fwBar := "Framework: "
@@ -2042,9 +2037,9 @@ func (m *Model) renderExampleFlowView() string {
 
 	for _, fw := range frameworks {
 		if m.exampleFramework == fw.Key {
-			fwBar += lipgloss.NewStyle().Bold(true).Foreground(accentColor).Background(lipgloss.Color("#44475A")).Padding(0, 1).Render("✓ "+fw.Name) + "  "
+			fwBar += lipgloss.NewStyle().Bold(true).Foreground(accentColor).Render(checkMark+" "+fw.Name) + "  "
 		} else {
-			fwBar += lipgloss.NewStyle().Foreground(subtleColor).Render(fw.Name) + "  "
+			fwBar += lipgloss.NewStyle().Foreground(mutedColor).Render(fw.Name) + "  "
 		}
 	}
 	s.WriteString(fwBar + "\n\n")
@@ -2054,19 +2049,19 @@ func (m *Model) renderExampleFlowView() string {
 		Key   string
 		Label string
 	}{
-		{"before", "[1] 📄 RAW CODE (BEFORE)"},
-		{"after", "[2] ✨ SURGICAL AST (AFTER)"},
-		{"diff", "[3] 🔍 DIFF HIGHLIGHTS"},
-		{"locales", "[4] 🌐 GENERATED LOCALES"},
-		{"critic", "[5] 🛡️ 4-TIER CRITIC"},
+		{"before", "[1] Raw Code (Before)"},
+		{"after", "[2] Surgical AST (After)"},
+		{"diff", "[3] Diff Highlights"},
+		{"locales", "[4] Generated Locales"},
+		{"critic", "[5] 4-Tier Critic"},
 	}
 
 	tabHeader := ""
 	for _, t := range tabs {
 		if m.exampleTab == t.Key {
-			tabHeader += lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#282A36")).Background(cyanColor).Padding(0, 1).Render(t.Label) + " "
+			tabHeader += lipgloss.NewStyle().Bold(true).Foreground(accentColor).Underline(true).Render(t.Label) + "   "
 		} else {
-			tabHeader += lipgloss.NewStyle().Foreground(lipgloss.Color("#F8F8F2")).Background(lipgloss.Color("#44475A")).Padding(0, 1).Render(t.Label) + " "
+			tabHeader += lipgloss.NewStyle().Foreground(mutedColor).Render(t.Label) + "   "
 		}
 	}
 	s.WriteString(tabHeader + "\n\n")
@@ -2076,25 +2071,25 @@ func (m *Model) renderExampleFlowView() string {
 
 	switch m.exampleTab {
 	case "before":
-		s.WriteString(lipgloss.NewStyle().Bold(true).Foreground(yellowColor).Render(fmt.Sprintf("Raw Unlocalized Source: %s (%s)", relPath, fwDisplay)) + "\n")
-		s.WriteString(lipgloss.NewStyle().Foreground(subtleColor).Render("Notice hardcoded UI strings ('FlightPeanut Store', 'Welcome back, {name}!', 'Submit Order'):") + "\n\n")
+		s.WriteString(lipgloss.NewStyle().Bold(true).Render(fmt.Sprintf("Raw unlocalized source: %s (%s)", relPath, fwDisplay)) + "\n")
+		s.WriteString(lipgloss.NewStyle().Foreground(mutedColor).Render("Notice hardcoded UI strings ('FlightPeanut Store', 'Welcome back, {name}!', 'Submit Order'):") + "\n\n")
 		boxContent := m.exampleBeforeCode
 		if boxContent == "" {
 			boxContent = "(No file content found. Press [c] to reset examples)"
 		}
-		s.WriteString(lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(yellowColor).Padding(0, 1).Render(boxContent) + "\n")
+		s.WriteString(cardBox.Render(boxContent) + "\n")
 
 	case "after":
-		s.WriteString(lipgloss.NewStyle().Bold(true).Foreground(accentColor).Render(fmt.Sprintf("Surgically Refactored AST Code: %s", relPath)) + "\n")
-		s.WriteString(lipgloss.NewStyle().Foreground(subtleColor).Render("Zero whitespace drift. Replaced with {t('key')} hooks & imported translations:") + "\n\n")
+		s.WriteString(lipgloss.NewStyle().Bold(true).Foreground(successColor).Render(fmt.Sprintf("Surgically refactored AST code: %s", relPath)) + "\n")
+		s.WriteString(lipgloss.NewStyle().Foreground(mutedColor).Render("Zero whitespace drift. Replaced with {t('key')} hooks & imported translations:") + "\n\n")
 		boxContent := m.exampleAfterCode
 		if boxContent == "" {
-			boxContent = "⚠️ Code has not been localized yet.\nPress [r] to run 1-Click Multi-Agent Localization!"
+			boxContent = "Code has not been localized yet.\nPress [r] to run 1-click multi-agent localization."
 		}
-		s.WriteString(lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(accentColor).Padding(0, 1).Render(boxContent) + "\n")
+		s.WriteString(cardBox.Render(boxContent) + "\n")
 
 	case "diff":
-		s.WriteString(lipgloss.NewStyle().Bold(true).Foreground(accentColor).Render("Unified Transformation Diff (Before vs After):") + "\n\n")
+		s.WriteString(lipgloss.NewStyle().Bold(true).Render("Unified transformation diff (before vs after):") + "\n\n")
 		diffText := ""
 		if m.exampleFramework == "nextjs" {
 			diffText = `@@ -1,15 +1,16 @@
@@ -2117,7 +2112,7 @@ func (m *Model) renderExampleFlowView() string {
 +      <span>{t('navbarWelcomeback', { name: user.name })}</span>
      </header>`
 		} else if m.exampleFramework == "flutter" {
- 			diffText = `@@ -1,10 +1,11 @@
+			diffText = `@@ -1,10 +1,11 @@
  import 'package:flutter/material.dart';
 +import 'package:flutter_gen/gen_l10n/app_localizations.dart';
 
@@ -2134,7 +2129,7 @@ func (m *Model) renderExampleFlowView() string {
        ),
      );`
 		} else if m.exampleFramework == "swiftui" {
- 			diffText = `@@ -1,10 +1,10 @@
+			diffText = `@@ -1,10 +1,10 @@
  import SwiftUI
 
  struct ContentView: View {
@@ -2149,7 +2144,7 @@ func (m *Model) renderExampleFlowView() string {
 +    .navigationTitle(String(localized: "dashboard", defaultValue: "Dashboard"))
    }`
 		} else {
- 			diffText = `@@ -1,8 +1,9 @@
+			diffText = `@@ -1,8 +1,9 @@
  package com.example.app
 +import androidx.compose.ui.res.stringResource
 
@@ -2161,75 +2156,71 @@ func (m *Model) renderExampleFlowView() string {
 +  Button(onClick = { ... }) { Text(text = stringResource(R.string.submit_order)) }
  }`
 		}
-		s.WriteString(lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(primaryColor).Padding(0, 1).Render(diffText) + "\n")
+		s.WriteString(cardBox.Render(diffText) + "\n")
 
 	case "locales":
-		s.WriteString(lipgloss.NewStyle().Bold(true).Foreground(cyanColor).Render("Generated French (fr.json / app_fr.arb) Locale Output:") + "\n")
-		s.WriteString(lipgloss.NewStyle().Foreground(subtleColor).Render("Synthesized keys with ICU variable parity ({name}) & Gen-Z slang translation:") + "\n\n")
+		s.WriteString(lipgloss.NewStyle().Bold(true).Render("Generated French (fr.json / app_fr.arb) locale output:") + "\n")
+		s.WriteString(lipgloss.NewStyle().Foreground(mutedColor).Render("Synthesized keys with ICU variable parity ({name}) & Gen-Z slang translation:") + "\n\n")
 		boxContent := m.exampleLocaleJSON
 		if boxContent == "" {
-			boxContent = "⚠️ No locale dictionaries generated yet.\nPress [r] to run 1-Click Multi-Agent Localization!"
+			boxContent = "No locale dictionaries generated yet.\nPress [r] to run 1-click multi-agent localization."
 		}
-		s.WriteString(lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(cyanColor).Padding(0, 1).Render(boxContent) + "\n")
+		s.WriteString(cardBox.Render(boxContent) + "\n")
 
 	case "critic":
-		s.WriteString(lipgloss.NewStyle().Bold(true).Foreground(primaryColor).Render("4-Tier Verifier Critic Autonomous Validation:") + "\n\n")
-		criticReport := `┌────────────────────────────────────────────────────────┐
-│ 4-Tier Critic Closed-Loop Verification Report          │
-├────────────────────────────────────────────────────────┤
-│  ✓ Tier 1 (AST Syntax Validation):         PASSED      │
-│  ✓ Tier 2 (ICU & Variable Parity):         PASSED      │
-│  ✓ Tier 3 (UI Layout & Length Expansion):  PASSED      │
-│  ✓ Tier 4 (Cross-Locale Key Parity):       PASSED      │
-└────────────────────────────────────────────────────────┘
-Status: ALL TIERS PASSED (100% Deterministic Precision)
-Self-Correction Reflection Iterations: 0 retries needed`
-		s.WriteString(lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(primaryColor).Padding(0, 1).Render(criticReport) + "\n")
+		s.WriteString(lipgloss.NewStyle().Bold(true).Render("4-Tier verifier critic autonomous validation:") + "\n\n")
+		criticReport := successBadge.Render(checkMark+" Tier 1") + " AST Syntax Validation:          PASSED\n" +
+			successBadge.Render(checkMark+" Tier 2") + " ICU & Variable Parity:           PASSED\n" +
+			successBadge.Render(checkMark+" Tier 3") + " UI Layout & Length Expansion:    PASSED\n" +
+			successBadge.Render(checkMark+" Tier 4") + " Cross-Locale Key Parity:         PASSED\n\n" +
+			lipgloss.NewStyle().Bold(true).Foreground(successColor).Render("All tiers passed (100% deterministic precision)") + "\n" +
+			lipgloss.NewStyle().Foreground(mutedColor).Render("Self-correction reflection iterations: 0 retries needed")
+		s.WriteString(cardBox.Render(criticReport) + "\n")
 	}
 
-	s.WriteString("\n" + lipgloss.NewStyle().Bold(true).Foreground(accentColor).Render("Shortcuts: [w] 🌐 Launch Web App in Browser  |  [Tab/1-5] Switch Tabs  |  [f] Framework  |  [r] Run  |  [c] Reset  |  [Esc] Menu"))
+	s.WriteString("\n" + lipgloss.NewStyle().Bold(true).Foreground(accentColor).Render("Shortcuts: [w] Launch Web App in Browser  |  [Tab/1-5] Switch Tabs  |  [f] Framework  |  [r] Run  |  [c] Reset  |  [Esc] Menu"))
 
 	return s.String()
 }
 
 func (m *Model) renderBenchmarkView() string {
 	var s strings.Builder
-	s.WriteString(lipgloss.NewStyle().Bold(true).Foreground(accentColor).Render("🚀 micro1 Hackathon — 10-Case Adversarial Benchmark Suite") + "\n\n")
+	s.WriteString(lipgloss.NewStyle().Bold(true).Render("micro1 Hackathon — 10-Case Adversarial Benchmark Suite") + "\n\n")
 
 	if len(m.benchResults) == 0 {
 		s.WriteString("Running benchmark suite...\n")
 		return s.String()
 	}
 
-	s.WriteString("┌────┬─────────────────────────────┬───────────┬──────────────┬──────────────┐\n")
-	s.WriteString("│ #  │ Test Case Name              │ Framework │ Baseline Win │ langPeanut   │\n")
-	s.WriteString("├────┼─────────────────────────────┼───────────┼──────────────┼──────────────┤\n")
+	s.WriteString(lipgloss.NewStyle().Foreground(borderColor).Render("────┬─────────────────────────────┬───────────┬──────────────┬──────────────") + "\n")
+	s.WriteString(" #  │ Test Case Name              │ Framework │ Baseline Win │ langPeanut   \n")
+	s.WriteString(lipgloss.NewStyle().Foreground(borderColor).Render("────┼─────────────────────────────┼───────────┼──────────────┼──────────────") + "\n")
 
 	for _, r := range m.benchResults {
-		s.WriteString(fmt.Sprintf("│ %-2d │ %-27s │ %-9s │ %-12.1f%%│ %-12.1f%%│\n",
+		s.WriteString(fmt.Sprintf(" %-2d │ %-27s │ %-9s │ %-12.1f%%│ %-12.1f%%\n",
 			r.CaseID, r.CaseName, r.Framework, r.BaselinePassRate, r.AgenticPassRate))
 	}
-	s.WriteString("└────┴─────────────────────────────┴───────────┴──────────────┴──────────────┘\n\n")
-	s.WriteString(successBadge.Render(" 100.0% PASS RATE ") + "  " + lipgloss.NewStyle().Foreground(yellowColor).Render("86.4% Token Reduction over raw prompts") + "\n")
+	s.WriteString(lipgloss.NewStyle().Foreground(borderColor).Render("────┴─────────────────────────────┴───────────┴──────────────┴──────────────") + "\n\n")
+	s.WriteString(successBadge.Render("100.0% PASS RATE") + "  " + lipgloss.NewStyle().Foreground(mutedColor).Render("86.4% token reduction over raw prompts") + "\n")
 
 	return s.String()
 }
 
 func (m *Model) renderCheckpointsView() string {
 	var s strings.Builder
-	s.WriteString(lipgloss.NewStyle().Bold(true).Foreground(yellowColor).Render("⏪ Codebase Checkpoints & Atomic Snapshots") + "\n\n")
+	s.WriteString(lipgloss.NewStyle().Bold(true).Render("Codebase Checkpoints & Atomic Snapshots") + "\n\n")
 
 	if len(m.checkpoints) == 0 {
 		s.WriteString("No snapshots found in .langPeanut/checkpoints/\n")
 		return s.String()
 	}
 
-	s.WriteString("Select snapshot to restore (Press [Enter]):\n\n")
+	s.WriteString("Select snapshot to restore (press Enter):\n\n")
 	for i, c := range m.checkpoints {
 		if i == m.cursor {
-			s.WriteString(activeItemStyle.Render(fmt.Sprintf("👉 [%d] %s (%s) — %s", i+1, c.ID, c.CreatedAt.Format("15:04:05"), c.Summary)) + "\n")
+			s.WriteString(activeItemStyle.Render(fmt.Sprintf("%s [%d] %s (%s) - %s", cursorMark, i+1, c.ID, c.CreatedAt.Format("15:04:05"), c.Summary)) + "\n")
 		} else {
-			s.WriteString(inactiveItemStyle.Render(fmt.Sprintf("   [%d] %s (%s) — %s", i+1, c.ID, c.CreatedAt.Format("15:04:05"), c.Summary)) + "\n")
+			s.WriteString(inactiveItemStyle.Render(fmt.Sprintf("  [%d] %s (%s) - %s", i+1, c.ID, c.CreatedAt.Format("15:04:05"), c.Summary)) + "\n")
 		}
 	}
 	return s.String()
@@ -2237,10 +2228,10 @@ func (m *Model) renderCheckpointsView() string {
 
 func (m *Model) renderSettingsView() string {
 	var s strings.Builder
-	s.WriteString(lipgloss.NewStyle().Bold(true).Foreground(primaryColor).Render("⚙️ Settings: LLM Provider, API Keys & Style Memory") + "\n\n")
+	s.WriteString(lipgloss.NewStyle().Bold(true).Render("Settings: LLM Provider, API Keys & Style Memory") + "\n\n")
 
 	// Section 1: LLM Providers
-	s.WriteString(lipgloss.NewStyle().Bold(true).Foreground(cyanColor).Render("1. Active LLM Provider & Model Selection:") + "\n")
+	s.WriteString(lipgloss.NewStyle().Bold(true).Foreground(accentColor).Render("1. Active LLM Provider & Model Selection") + "\n")
 
 	providers := []struct {
 		Key   llm.ProviderType
@@ -2259,18 +2250,18 @@ func (m *Model) renderSettingsView() string {
 	for i, p := range providers {
 		active := " "
 		if m.activeProvider == p.Key {
-			active = "✓"
+			active = checkMark
 		}
 
 		if i == m.cursor {
-			s.WriteString(activeItemStyle.Render(fmt.Sprintf("👉 [%s] %-18s (%s) — %s", active, p.Name, p.Model, p.Desc)) + "\n")
+			s.WriteString(activeItemStyle.Render(fmt.Sprintf("%s [%s] %-18s (%s) - %s", cursorMark, active, p.Name, p.Model, p.Desc)) + "\n")
 		} else {
-			s.WriteString(inactiveItemStyle.Render(fmt.Sprintf("   [%s] %-18s (%s) — %s", active, p.Name, p.Model, p.Desc)) + "\n")
+			s.WriteString(inactiveItemStyle.Render(fmt.Sprintf("  [%s] %-18s (%s) - %s", active, p.Name, p.Model, p.Desc)) + "\n")
 		}
 	}
 
 	// Section 2: Live API Key Status
-	s.WriteString("\n" + lipgloss.NewStyle().Bold(true).Foreground(yellowColor).Render("2. API Key Environment Status:") + "\n")
+	s.WriteString("\n" + lipgloss.NewStyle().Bold(true).Foreground(accentColor).Render("2. API Key Environment Status") + "\n")
 	keys := []struct {
 		Name   string
 		EnvVar string
@@ -2282,24 +2273,24 @@ func (m *Model) renderSettingsView() string {
 	}
 
 	for _, k := range keys {
-		status := lipgloss.NewStyle().Foreground(subtleColor).Render("○ Not Set (export " + k.EnvVar + "=...)")
+		status := lipgloss.NewStyle().Foreground(mutedColor).Render(dotEmpty + " Not set (export " + k.EnvVar + "=...)")
 		if os.Getenv(k.EnvVar) != "" {
-			status = lipgloss.NewStyle().Bold(true).Foreground(accentColor).Render("● Active & Detected")
+			status = lipgloss.NewStyle().Bold(true).Foreground(successColor).Render(dotFilled + " Active & detected")
 		}
-		s.WriteString(fmt.Sprintf("   • %-16s %s\n", k.Name+":", status))
+		s.WriteString(fmt.Sprintf("   %-16s %s\n", k.Name+":", status))
 	}
 
 	// Section 3: Tone & Style Presets
-	s.WriteString("\n" + lipgloss.NewStyle().Bold(true).Foreground(primaryColor).Render("3. Dynamic Translation Tone & Style Presets:") + "\n")
+	s.WriteString("\n" + lipgloss.NewStyle().Bold(true).Foreground(accentColor).Render("3. Dynamic Translation Tone & Style Presets") + "\n")
 
 	presets := []struct {
 		Key  memory.StylePreset
 		Desc string
 	}{
-		{memory.StyleDefault, "Standard Accurate — Professional, clear native UI copy"},
-		{memory.StyleGenZ, "Gen-Z Slang — Trendy internet aesthetic ('no cap', 'slay', 'fire', 'yeet')"},
-		{memory.StyleCasual, "Casual Friendly — Warm, welcoming tone for consumer mobile apps"},
-		{memory.StyleFormal, "Corporate Formal — Enterprise-grade strict polite honorifics"},
+		{memory.StyleDefault, "Standard Accurate — professional, clear native UI copy"},
+		{memory.StyleGenZ, "Gen-Z Slang — trendy internet aesthetic ('no cap', 'slay', 'fire', 'yeet')"},
+		{memory.StyleCasual, "Casual Friendly — warm, welcoming tone for consumer mobile apps"},
+		{memory.StyleFormal, "Corporate Formal — enterprise-grade strict polite honorifics"},
 		{memory.StylePirate, "Pirate / Gamer — 'Ahoy Matey!' playful gaming copy"},
 	}
 
@@ -2307,13 +2298,13 @@ func (m *Model) renderSettingsView() string {
 		idx := i + 6
 		active := " "
 		if m.currentStyle == p.Key {
-			active = "✓"
+			active = checkMark
 		}
 
 		if idx == m.cursor {
-			s.WriteString(activeItemStyle.Render(fmt.Sprintf("👉 [%s] %-15s — %s", active, p.Key, p.Desc)) + "\n")
+			s.WriteString(activeItemStyle.Render(fmt.Sprintf("%s [%s] %-15s - %s", cursorMark, active, p.Key, p.Desc)) + "\n")
 		} else {
-			s.WriteString(inactiveItemStyle.Render(fmt.Sprintf("   [%s] %-15s — %s", active, p.Key, p.Desc)) + "\n")
+			s.WriteString(inactiveItemStyle.Render(fmt.Sprintf("  [%s] %-15s - %s", active, p.Key, p.Desc)) + "\n")
 		}
 	}
 
@@ -2327,51 +2318,51 @@ func (m *Model) renderTokenStatsView() string {
 	allTime := tracker.GetStats()
 	session := tracker.GetSessionStats()
 
-	s.WriteString(lipgloss.NewStyle().Bold(true).Foreground(primaryColor).Render("📊 AI Token Consumption & Cost Analytics") + "\n")
-	s.WriteString(lipgloss.NewStyle().Foreground(subtleColor).Render("Real-time tracking of prompt tokens, completion tokens, model breakdowns, and estimated API expenses:") + "\n\n")
+	s.WriteString(lipgloss.NewStyle().Bold(true).Render("AI Token Consumption & Cost Analytics") + "\n")
+	s.WriteString(lipgloss.NewStyle().Foreground(mutedColor).Render("Real-time tracking of prompt tokens, completion tokens, model breakdowns, and estimated API expenses:") + "\n\n")
 
 	// 4 KPI Summary Cards
 	cardStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(cyanColor).
+		Border(lipgloss.NormalBorder()).
+		BorderForeground(borderColor).
 		Padding(0, 1).
 		Width(18)
 
 	c1 := cardStyle.Render(fmt.Sprintf("%s\n%s",
-		lipgloss.NewStyle().Foreground(subtleColor).Render("📥 Input Tokens"),
-		lipgloss.NewStyle().Bold(true).Foreground(accentColor).Render(formatNumber(allTime.TotalInputTokens)),
+		lipgloss.NewStyle().Foreground(mutedColor).Render("Input Tokens"),
+		lipgloss.NewStyle().Bold(true).Render(formatNumber(allTime.TotalInputTokens)),
 	))
 	c2 := cardStyle.Render(fmt.Sprintf("%s\n%s",
-		lipgloss.NewStyle().Foreground(subtleColor).Render("📤 Output Tokens"),
-		lipgloss.NewStyle().Bold(true).Foreground(primaryColor).Render(formatNumber(allTime.TotalOutputTokens)),
+		lipgloss.NewStyle().Foreground(mutedColor).Render("Output Tokens"),
+		lipgloss.NewStyle().Bold(true).Render(formatNumber(allTime.TotalOutputTokens)),
 	))
 	c3 := cardStyle.Render(fmt.Sprintf("%s\n%s",
-		lipgloss.NewStyle().Foreground(subtleColor).Render("⚡ Total Tokens"),
-		lipgloss.NewStyle().Bold(true).Foreground(yellowColor).Render(formatNumber(allTime.TotalTokens)),
+		lipgloss.NewStyle().Foreground(mutedColor).Render("Total Tokens"),
+		lipgloss.NewStyle().Bold(true).Foreground(accentColor).Render(formatNumber(allTime.TotalTokens)),
 	))
 	c4 := cardStyle.Render(fmt.Sprintf("%s\n%s",
-		lipgloss.NewStyle().Foreground(subtleColor).Render("💵 Est. Cost"),
-		lipgloss.NewStyle().Bold(true).Foreground(accentColor).Render(fmt.Sprintf("$%.4f", allTime.TotalEstimatedCostUSD)),
+		lipgloss.NewStyle().Foreground(mutedColor).Render("Est. Cost"),
+		lipgloss.NewStyle().Bold(true).Foreground(successColor).Render(fmt.Sprintf("$%.4f", allTime.TotalEstimatedCostUSD)),
 	))
 
 	s.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, c1, " ", c2, " ", c3, " ", c4) + "\n\n")
 
 	// Session vs All-Time summary
-	s.WriteString(lipgloss.NewStyle().Bold(true).Foreground(yellowColor).Render("⚡ Session vs. All-Time Consumption:") + "\n")
-	s.WriteString(fmt.Sprintf("   • Current Session:   %s tokens (%s in / %s out) across %d API calls ($%.4f)\n",
+	s.WriteString(lipgloss.NewStyle().Bold(true).Foreground(accentColor).Render("Session vs. All-Time Consumption") + "\n")
+	s.WriteString(fmt.Sprintf("   Current Session:  %s tokens (%s in / %s out) across %d API calls ($%.4f)\n",
 		formatNumber(session.TotalTokens), formatNumber(session.TotalInputTokens), formatNumber(session.TotalOutputTokens),
 		session.TotalRequests, session.TotalEstimatedCostUSD))
-	s.WriteString(fmt.Sprintf("   • Cumulative Total:  %s tokens across %d API requests ($%.4f total spend)\n\n",
+	s.WriteString(fmt.Sprintf("   Cumulative Total: %s tokens across %d API requests ($%.4f total spend)\n\n",
 		formatNumber(allTime.TotalTokens), allTime.TotalRequests, allTime.TotalEstimatedCostUSD))
 
 	// Model Breakdown Table
-	s.WriteString(lipgloss.NewStyle().Bold(true).Foreground(accentColor).Render("🧠 Model Breakdown:") + "\n")
+	s.WriteString(lipgloss.NewStyle().Bold(true).Foreground(accentColor).Render("Model Breakdown") + "\n")
 	if len(allTime.ByModel) == 0 {
-		s.WriteString(lipgloss.NewStyle().Foreground(subtleColor).Render("   ○ No model token calls recorded yet. Run a translation to see metrics.\n\n"))
+		s.WriteString(lipgloss.NewStyle().Foreground(mutedColor).Render("   No model token calls recorded yet. Run a translation to see metrics.\n\n"))
 	} else {
 		header := fmt.Sprintf("   %-30s %-10s %-12s %-12s %-12s %-8s %-10s", "MODEL", "PROVIDER", "INPUT", "OUTPUT", "TOTAL", "CALLS", "COST")
-		s.WriteString(lipgloss.NewStyle().Bold(true).Foreground(cyanColor).Render(header) + "\n")
-		s.WriteString(lipgloss.NewStyle().Foreground(subtleColor).Render("   ──────────────────────────────────────────────────────────────────────────────────────────────────") + "\n")
+		s.WriteString(lipgloss.NewStyle().Bold(true).Render(header) + "\n")
+		s.WriteString(lipgloss.NewStyle().Foreground(borderColor).Render("   ──────────────────────────────────────────────────────────────────────────────────────────────────") + "\n")
 
 		var models []string
 		for modName := range allTime.ByModel {
@@ -2390,12 +2381,12 @@ func (m *Model) renderTokenStatsView() string {
 				u.Requests,
 				u.EstimatedCostUSD,
 			)
-			s.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("#F8F8F2")).Render(row) + "\n")
+			s.WriteString(row + "\n")
 		}
 		s.WriteString("\n")
 	}
 
-	s.WriteString(lipgloss.NewStyle().Foreground(cyanColor).Render("Shortcuts: [r] Reset Token History  │  [Esc/q] Return to Main Menu"))
+	s.WriteString(lipgloss.NewStyle().Foreground(mutedColor).Render("Shortcuts: [r] Reset Token History  │  [Esc/q] Return to Main Menu"))
 	return s.String()
 }
 

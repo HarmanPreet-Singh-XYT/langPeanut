@@ -56,12 +56,14 @@ func (p *SwiftPlatform) DefaultSourceFile(projectRoot string, sourceLocale strin
 
 // Function/view names whose string argument is UI-facing text.
 var swiftUICallees = map[string]bool{
-	"Text": true, "Label": true, "Button": true,
+	"Text": true, "Label": true, "Button": true, "Section": true,
+	"Toggle": true, "Picker": true, "TextField": true, "SecureField": true, "Link": true,
 }
 
 // .method(...) suffixes (called via navigation_expression) whose argument is UI-facing text.
 var swiftUINavigationSuffixes = map[string]bool{
-	"navigationTitle": true, "alert": true, "tooltip": true,
+	"navigationTitle": true, "navigationBarTitle": true, "alert": true, "tooltip": true,
+	"confirmationDialog": true, "help": true, "badge": true,
 }
 
 func newSwiftParser() *sitter.Parser {

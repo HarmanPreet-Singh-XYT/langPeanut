@@ -302,6 +302,13 @@ filesystem, the SQLite database, other jobs' scratch directories, or the GitHub 
 - **Persistent local repo mirrors + commit-based dedupe** (§6.1, §6.2) — avoid both re-cloning from
   GitHub on every run and re-running/re-opening-a-PR for a commit that's already been processed
   under the same settings.
+- **Web UI: Next.js (React)** — confirmed by user (Session Entry 49). Static export served by Caddy
+  from `web/` in the `langpeanut-cloud` repo. The Go API is consumed from the same origin via
+  fetch/SWR; no separate frontend hosting needed.
+- **Trigger model: manual + webhook, manual-first** — both modes will be supported (confirmed Session
+  Entry 49), but v1 only ships the manual "Run" button in the web UI. Webhook-on-push auto-trigger
+  is planned for v2 once the manual path is stable end-to-end. `webhook.go`'s
+  `PushEvent.IsDefaultBranchPush()` already exists for when that gate opens.
 
 ## 8. Repo Layout & VPS Deployment Details
 
@@ -405,11 +412,10 @@ permissions (`chmod 600`) and exclude `.env`/`data/` from any backup that leaves
 
 ## 9. Open Questions (remaining)
 
-1. **Web UI stack** — Next.js/React is the default assumption; confirm or override.
-2. **Trigger model** — manual button only for v1, or also webhook-on-push auto-detection of new
-   hardcoded strings (heavier, needs incremental scanning)?
-3. **VPS provider/specs** — any preference (Hetzner, DigitalOcean, existing box)? Affects nothing
-   architecturally (it's just Docker) but determines the exact setup script.
+1. **VPS provider/specs** — any preference (Hetzner, DigitalOcean, existing box)? Doesn't block
+   implementation; it's just Docker. Determine before the first deploy.
+
+*(Web UI stack and trigger model were resolved in Session Entry 49 — see §7 confirmed decisions.)*
 
 ## 10. Implementation Order
 

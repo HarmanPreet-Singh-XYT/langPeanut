@@ -105,9 +105,9 @@ func writeVerificationSection(b *strings.Builder, result *agents.PipelineResult)
 
 	if result.VerificationReport != nil {
 		if result.VerificationReport.Passed {
-			b.WriteString("- ✅ 4-Tier Critic: all checks passed\n")
+			b.WriteString("- [Passed] 4-Tier Critic: all checks passed\n")
 		} else {
-			fmt.Fprintf(b, "- ⚠️ 4-Tier Critic: %d error(s), %d warning(s)\n",
+			fmt.Fprintf(b, "- [Warning] 4-Tier Critic: %d error(s), %d warning(s)\n",
 				result.VerificationReport.ErrorCount, result.VerificationReport.WarnCount)
 		}
 	}
@@ -122,7 +122,7 @@ func writeVerificationSection(b *strings.Builder, result *agents.PipelineResult)
 			}
 		}
 		if healed > 0 {
-			fmt.Fprintf(b, "- 🔧 Auto-healed %d compiler issue(s) in: %s\n",
+			fmt.Fprintf(b, "- [Auto-Repair] Auto-healed %d compiler issue(s) in: %s\n",
 				healed, strings.Join(healedFiles, ", "))
 		}
 	}
@@ -130,7 +130,7 @@ func writeVerificationSection(b *strings.Builder, result *agents.PipelineResult)
 }
 
 func writeNeedsReviewSection(b *strings.Builder, unresolved []types.CompilerDiagnostic) {
-	b.WriteString("## ⚠️ Needs manual review\n")
+	b.WriteString("## Needs manual review\n")
 	b.WriteString("The automated code-repair agent could not resolve the following issue(s) introduced by this change:\n\n")
 	for _, d := range unresolved {
 		fmt.Fprintf(b, "- `%s:%d` — %s (%s)\n", d.FilePath, d.Line, d.Message, d.Source)

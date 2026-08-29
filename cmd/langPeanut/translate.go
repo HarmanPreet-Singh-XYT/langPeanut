@@ -37,9 +37,9 @@ var translateCmd = &cobra.Command{
 		registry := platforms.NewRegistry()
 		platform, _ := registry.AutoDetect(absRoot)
 
-		fmt.Printf("🌐 langPeanut Translate — Translating %s (%s) into [%s]...\n", absRoot, platform.DisplayName(), strings.Join(targetLangs, ", "))
+		fmt.Printf("langPeanut Translate — Translating %s (%s) into [%s]...\n", absRoot, platform.DisplayName(), strings.Join(targetLangs, ", "))
 		if stylePreset != "" && stylePreset != "default" {
-			fmt.Printf("🎭 Style Tone Applied: %s\n", stylePreset)
+			fmt.Printf("Style Tone Applied: %s\n", stylePreset)
 		}
 		supervisor, err := agents.NewSupervisorAgent(absRoot, platform)
 		if err != nil {
@@ -48,10 +48,10 @@ var translateCmd = &cobra.Command{
 
 		if providerFlag != "" {
 			supervisor.Translator.LLM = llm.NewClient(llm.ProviderType(providerFlag), modelFlag)
-			fmt.Printf("🤖 Provider Override: %s (Model: %s)\n", providerFlag, modelFlag)
+			fmt.Printf("Provider Override: %s (Model: %s)\n", providerFlag, modelFlag)
 		} else if modelFlag != "" {
 			supervisor.Translator.LLM = llm.NewClient(llm.ProviderOpenAI, modelFlag)
-			fmt.Printf("🤖 Model Override: %s\n", modelFlag)
+			fmt.Printf("Model Override: %s\n", modelFlag)
 		}
 		fmt.Println()
 
@@ -79,7 +79,7 @@ var translateCmd = &cobra.Command{
 				fmt.Println("│  ✓ Tier 4 (Cross-Locale Key Parity):       PASSED      │")
 				fmt.Println("└────────────────────────────────────────────────────────┘")
 			} else {
-				fmt.Printf("│  ❌ Verification Failed with %d errors / %d warnings   │\n", result.VerificationReport.ErrorCount, result.VerificationReport.WarnCount)
+				fmt.Printf("│  [FAILED] Verification Issues: %d errors / %d warnings │\n", result.VerificationReport.ErrorCount, result.VerificationReport.WarnCount)
 				fmt.Println("└────────────────────────────────────────────────────────┘")
 				for _, d := range result.VerificationReport.Diagnostics {
 					fmt.Printf("  • [%s] Tier %d: %s\n", d.Severity, d.Tier, d.Message)
@@ -90,7 +90,7 @@ var translateCmd = &cobra.Command{
 		// Print Code Repair report if any repairs were triggered
 		if len(result.CodeRepairs) > 0 {
 			fmt.Println("\n┌────────────────────────────────────────────────────────┐")
-			fmt.Printf("│ 🔧 Autonomous Code Self-Healing & Repair Report        │\n")
+			fmt.Printf("│ Autonomous Code Self-Healing & Repair Report           │\n")
 			fmt.Println("├────────────────────────────────────────────────────────┤")
 			for _, r := range result.CodeRepairs {
 				if r.Repaired {
@@ -99,14 +99,14 @@ var translateCmd = &cobra.Command{
 						fmt.Printf("│    ↳ %s\n", r.Explanation)
 					}
 				} else {
-					fmt.Printf("│  ⚠️ %-35s MANUAL FIX NEEDED │\n", filepath.Base(r.FilePath))
+					fmt.Printf("│  [REVIEW] %-28s MANUAL FIX NEEDED │\n", filepath.Base(r.FilePath))
 				}
 			}
 			fmt.Println("└────────────────────────────────────────────────────────┘")
 		}
 
 		if len(result.UnresolvedErrors) > 0 {
-			fmt.Printf("\n⚠️  %d compiler diagnostic(s) require manual review:\n", len(result.UnresolvedErrors))
+			fmt.Printf("\nWarning: %d compiler diagnostic(s) require manual review:\n", len(result.UnresolvedErrors))
 			for _, ue := range result.UnresolvedErrors {
 				fmt.Printf("   • %s:%d:%d — [%s] %s\n", filepath.Base(ue.FilePath), ue.Line, ue.Column, ue.Source, ue.Message)
 			}

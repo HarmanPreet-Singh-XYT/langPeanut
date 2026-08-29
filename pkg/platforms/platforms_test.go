@@ -183,3 +183,181 @@ func TestFlutterPlatform_Case05(t *testing.T) {
 		t.Errorf("Refactored ARB failed ParsesCleanly")
 	}
 }
+
+func TestReactPlatform_ExtractConditionalTernary(t *testing.T) {
+	p := NewReactPlatform()
+	src := []byte(`import React from 'react';
+export function ActionButton({ isLoading, isError }: { isLoading: boolean, isError: boolean }) {
+	return (
+		<div>
+			<button>{isLoading ? "Saving Order..." : "Save Changes"}</button>
+			{isError && <span>Payment Failed</span>}
+		</div>
+	);
+}
+`)
+
+	cands, err := p.ExtractCandidates("ActionButton.tsx", src)
+	if err != nil {
+		t.Fatalf("ExtractCandidates failed: %v", err)
+	}
+
+	if len(cands) != 3 {
+		t.Fatalf("expected 3 candidates from conditional rendering, got %d", len(cands))
+	}
+
+	if cands[0].CleanValue != "Saving Order..." {
+		t.Errorf("expected 'Saving Order...', got %q", cands[0].CleanValue)
+	}
+	if cands[1].CleanValue != "Save Changes" {
+		t.Errorf("expected 'Save Changes', got %q", cands[1].CleanValue)
+	}
+	if cands[2].CleanValue != "Payment Failed" {
+		t.Errorf("expected 'Payment Failed', got %q", cands[2].CleanValue)
+	}
+
+	plan, err := p.GenerateRefactorPlan("ActionButton.tsx", src, cands)
+	if err != nil {
+		t.Fatalf("GenerateRefactorPlan failed: %v", err)
+	}
+
+	if !ParsesCleanly("ActionButton.tsx", []byte(plan.RefactoredContent)) {
+		t.Logf("Refactored:\n%s", plan.RefactoredContent)
+		t.Errorf("Refactored code failed ParsesCleanly")
+	}
+}
+
+func TestFlutterPlatform_ExtractConditionalTernary(t *testing.T) {
+	p := NewFlutterPlatform()
+	src := []byte(`import 'package:flutter/material.dart';
+Widget build(BuildContext context, bool isLoggedIn) {
+	return ElevatedButton(
+		onPressed: () {},
+		child: Text(isLoggedIn ? 'Welcome Back!' : 'Sign In to Continue'),
+	);
+}
+`)
+
+	cands, err := p.ExtractCandidates("conditional_view.dart", src)
+	if err != nil {
+		t.Fatalf("ExtractCandidates failed: %v", err)
+	}
+
+	if len(cands) != 2 {
+		t.Fatalf("expected 2 candidates from Flutter ternary, got %d", len(cands))
+	}
+
+	if cands[0].CleanValue != "Welcome Back!" {
+		t.Errorf("expected 'Welcome Back!', got %q", cands[0].CleanValue)
+	}
+	if cands[1].CleanValue != "Sign In to Continue" {
+		t.Errorf("expected 'Sign In to Continue', got %q", cands[1].CleanValue)
+	}
+
+	plan, err := p.GenerateRefactorPlan("conditional_view.dart", src, cands)
+	if err != nil {
+		t.Fatalf("GenerateRefactorPlan failed: %v", err)
+	}
+
+	if !ParsesCleanly("conditional_view.dart", []byte(plan.RefactoredContent)) {
+		t.Logf("Refactored:\n%s", plan.RefactoredContent)
+		t.Errorf("Refactored Dart code failed ParsesCleanly")
+	}
+}
+
+func TestReactPlatform_ExtractCustomHookDialog(t *testing.T) {
+	p := NewReactPlatform()
+	src := []byte(`import React from 'react';
+export function UserSettings() {
+	const { openConfirm } = useConfirmDialog();
+	const handleDelete = () => {
+		openConfirm({
+			title: "Delete Account",
+			message: "This action cannot be undone.",
+			confirmLabel: "Delete Now",
+			cancelLabel: "Cancel"
+		});
+		toast.success("Settings updated successfully");
+	};
+
+	return (
+		<div>
+			<button onClick={handleDelete}>Delete Account</button>
+		</div>
+	);
+}
+`)
+
+	cands, err := p.ExtractCandidates("UserSettings.tsx", src)
+	if err != nil {
+		t.Fatalf("ExtractCandidates failed: %v", err)
+	}
+
+	if len(cands) < 5 {
+		t.Fatalf("expected at least 5 candidates from custom hook props & toast, got %d", len(cands))
+	}
+
+	plan, err := p.GenerateRefactorPlan("UserSettings.tsx", src, cands)
+	if err != nil {
+		t.Fatalf("GenerateRefactorPlan failed: %v", err)
+	}
+
+	if !ParsesCleanly("UserSettings.tsx", []byte(plan.RefactoredContent)) {
+		t.Logf("Refactored UserSettings.tsx:\n%s", plan.RefactoredContent)
+		t.Errorf("Refactored code failed ParsesCleanly")
+	}
+}
+
+func TestSwiftPlatform_ExtractModifiers(t *testing.T) {
+	p := NewSwiftPlatform()
+	src := []byte(`import SwiftUI
+struct DashboardView: View {
+    var body: some View {
+        NavigationView {
+            VStack {
+                Text("Welcome to Dashboard")
+                Button("Upgrade Plan") { }
+            }
+            .navigationTitle("Analytics Overview")
+        }
+    }
+}
+`)
+
+	cands, err := p.ExtractCandidates("DashboardView.swift", src)
+	if err != nil {
+		t.Fatalf("ExtractCandidates failed: %v", err)
+	}
+
+	if len(cands) < 3 {
+		t.Fatalf("expected at least 3 candidates from SwiftUI views & navigationTitle, got %d", len(cands))
+	}
+}
+
+func TestKotlinPlatform_ExtractNamedArgs(t *testing.T) {
+	p := NewAndroidPlatform()
+	src := []byte(`package com.app
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+
+@Composable
+fun LoginForm() {
+    OutlinedTextField(
+        value = "",
+        onValueChange = {},
+        label = { Text("Email Address") },
+        placeholder = { Text("Enter your email") }
+    )
+}
+`)
+
+	cands, err := p.ExtractCandidates("LoginForm.kt", src)
+	if err != nil {
+		t.Fatalf("ExtractCandidates failed: %v", err)
+	}
+
+	if len(cands) < 2 {
+		t.Fatalf("expected at least 2 candidates from Compose text/label, got %d", len(cands))
+	}
+}

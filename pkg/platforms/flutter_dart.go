@@ -62,13 +62,15 @@ func (p *FlutterPlatform) DefaultSourceFile(projectRoot string, sourceLocale str
 
 // Widget/parameter names whose string argument is UI-facing text.
 var dartUIWidgets = map[string]bool{
-	"Text": true, "TextSpan": true, "Tooltip": true,
+	"Text": true, "TextSpan": true, "Tooltip": true, "SnackBar": true,
+	"AlertDialog": true, "SimpleDialog": true, "AppBar": true,
 }
 
 // Named arguments (regardless of callee) that carry UI-facing text.
 var dartUINamedArgs = map[string]bool{
 	"message": true, "labelText": true, "hintText": true, "errorText": true,
-	"title": true, "tooltip": true, "semanticsLabel": true,
+	"helperText": true, "title": true, "tooltip": true, "semanticsLabel": true,
+	"confirmText": true, "cancelText": true, "headerText": true, "actionText": true,
 }
 
 // Callees whose string arguments must never be localized.
@@ -158,15 +160,24 @@ func (ex *dartExtractor) walk(n *sitter.Node) {
 // (positional argument to a UI widget constructor, or a named UI argument such
 // as message:/labelText:) to decide whether it is user-facing text.
 func (ex *dartExtractor) maybeExtractStringLiteral(strNode *sitter.Node) {
-	argNode := strNode.Parent()
-	if argNode == nil {
+	curr := strNode.Parent()
+	if curr == nil {
 		return
 	}
 
+	// Unwrap conditional_expression (ternary: cond ? 'A' : 'B') or parenthesized_expression
+	for curr != nil && (curr.Kind() == "conditional_expression" || curr.Kind() == "parenthesized_expression") {
+		curr = curr.Parent()
+	}
+	if curr == nil {
+		return
+	}
+
+	argNode := curr
 	var attrLabel string
 	switch argNode.Kind() {
 	case "argument":
-		// positional argument: Text("...") — must belong to a UI widget constructor
+		// positional argument: Text("...") or Text(isLoggedIn ? 'Welcome' : 'Sign In')
 	case "named_argument":
 		attrLabel = namedArgumentLabel(argNode, ex.src)
 	default:

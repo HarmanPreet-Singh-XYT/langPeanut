@@ -26,7 +26,7 @@ func TestTUI_InstantLaunchWithoutScanning(t *testing.T) {
 
 	// Verify View renders immediately
 	rendered := app.View()
-	if !strings.Contains(rendered, "Main Menu Navigation") {
+	if !strings.Contains(rendered, "Main Menu") {
 		t.Fatalf("Expected rendered view to contain main menu dashboard, got:\n%s", rendered)
 	}
 }
@@ -137,7 +137,7 @@ func TestTUI_1ClickLocalizationAsyncFlow(t *testing.T) {
 	}
 
 	loadingView := m.View()
-	if !strings.Contains(loadingView, "1-Click AI Localization") {
+	if !strings.Contains(strings.ToLower(loadingView), "1-click ai localization") {
 		t.Fatalf("Expected loading view to render running stage, got:\n%s", loadingView)
 	}
 }
@@ -301,7 +301,7 @@ func TestTUI_OnboardingSetupFlow(t *testing.T) {
 	if m.state != ViewMainMenu {
 		t.Fatalf("Expected state=ViewMainMenu after completing onboarding, got %v", m.state)
 	}
-	if !strings.Contains(m.statusMsg, "Onboarding Setup Complete") {
+	if !strings.Contains(strings.ToLower(m.statusMsg), "onboarding complete") {
 		t.Fatalf("Expected status message, got: %s", m.statusMsg)
 	}
 }

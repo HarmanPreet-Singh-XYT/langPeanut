@@ -12,8 +12,10 @@
 *.test
 *.out
 
-# Runtime state
+# Runtime state & CLI cache
 .langPeanut/
+.langpeanut/
+.langpeanut-cache/
 benchmark/workspace/
 
 # OS

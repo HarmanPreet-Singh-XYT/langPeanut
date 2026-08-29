@@ -81,7 +81,7 @@ func (s *SupervisorAgent) RunEndToEnd(ctx context.Context, sourceLocale string, 
 
 	// --- Step 1: AST Scout Agent (Candidate Extraction) ---
 	if s.OnProgress != nil {
-		s.OnProgress("🚀 [1/5] AST Scout: Scanning project files & extracting candidates...")
+		s.OnProgress("[1/5] AST Scout: Scanning project files & extracting candidates...")
 	}
 	s.Logger.LogStep("ASTScoutAgent", "ScanProject", "Scanning source files using AST queries", "ExtractCandidates", s.ProjectRoot, nil, "", 0, true)
 	scanReport, err := s.Scout.ScanProject(s.ProjectRoot, "")
@@ -112,7 +112,7 @@ func (s *SupervisorAgent) RunEndToEnd(ctx context.Context, sourceLocale string, 
 	if len(scanReport.Candidates) > 0 {
 		// --- Step 2: Context & Disambiguation Agent ---
 		if s.OnProgress != nil {
-			s.OnProgress(fmt.Sprintf("🧠 [2/5] Context Agent: Disambiguating %d candidates & synthesizing keys...", len(scanReport.Candidates)))
+			s.OnProgress(fmt.Sprintf("[2/5] Context Agent: Disambiguating %d candidates & synthesizing keys...", len(scanReport.Candidates)))
 		}
 		s.Logger.LogStep("ContextAgent", "DisambiguateAndEnhance", "Analyzing component hierarchies and sibling strings for semantic keys", "Disambiguate", len(scanReport.Candidates), nil, "", 0, true)
 		cands, err := s.Context.DisambiguateAndEnhance(scanReport.Candidates)
@@ -152,7 +152,7 @@ func (s *SupervisorAgent) RunEndToEnd(ctx context.Context, sourceLocale string, 
 	// --- Step 3: Checkpoint Manager (Pre-run snapshot) ---
 	if !dryRun && s.Checkpoint != nil {
 		if s.OnProgress != nil {
-			s.OnProgress("🛡️  [3/5] Checkpoint Manager: Creating safety rollback snapshot...")
+			s.OnProgress("[3/5] Checkpoint Manager: Creating safety rollback snapshot...")
 		}
 		manifest, _ := s.Checkpoint.CreateCheckpoint("pre-run", "Pre-run snapshot before AST refactoring", touchedFiles)
 		if manifest != nil {
@@ -164,7 +164,7 @@ func (s *SupervisorAgent) RunEndToEnd(ctx context.Context, sourceLocale string, 
 	refactorPlans := make(map[string]types.FileRefactorPlan)
 	if len(candidatesByFile) > 0 {
 		if s.OnProgress != nil {
-			s.OnProgress(fmt.Sprintf("⚡ [4/5] Patch Engine: Applying surgical AST byte-range diffs across %d files...", len(candidatesByFile)))
+			s.OnProgress(fmt.Sprintf("[4/5] Patch Engine: Applying surgical AST byte-range diffs across %d files...", len(candidatesByFile)))
 		}
 	}
 	for filePath, fileCandidates := range candidatesByFile {
@@ -203,7 +203,7 @@ func (s *SupervisorAgent) RunEndToEnd(ctx context.Context, sourceLocale string, 
 	var transErr error
 
 	if len(targetLocales) > 0 && s.OnProgress != nil {
-		s.OnProgress(fmt.Sprintf("🌐 [5/5] Cultural Translator: Translating %d keys into [%s] (5 parallel workers)...", len(sourceEntries), strings.Join(targetLocales, ", ")))
+		s.OnProgress(fmt.Sprintf("[5/5] Cultural Translator: Translating %d keys into [%s] (5 parallel workers)...", len(sourceEntries), strings.Join(targetLocales, ", ")))
 	}
 
 	// Limit simultaneous language translations to 5 concurrent worker goroutines
@@ -236,7 +236,7 @@ func (s *SupervisorAgent) RunEndToEnd(ctx context.Context, sourceLocale string, 
 
 	// --- Step 6: 4-Tier Critic & Reflection Loop ---
 	if s.OnProgress != nil {
-		s.OnProgress("🔍 Verifier Critic: Validating AST syntax, ICU variables & key parity...")
+		s.OnProgress("Verifier Critic: Validating AST syntax, ICU variables & key parity...")
 	}
 	s.Logger.LogStep("VerifierCriticAgent", "VerifyAll", "Executing 4-Tier verification check", "Verify", len(targetLocales), nil, "", 0, true)
 	report := s.Critic.VerifyAll(sourceLocaleData, targetLocaleDataMap, refactorPlans)
@@ -246,7 +246,7 @@ func (s *SupervisorAgent) RunEndToEnd(ctx context.Context, sourceLocale string, 
 	for !report.Passed && retryCount < 2 {
 		retryCount++
 		if s.OnProgress != nil {
-			s.OnProgress(fmt.Sprintf("🔄 Critic Self-Correction: Reflection retry %d/2 for %d diagnostic errors...", retryCount, report.ErrorCount))
+			s.OnProgress(fmt.Sprintf("Critic Self-Correction: Reflection retry %d/2 for %d diagnostic errors...", retryCount, report.ErrorCount))
 		}
 		s.Logger.LogStep("VerifierCriticAgent", "SelfCorrectionLoop", fmt.Sprintf("Verification failed with %d error(s). Initiating reflection retry %d", report.ErrorCount, retryCount), "Retry", report.Diagnostics, nil, "", retryCount, false)
 
@@ -272,7 +272,7 @@ func (s *SupervisorAgent) RunEndToEnd(ctx context.Context, sourceLocale string, 
 	// --- Step 7: Write to Disk (if not dryRun) ---
 	if !dryRun {
 		if s.OnProgress != nil {
-			s.OnProgress("💾 Saving formatted locale catalogs & refactored code to disk...")
+			s.OnProgress("Saving formatted locale catalogs & refactored code to disk...")
 		}
 		// Save refactored source files
 		for filePath, plan := range refactorPlans {
@@ -294,7 +294,7 @@ func (s *SupervisorAgent) RunEndToEnd(ctx context.Context, sourceLocale string, 
 		// Autonomous Code Repair Agent: heal newly introduced compiler regressions
 		if len(newDiags) > 0 {
 			if s.OnProgress != nil {
-				s.OnProgress(fmt.Sprintf("🔧 [Auto-Repair] Detected %d new compiler error(s). Initiating AI code repair...", len(newDiags)))
+				s.OnProgress(fmt.Sprintf("[Auto-Repair] Detected %d new compiler error(s). Initiating AI code repair...", len(newDiags)))
 			}
 			newDiagsByFile := make(map[string][]types.CompilerDiagnostic)
 			for _, d := range newDiags {

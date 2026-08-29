@@ -18,7 +18,7 @@ var benchmarkCmd = &cobra.Command{
 		}
 
 		benchDir := filepath.Join(absRoot, "benchmark", "workspace")
-		fmt.Printf("🚀 micro1 Hackathon — Running 10-Case Adversarial Benchmark Suite...\n\n")
+		fmt.Printf("micro1 Hackathon — Running 10-Case Adversarial Benchmark Suite...\n\n")
 
 		results, err := benchmark.RunBenchmark(benchDir)
 		if err != nil {
@@ -54,7 +54,7 @@ var benchmarkCmd = &cobra.Command{
 			baselineLabel = fmt.Sprintf("measured live via %s", baselineProvider)
 		}
 
-		fmt.Printf("\n🏆 Overall Multi-Agent Pass Rate: %.1f%% (Zero-Shot Baseline: %.1f%% [%s] | Naive Regex: %.1f%% [measured live])\n",
+		fmt.Printf("\nOverall Multi-Agent Pass Rate: %.1f%% (Zero-Shot Baseline: %.1f%% [%s] | Naive Regex: %.1f%% [measured live])\n",
 			avgPass, avgBaseline, baselineLabel, avgRegex)
 		fmt.Println("✓ Trajectories exported to `/trajectories/` for micro1 Hackathon Deliverable 04.")
 		return nil

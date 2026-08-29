@@ -26,48 +26,29 @@ explain it in detail.
 
 ## Where We Are Right Now
 
-`pkg/github/` (inside the existing `langTranslate` repo, NOT a new repo yet) is **feature-complete
-for its planned scope**:
+1. `pkg/github/` (inside `langTranslate`) is **feature-complete**:
+   - `pr_template.go`, `app_auth.go`, `http_util.go`, `repo_client.go`, `pr_client.go`, `webhook.go`.
+   - **30 tests passing**, 100% clean.
 
-| File | What it does | Status |
-|---|---|---|
-| `pr_template.go` | Deterministic PR title/body/labels formatter from `*agents.PipelineResult` — zero LLM calls | Done, tested |
-| `app_auth.go` | GitHub App RS256 JWT signing (stdlib only), installation token exchange, `ListInstallations`, paginated `ListInstallationRepos` | Done, tested |
-| `http_util.go` | Shared HTTP request helpers | Done |
-| `repo_client.go` | Clone/branch/commit/push via system `git` binary (not go-git — deliberate choice) | Done, tested |
-| `pr_client.go` | `CreatePullRequest`, `AddLabels`, `PostComment`, and `OpenLocalizationPR` (the single entry point a job worker calls) | Done, tested |
-| `webhook.go` | HMAC-SHA256 signature verification + typed push/installation event parsing | Done, tested |
+2. `langpeanut-cloud/` (standalone repo at `/Users/harmanpreetsingh/Public/Code/langpeanut-cloud`) is **feature-complete and verified**:
+   - `go.mod` linked directly to `github.com/langPeanut/langPeanut` via `replace` directive.
+   - `cmd/server/main.go` (trusted host process: HTTP API + worker goroutines + static web server).
+   - `cmd/runner/main.go` (sandboxed container entrypoint running `agents.SupervisorAgent.RunEndToEnd`).
+   - `internal/db/` (embedded SQLite migrations, WAL mode, queries for repos, settings, jobs queue, dedupe).
+   - `internal/auth/` (AES-256-GCM API credential encryption at rest).
+   - `internal/mirror/` (persistent bare git mirrors).
+   - `internal/worker/` (12-step atomic job processing loop).
+   - `internal/api/` (HTTP API routes for settings, repos, jobs, credentials, and `GET /api/github/available-repos`).
+   - `Dockerfile`, `Dockerfile.runner`, `docker-compose.yml`, `Caddyfile`.
+   - `web/` (Next.js 15 App Router frontend with Tailwind CSS v4, GitHub App repository discovery/import modal, rich localization settings modal, provider API key manager, and live job polling).
+   - Next.js build: `npm run build` produces static export in `web/out/` (100% clean).
+   - **100% tests passing** in `langpeanut-cloud` (`go test -v ./...`).
 
-**30 tests passing** in `pkg/github/`, full repo `go build`/`go vet`/`go test ./...` clean with
-zero regressions as of the last verification pass.
+## 100% Shared Core Engine Architecture
+Every pipeline step in the cloud service uses the exact same `SupervisorAgent` and `Platform` registry from `github.com/langPeanut/langPeanut`. Any improvement to AST parsing, AST patching, ICU translation, 4-tier verification critic, autonomous code repair agent, translation memory, or token tracking made in the CLI codebase automatically powers the cloud service without duplicate implementations.
 
-**Nothing beyond `pkg/github/` has been scaffolded yet.** No `langpeanut-cloud` repo exists. No
-server, no worker loop, no SQLite schema, no Dockerfile, no web UI — those are all still just
-described in `cloud_plan.md`, not implemented.
-
-## Git State (needs a decision, not yet handled)
-
-Uncommitted in the working tree:
-- Modified: `CHANGELOG.md`
-- Untracked: `cloud_plan.md`, `pkg/github/` (all files)
-
-Nothing has been committed or pushed this session. The next agent (or the user) needs to decide
-whether/how to commit this — it was not asked for explicitly yet, per the project's standing rule
-of never committing without being asked.
-
-## Next Step (per `cloud_plan.md` §10, step 5)
-
-Scaffold the actual `langpeanut-cloud` repo — this is new-repo work, not more additions to
-`pkg/github/`:
-- `cmd/server/main.go` (trusted host process: HTTP API + worker loop as goroutines)
-- SQLite schema + migrations (see §5 for the exact `jobs`/`repos`/`repo_settings`/etc. table shapes)
-- Minimal HTTP API (health check, settings CRUD)
-- In-process worker loop wired to `pkg/agents.SupervisorAgent` (via `github.com/langPeanut/langPeanut/pkg/...` as a Go module import — see §8.4 for the `replace`-directive-during-development pattern)
-- `internal/mirror/` — persistent bare git mirror cache (§6.1)
-- Sandbox launcher — spawns `langpeanut-runner` Docker containers per job via the Docker socket (§6.3)
-
-After that: `Dockerfile` + `Dockerfile.runner` + `docker-compose.yml` + `Caddyfile` (§8.2–8.3), get
-a real end-to-end VPS deploy working API-only (curl-testable) before building the web UI.
+## Next Step
+- Connect real GitHub App credentials in `.env` and verify end-to-end `docker compose up` on a VPS following [DEPLOYMENT.md](file:///Users/harmanpreetsingh/Public/Code/langpeanut-cloud/DEPLOYMENT.md).
 
 ## Confirmed Decisions (don't re-litigate these — see `cloud_plan.md` §7 for full rationale)
 

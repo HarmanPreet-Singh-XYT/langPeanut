@@ -33,7 +33,7 @@ var auditCmd = &cobra.Command{
 		scout := agents.NewASTScoutAgent(platform)
 		contextAgent := agents.NewContextAgent()
 
-		fmt.Printf("🔍 langPeanut Audit — Scanning %s (%s)...\n\n", absRoot, platform.DisplayName())
+		fmt.Printf("langPeanut Audit — Scanning %s (%s)...\n\n", absRoot, platform.DisplayName())
 
 		report, err := scout.ScanProject(absRoot, auditFile)
 		if err != nil {
@@ -71,7 +71,7 @@ var auditCmd = &cobra.Command{
 		}
 
 		if ciMode && report.LocalizableCount > 0 {
-			fmt.Fprintf(os.Stderr, "❌ CI Check Failed: %d hardcoded string(s) detected.\n", report.LocalizableCount)
+			fmt.Fprintf(os.Stderr, "CI Check Failed: %d hardcoded string(s) detected.\n", report.LocalizableCount)
 			os.Exit(1)
 		}
 

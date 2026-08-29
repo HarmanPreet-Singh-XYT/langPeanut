@@ -25,7 +25,7 @@ var statsCmd = &cobra.Command{
 
 		stats := tracker.GetStats()
 
-		fmt.Println("📊 langPeanut — AI Token Consumption & Cost Analytics")
+		fmt.Println("langPeanut — AI Token Consumption & Cost Analytics")
 		fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 		fmt.Printf("  • Total API Requests:     %d\n", stats.TotalRequests)
 		fmt.Printf("  • Total Input Tokens:     %s\n", formatNumber(stats.TotalInputTokens))
@@ -36,7 +36,7 @@ var statsCmd = &cobra.Command{
 		fmt.Println()
 
 		if len(stats.ByModel) == 0 {
-			fmt.Println("ℹ️  No AI token usage recorded yet. Run a translation or audit command to track tokens.")
+			fmt.Println("No AI token usage recorded yet. Run a translation or audit command to track tokens.")
 			return
 		}
 
@@ -63,7 +63,7 @@ var statsCmd = &cobra.Command{
 			)
 		}
 		fmt.Println("────────────────────────────────────────────────────────────────────────────────────────────────────────────")
-		fmt.Println("\n💡 Tip: Run `langPeanut stats --reset` to clear historical token metrics.")
+		fmt.Println("\nTip: Run `langPeanut stats --reset` to clear historical token metrics.")
 	},
 }
 

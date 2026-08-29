@@ -59,13 +59,15 @@ func (p *AndroidPlatform) DefaultSourceFile(projectRoot string, sourceLocale str
 
 // Composable function names whose string argument is UI-facing text.
 var kotlinComposeCallees = map[string]bool{
-	"Text": true, "Button": true, "OutlinedTextField": true, "Tooltip": true,
+	"Text": true, "Button": true, "OutlinedTextField": true, "TextField": true,
+	"Tooltip": true, "AlertDialog": true, "DropdownMenuItem": true, "Tab": true,
 }
 
 // Named arguments (text = "...", label = "...") that carry UI-facing text
 // regardless of which composable they appear on.
 var kotlinUINamedArgs = map[string]bool{
 	"text": true, "label": true, "placeholder": true, "hint": true,
+	"title": true, "confirmButton": true, "dismissButton": true, "contentDescription": true,
 }
 
 func newKotlinParser() *sitter.Parser {
