@@ -125,6 +125,50 @@ var (
 			Padding(0, 1)
 )
 
+type LanguageInfo struct {
+	Code string
+	Name string
+}
+
+var GlobalLanguages = []LanguageInfo{
+	{"es", "Spanish (Español)"},
+	{"fr", "French (Français)"},
+	{"de", "German (Deutsch)"},
+	{"ja", "Japanese (日本語)"},
+	{"zh-CN", "Chinese Simplified (简体中文)"},
+	{"zh-TW", "Chinese Traditional (繁體中文)"},
+	{"hi", "Hindi (हिन्दी)"},
+	{"pa", "Punjabi (ਪੰਜਾਬੀ)"},
+	{"ar", "Arabic (العربية)"},
+	{"ko", "Korean (한국어)"},
+	{"pt", "Portuguese (Português)"},
+	{"it", "Italian (Italiano)"},
+	{"nl", "Dutch (Nederlands)"},
+	{"ru", "Russian (Русский)"},
+	{"tr", "Turkish (Türkçe)"},
+	{"vi", "Vietnamese (Tiếng Việt)"},
+	{"th", "Thai (ไทย)"},
+	{"id", "Indonesian (Bahasa Indonesia)"},
+	{"pl", "Polish (Polski)"},
+	{"uk", "Ukrainian (Українська)"},
+	{"sv", "Swedish (Svenska)"},
+	{"el", "Greek (Ελληνικά)"},
+	{"he", "Hebrew (עברית)"},
+	{"ur", "Urdu (اردو)"},
+	{"bn", "Bengali (বাংলা)"},
+	{"ta", "Tamil (தமிழ்)"},
+	{"te", "Telugu (తెలుగు)"},
+	{"mr", "Marathi (मराठी)"},
+	{"fil", "Filipino (Tagalog)"},
+	{"da", "Danish (Dansk)"},
+	{"fi", "Finnish (Suomi)"},
+	{"no", "Norwegian (Norsk)"},
+	{"cs", "Czech (Čeština)"},
+	{"ro", "Romanian (Română)"},
+	{"hu", "Hungarian (Magyar)"},
+	{"sw", "Swahili (Kiswahili)"},
+}
+
 func NewApp(projectRoot string) *Model {
 	absRoot, _ := filepath.Abs(projectRoot)
 	registry := platforms.NewRegistry()
@@ -148,6 +192,17 @@ func NewApp(projectRoot string) *Model {
 		defaultModel = "gemini-2.5-flash"
 	}
 
+	var allCodes []string
+	selected := make(map[string]bool)
+	for _, l := range GlobalLanguages {
+		allCodes = append(allCodes, l.Code)
+	}
+	// Default selection: top 4 languages
+	selected["es"] = true
+	selected["fr"] = true
+	selected["de"] = true
+	selected["ja"] = true
+
 	m := &Model{
 		state:          ViewMainMenu,
 		cursor:         0,
@@ -158,13 +213,8 @@ func NewApp(projectRoot string) *Model {
 		currentStyle:   memory.StyleDefault,
 		activeProvider: defaultProvider,
 		activeModel:    defaultModel,
-		availableLocales: []string{"fr", "es", "de", "ja", "ar", "ko", "pt", "zh-CN"},
-		selectedLocales: map[string]bool{
-			"fr": true,
-			"es": true,
-			"de": true,
-			"ja": true,
-		},
+		availableLocales: allCodes,
+		selectedLocales:  selected,
 		menuChoices: []MainMenuChoice{
 			{Title: "🔍 1. Scan & Audit Strings", Desc: "Inspect hardcoded UI strings with zero file modifications", State: ViewAudit},
 			{Title: "⚡ 2. Review & Refactor Code", Desc: "Interactive approval queue with surgical AST patching", State: ViewReview},
@@ -228,12 +278,24 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleSpace()
 
 		case "a":
-			if m.state == ViewReview && len(m.candidates) > 0 {
+			if m.state == ViewTranslate {
+				for _, loc := range m.availableLocales {
+					m.selectedLocales[loc] = true
+				}
+				m.statusMsg = "✓ Selected all 36 languages"
+			} else if m.state == ViewReview && len(m.candidates) > 0 {
 				m.candidates[m.candidateIdx].Approved = true
 				m.statusMsg = fmt.Sprintf("✓ Approved '%s'", m.candidates[m.candidateIdx].Key)
 				if m.candidateIdx < len(m.candidates)-1 {
 					m.candidateIdx++
 				}
+			}
+		case "n":
+			if m.state == ViewTranslate {
+				for _, loc := range m.availableLocales {
+					m.selectedLocales[loc] = false
+				}
+				m.statusMsg = "Cleared all language selections"
 			}
 		case "s":
 			if m.state == ViewReview && len(m.candidates) > 0 {
@@ -507,19 +569,65 @@ func (m *Model) renderReviewView() string {
 func (m *Model) renderTranslateView() string {
 	var s strings.Builder
 	s.WriteString(lipgloss.NewStyle().Bold(true).Foreground(cyanColor).Render("🌐 Multi-Locale Translation & 4-Tier Critic") + "\n\n")
-	s.WriteString("Select target languages to generate (Press [Space] to toggle):\n\n")
 
-	for i, loc := range m.availableLocales {
+	selectedCount := 0
+	for _, sel := range m.selectedLocales {
+		if sel {
+			selectedCount++
+		}
+	}
+
+	s.WriteString(fmt.Sprintf("Selected: %s | Shortcuts: [Space] Toggle | [a] Select All | [n] Select None\n\n",
+		lipgloss.NewStyle().Bold(true).Foreground(accentColor).Render(fmt.Sprintf("%d / %d Languages", selectedCount, len(m.availableLocales)))))
+
+	// Map code to name
+	nameMap := make(map[string]string)
+	for _, l := range GlobalLanguages {
+		nameMap[l.Code] = l.Name
+	}
+
+	// Scroll window calculation (show 10 items around cursor)
+	windowSize := 10
+	total := len(m.availableLocales)
+	start := 0
+	if m.cursor > windowSize/2 {
+		start = m.cursor - windowSize/2
+	}
+	if start+windowSize > total {
+		start = total - windowSize
+	}
+	if start < 0 {
+		start = 0
+	}
+	end := start + windowSize
+	if end > total {
+		end = total
+	}
+
+	if start > 0 {
+		s.WriteString(inactiveItemStyle.Render("   ▲ ... more languages above ...") + "\n")
+	}
+
+	for i := start; i < end; i++ {
+		loc := m.availableLocales[i]
 		check := "[ ]"
 		if m.selectedLocales[loc] {
 			check = "[x]"
 		}
+		langName := nameMap[loc]
+		if langName == "" {
+			langName = loc
+		}
 
 		if i == m.cursor {
-			s.WriteString(activeItemStyle.Render(fmt.Sprintf("👉 %s %s", check, strings.ToUpper(loc))) + "\n")
+			s.WriteString(activeItemStyle.Render(fmt.Sprintf("👉 %s %-8s — %s", check, strings.ToUpper(loc), langName)) + "\n")
 		} else {
-			s.WriteString(inactiveItemStyle.Render(fmt.Sprintf("   %s %s", check, strings.ToUpper(loc))) + "\n")
+			s.WriteString(inactiveItemStyle.Render(fmt.Sprintf("   %s %-8s — %s", check, strings.ToUpper(loc), langName)) + "\n")
 		}
+	}
+
+	if end < total {
+		s.WriteString(inactiveItemStyle.Render("   ▼ ... more languages below ...") + "\n")
 	}
 
 	startIdx := len(m.availableLocales)

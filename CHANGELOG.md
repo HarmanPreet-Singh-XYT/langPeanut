@@ -233,6 +233,14 @@
      - `scripts/test_all_examples.sh`: Runs batch translation and 4-Tier Critic verification across all 4 frameworks.
      - `scripts/reset_examples.sh`: 1-command git reset restoring all example projects back to un-localized state for live demo resets.
 
+### Session Entry 18: Global Language Catalog (36+ World Locales) & Interactive Picker
+* **User Directive**: *"also do we allow user to pick languages coz there are just alot of languages in the world"*
+* **Actions Taken**:
+  1. Expanded the language subsystem in [pkg/tui/app.go](file:///Users/harmanpreetsingh/Public/Code/langTranslate/pkg/tui/app.go) with a catalog of 36 global languages spanning Europe, Asia, Americas, Middle East, and Africa (e.g., Spanish, French, German, Japanese, Chinese, Hindi, Punjabi, Arabic, Korean, Portuguese, Russian, Vietnamese, Swahili, etc.).
+  2. Added batch selection keyboard shortcuts: `[a]` Select All, `[n]` Select None, `[Space]` Toggle individual language.
+  3. Built an interactive scroll window with dynamic selection counter (`Selected: X / 36 Languages`).
+  4. Preserved custom CLI flag flexibility: `langPeanut translate --locales hi,pa,es,fr,ja,...`.
+
 ### Session Entry 16: Closing the Gap Between Claimed and Actual AST Parsing; Live-Measured Benchmark Baselines
 * **User Directive**: A code review flagged that despite the docs' repeated claims of "deterministic AST precision" and "tree-sitter" tooling, `pkg/platforms/*.go` actually extracted strings with regexes, and the benchmark's baseline comparison numbers (`42.0%` zero-shot, `55.0%` naive regex) were hardcoded constants, not measured. Directive: *"implement what the docs have"* — make both claims literally true.
 * **Failure Mode Observed**: The `go-tree-sitter` dependency sat unused in `go.mod`; `react_ts.go`, `flutter_dart.go`, `swift.go`, `kotlin.go` all used hand-rolled regexes (`>([^<>{}\n]+)<` for JSX text, similar patterns for Dart/Swift/Kotlin) — exactly the "naive regex tool" the project's own hot takes argue against. Separately, `benchmark/runner.go` set `BaselinePassRate: 42.0` and `RegexPassRate: 55.0` as literal constants labeled `// Historical ... Baseline`, so re-running the benchmark could never surface a regression or improvement in either comparison column.
