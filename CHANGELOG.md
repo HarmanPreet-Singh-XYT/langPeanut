@@ -219,6 +219,20 @@
   2. Staged all 69 core source files, platform AST plugins, agents, test suites, benchmark harness, trajectories, and documentation.
   3. Created root commit `1afeef4` with full micro1 hackathon release notes.
 
+### Session Entry 17: Real-World Example Projects (Next.js, Flutter, SwiftUI, Android) & Test Automation
+* **User Directive**: *"now we need to test on actual react project, we need to use actual nextjs initial setup and then modify the code to test it out and also maybe setup flutter, swift, kotlin different projects as example and then script to install dependencies, and automatically have text conversion and script to use git to reset maybe for resetup, so we can test on code, but for now use nextjs which is react basically"*
+* **Actions Taken**:
+  1. Created real-world test application suites under `examples/`:
+     - `examples/nextjs-app/`: Real Next.js / React application with `Navbar.tsx`, `Hero.tsx`, `CartModal.tsx`, `Settings.tsx`, and `lib/api.ts` (testing non-UI AST filtering).
+     - `examples/flutter-app/`: Flutter mobile app with widget trees and ARB catalogs.
+     - `examples/swiftui-app/`: iOS SwiftUI app with `.xcstrings` catalogs.
+     - `examples/android-app/`: Android Jetpack Compose app with `strings.xml`.
+  2. Enhanced [pkg/agents/patch_engine.go](file:///Users/harmanpreetsingh/Public/Code/langTranslate/pkg/agents/patch_engine.go) AST validation to distinguish TypeScript generic parameters (`React.FC<Props>`, `useState<T>`) from JSX tags.
+  3. Created automated developer scripts under `scripts/`:
+     - `scripts/test_nextjs.sh`: Audits, refactors, and translates the real Next.js application with Gen-Z slang translations.
+     - `scripts/test_all_examples.sh`: Runs batch translation and 4-Tier Critic verification across all 4 frameworks.
+     - `scripts/reset_examples.sh`: 1-command git reset restoring all example projects back to un-localized state for live demo resets.
+
 ### Session Entry 16: Closing the Gap Between Claimed and Actual AST Parsing; Live-Measured Benchmark Baselines
 * **User Directive**: A code review flagged that despite the docs' repeated claims of "deterministic AST precision" and "tree-sitter" tooling, `pkg/platforms/*.go` actually extracted strings with regexes, and the benchmark's baseline comparison numbers (`42.0%` zero-shot, `55.0%` naive regex) were hardcoded constants, not measured. Directive: *"implement what the docs have"* — make both claims literally true.
 * **Failure Mode Observed**: The `go-tree-sitter` dependency sat unused in `go.mod`; `react_ts.go`, `flutter_dart.go`, `swift.go`, `kotlin.go` all used hand-rolled regexes (`>([^<>{}\n]+)<` for JSX text, similar patterns for Dart/Swift/Kotlin) — exactly the "naive regex tool" the project's own hot takes argue against. Separately, `benchmark/runner.go` set `BaselinePassRate: 42.0` and `RegexPassRate: 55.0` as literal constants labeled `// Historical ... Baseline`, so re-running the benchmark could never surface a regression or improvement in either comparison column.
