@@ -1,0 +1,15 @@
+{
+  "@@locale": "en",
+  "@mainWelcomeback": {
+    "description": "Translation for mainWelcomeback",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "flightpeanutMobile": "FlightPeanut Mobile",
+  "mainDashboard": "Dashboard",
+  "mainViewsettings": "View settings",
+  "mainWelcomeback": "Welcome back, {name}!"
+}

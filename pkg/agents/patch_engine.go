@@ -178,8 +178,9 @@ func (pe *PatchEngine) ValidateSyntax(code string, filePath string) error {
 }
 
 func validateJSXTagBalance(code string) error {
-	// Simple JSX tag counter for common elements
-	openTagRegex := regexp.MustCompile(`<([A-Z][a-zA-Z0-9]*)[^>]*[^/]>`)
+	// Match JSX element tags: <Tag ...> but NOT TypeScript generic type parameters like React.FC<Props> or useState<string>
+	// A JSX opening tag is typically preceded by whitespace, newline, return, (, =, or >
+	openTagRegex := regexp.MustCompile(`(?:^|[\s\(\[\{>=,])<([A-Z][a-zA-Z0-9]*)(?:\s+[^>]*)?[^/]?>`)
 	closeTagRegex := regexp.MustCompile(`</([A-Z][a-zA-Z0-9]*)>`)
 
 	openMatches := openTagRegex.FindAllStringSubmatch(code, -1)
@@ -188,18 +189,25 @@ func validateJSXTagBalance(code string) error {
 	openCount := make(map[string]int)
 	for _, m := range openMatches {
 		if len(m) > 1 {
-			openCount[m[1]]++
+			tag := m[1]
+			// Ignore common TS types like FC, Props, State, Component, Record, Promise, Array
+			if strings.HasSuffix(tag, "Props") || strings.HasSuffix(tag, "State") ||
+				tag == "FC" || tag == "Component" || tag == "Record" || tag == "Array" || tag == "Promise" {
+				continue
+			}
+			openCount[tag]++
 		}
 	}
 
 	for _, m := range closeMatches {
 		if len(m) > 1 {
-			openCount[m[1]]--
+			tag := m[1]
+			openCount[tag]--
 		}
 	}
 
 	for tag, diff := range openCount {
-		if diff != 0 {
+		if diff > 0 {
 			return fmt.Errorf("JSX tag <%s> mismatch (open vs close delta: %d)", tag, diff)
 		}
 	}

@@ -1,0 +1,39 @@
+{
+  "sourceLanguage": "ja",
+  "strings": {
+    "contentviewDashboard": {
+      "extractionState": "manual",
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dashboard"
+          }
+        }
+      }
+    },
+    "contentviewSubmitorder": {
+      "extractionState": "manual",
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "注文を確定する"
+          }
+        }
+      }
+    },
+    "contentviewWelcomeback": {
+      "extractionState": "manual",
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "おかえりなさい、{name}さん！"
+          }
+        }
+      }
+    }
+  },
+  "version": "1.0"
+}
