@@ -136,147 +136,6 @@ var (
 			Padding(0, 1)
 )
 
-type LanguageInfo struct {
-	Code string
-	Name string
-}
-
-var GlobalLanguages = []LanguageInfo{
-	// Top Global & Americas
-	{"es", "Spanish (Español)"},
-	{"es-MX", "Spanish - Mexico (Español de México)"},
-	{"es-AR", "Spanish - Argentina (Español de Argentina)"},
-	{"fr", "French (Français)"},
-	{"fr-CA", "French - Canada (Français canadien)"},
-	{"de", "German (Deutsch)"},
-	{"de-AT", "German - Austria (Österreichisches Deutsch)"},
-	{"de-CH", "German - Switzerland (Schweizer Hochdeutsch)"},
-	{"pt", "Portuguese - Portugal (Português)"},
-	{"pt-BR", "Portuguese - Brazil (Português do Brasil)"},
-	{"it", "Italian (Italiano)"},
-	{"nl", "Dutch (Nederlands)"},
-	{"nl-BE", "Dutch - Belgium / Flemish (Vlaams)"},
-	{"en-GB", "English - United Kingdom"},
-	{"en-AU", "English - Australia"},
-	{"en-CA", "English - Canada"},
-
-	// East Asia & Southeast Asia
-	{"ja", "Japanese (日本語)"},
-	{"zh-CN", "Chinese Simplified (简体中文)"},
-	{"zh-TW", "Chinese Traditional (繁體中文)"},
-	{"zh-HK", "Chinese - Hong Kong Cantonese (香港粵語)"},
-	{"ko", "Korean (한국어)"},
-	{"vi", "Vietnamese (Tiếng Việt)"},
-	{"th", "Thai (ไทย)"},
-	{"id", "Indonesian (Bahasa Indonesia)"},
-	{"ms", "Malay (Bahasa Melayu)"},
-	{"fil", "Filipino / Tagalog"},
-	{"my", "Burmese (မြန်မာစာ)"},
-	{"km", "Khmer (ភាសាខ្មែរ)"},
-	{"lo", "Lao (ພາສາລາວ)"},
-	{"mn", "Mongolian (Монгол хэл)"},
-
-	// South Asia (Indic & Dravidian)
-	{"hi", "Hindi (हिन्दी)"},
-	{"pa", "Punjabi (ਪੰਜਾਬੀ)"},
-	{"bn", "Bengali (বাংলা)"},
-	{"ur", "Urdu (اردو)"},
-	{"ta", "Tamil (தமிழ்)"},
-	{"te", "Telugu (తెలుగు)"},
-	{"mr", "Marathi (मराठी)"},
-	{"gu", "Gujarati (ગુજરાતી)"},
-	{"kn", "Kannada (ಕನ್ನಡ)"},
-	{"ml", "Malayalam (മലയാളം)"},
-	{"or", "Odia (ଓଡ଼ିଆ)"},
-	{"as", "Assamese (অসমীয়া)"},
-	{"ne", "Nepali (नेपाली)"},
-	{"si", "Sinhala (සිංහල)"},
-	{"sd", "Sindhi (سنڌي)"},
-	{"sa", "Sanskrit (संस्कृतम्)"},
-
-	// Middle East & Central Asia
-	{"ar", "Arabic (العربية)"},
-	{"ar-SA", "Arabic - Saudi Arabia (العربية السعودية)"},
-	{"ar-EG", "Arabic - Egypt (العربية المصرية)"},
-	{"he", "Hebrew (עברית)"},
-	{"fa", "Persian / Farsi (فارسی)"},
-	{"tr", "Turkish (Türkçe)"},
-	{"az", "Azerbaijani (Azərbaycan dili)"},
-	{"kk", "Kazakh (Қазақ тілі)"},
-	{"uz", "Uzbek (O'zbek tili)"},
-	{"ky", "Kyrgyz (Кыргызча)"},
-	{"tg", "Tajik (Тоҷикӣ)"},
-	{"tk", "Turkmen (Türkmençe)"},
-	{"ps", "Pashto (پښتو)"},
-	{"ku", "Kurdish (Kurdî)"},
-	{"hy", "Armenian (Հայերեն)"},
-	{"ka", "Georgian (ქართული)"},
-
-	// Northern, Western & Southern Europe
-	{"sv", "Swedish (Svenska)"},
-	{"da", "Danish (Dansk)"},
-	{"fi", "Finnish (Suomi)"},
-	{"no", "Norwegian Bokmål (Norsk Bokmål)"},
-	{"nn", "Norwegian Nynorsk (Nynorsk)"},
-	{"is", "Icelandic (Íslenska)"},
-	{"ga", "Irish (Gaeilge)"},
-	{"cy", "Welsh (Cymraeg)"},
-	{"gd", "Scottish Gaelic (Gàidhlig)"},
-	{"eu", "Basque (Euskara)"},
-	{"ca", "Catalan (Català)"},
-	{"gl", "Galician (Galego)"},
-	{"el", "Greek (Ελληνικά)"},
-	{"mt", "Maltese (Malti)"},
-	{"lb", "Luxembourgish (Lëtzebuergesch)"},
-	{"fo", "Faroese (Føroyskt)"},
-
-	// Eastern Europe & Slavic
-	{"ru", "Russian (Русский)"},
-	{"uk", "Ukrainian (Українська)"},
-	{"pl", "Polish (Polski)"},
-	{"cs", "Czech (Čeština)"},
-	{"sk", "Slovak (Slovenčina)"},
-	{"sl", "Slovenian (Slovenščina)"},
-	{"hr", "Croatian (Hrvatski)"},
-	{"sr", "Serbian (Српски)"},
-	{"bs", "Bosnian (Bosanski)"},
-	{"bg", "Bulgarian (Български)"},
-	{"ro", "Romanian (Română)"},
-	{"hu", "Hungarian (Magyar)"},
-	{"lt", "Lithuanian (Lietuvių)"},
-	{"lv", "Latvian (Latviešu)"},
-	{"et", "Estonian (Eesti)"},
-	{"sq", "Albanian (Shqip)"},
-	{"mk", "Macedonian (Македонски)"},
-	{"be", "Belarusian (Беларуская)"},
-
-	// Africa & Indigenous
-	{"sw", "Swahili (Kiswahili)"},
-	{"am", "Amharic (አማርኛ)"},
-	{"ha", "Hausa (Harshen Hausa)"},
-	{"yo", "Yoruba (Èdè Yorùbá)"},
-	{"ig", "Igbo (Asụsụ Igbo)"},
-	{"zu", "Zulu (isiZulu)"},
-	{"xh", "Xhosa (isiXhosa)"},
-	{"af", "Afrikaans"},
-	{"so", "Somali (Af Soomaali)"},
-	{"om", "Oromo (Afaan Oromoo)"},
-	{"ti", "Tigrinya (ትግርኛ)"},
-	{"mg", "Malagasy (Fiteny Malagasy)"},
-	{"rw", "Kinyarwanda"},
-	{"ny", "Chichewa (ChiCheŵa)"},
-	{"st", "Sesotho"},
-	{"sn", "Shona (chiShona)"},
-	{"qu", "Quechua (Runasimi)"},
-	{"gn", "Guaraní (Avañe'ẽ)"},
-	{"mi", "Maori (Te Reo Māori)"},
-	{"haw", "Hawaiian (ʻŌlelo Hawaiʻi)"},
-	{"sm", "Samoan (Gagana Samoa)"},
-	{"to", "Tongan (Lea Faka-Tonga)"},
-	{"eo", "Esperanto"},
-	{"la", "Latin (Lingua Latina)"},
-}
-
 func NewApp(projectRoot string) *Model {
 	absRoot, _ := filepath.Abs(projectRoot)
 	registry := platforms.NewRegistry()
@@ -302,7 +161,7 @@ func NewApp(projectRoot string) *Model {
 
 	var allCodes []string
 	selected := make(map[string]bool)
-	for _, l := range GlobalLanguages {
+	for _, l := range types.GlobalLanguages {
 		allCodes = append(allCodes, l.Code)
 	}
 	// Default selection: top 4 languages
@@ -605,120 +464,6 @@ func (m *Model) handleSpace() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-var RawExamples = map[string]string{
-	"nextjs": `import React from 'react';
-
-export interface NavbarProps {
-  user?: { name: string; email: string };
-  cartCount: number;
-  onOpenCart: () => void;
-}
-
-export const Navbar: React.FC<NavbarProps> = ({ user, cartCount, onOpenCart }) => {
-  return (
-    <header className="navbar-container">
-      <div className="brand-logo">
-        <h1>FlightPeanut Store</h1>
-      </div>
-      <nav className="nav-links">
-        <a href="/flights">Flights</a>
-        <a href="/hotels">Hotels</a>
-        <a href="/deals">Deals</a>
-      </nav>
-      <div className="nav-actions">
-        <button onClick={onOpenCart} title="View your shopping cart">
-          Cart ({cartCount})
-        </button>
-        {user ? (
-          <div className="user-profile">
-            <span>Welcome back, {user.name}!</span>
-            <button onClick={() => console.log('LOGOUT_TRIGGERED')}>Sign Out</button>
-          </div>
-        ) : (
-          <button onClick={() => console.log('LOGIN_TRIGGERED')}>Sign In</button>
-        )}
-      </div>
-    </header>
-  );
-};`,
-
-	"flutter": `import 'package:flutter/material.dart';
-
-void main() {
-  runApp(const MyApp());
-}
-
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'FlightPeanut Mobile',
-      home: const HomeScreen(),
-    );
-  }
-}
-
-class HomeScreen extends StatelessWidget {
-  const HomeScreen({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text("Dashboard"),
-      ),
-      body: Center(
-        child: Column(
-          children: const [
-            Text("Welcome back, {name}!"),
-            Tooltip(message: "View settings"),
-          ],
-        ),
-      ),
-    );
-  }
-}`,
-
-	"swiftui": `import SwiftUI
-
-public struct ContentView: View {
-    @State private var notificationsEnabled = true
-
-    public init() {}
-
-    public var body: some View {
-        NavigationStack {
-            VStack(spacing: 20) {
-                Text("Welcome back, {name}!")
-                    .font(.headline)
-                
-                Button("Submit Order") {
-                    print("Order clicked")
-                }
-                .buttonStyle(.borderedProminent)
-            }
-            .navigationTitle("Dashboard")
-        }
-    }
-}`,
-
-	"android": `package com.example.app
-
-import androidx.compose.material3.Button
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-
-@Composable
-fun OrderScreen() {
-    Text(text = "Welcome back, {name}!")
-    Button(onClick = { /* process order */ }) {
-        Text(text = "Submit Order")
-    }
-}`,
-}
-
 func (m *Model) getExampleFilePath() (string, string) {
 	switch m.exampleFramework {
 	case "flutter":
@@ -734,7 +479,7 @@ func (m *Model) getExampleFilePath() (string, string) {
 
 func (m *Model) loadExampleFlow() {
 	// Always keep the original unlocalized baseline in BeforeCode
-	m.exampleBeforeCode = RawExamples[m.exampleFramework]
+	m.exampleBeforeCode = types.RawExamples[m.exampleFramework]
 
 	filePath, _ := m.getExampleFilePath()
 	diskData, _ := os.ReadFile(filePath)
@@ -1171,7 +916,7 @@ func (m *Model) renderTranslateView() string {
 
 	// Map code to name
 	nameMap := make(map[string]string)
-	for _, l := range GlobalLanguages {
+	for _, l := range types.GlobalLanguages {
 		nameMap[l.Code] = l.Name
 	}
 
