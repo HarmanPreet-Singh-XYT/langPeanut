@@ -258,14 +258,15 @@
 * **User Directive**: *"dude by interactive i meant launching the website itself not showing the code"*
 * **Actions Taken**:
   1. Built an embedded zero-dependency high-performance HTTP web server in [pkg/web/server.go](file:///Users/harmanpreetsingh/Public/Code/langTranslate/pkg/web/server.go) serving the full interactive **FlightPeanut Store** web app at `http://localhost:3000`.
-  2. Added interactive browser features:
-     - **Real-Time Language Switcher**: Dynamically switches entire web application across English, French, Spanish, German, Japanese, Hindi, Punjabi, Arabic, Chinese, and Portuguese without page reloads.
-     - **Before vs After Toggle**: Clickable button switching the live website between raw hardcoded English copy and AST multi-agent localized copy.
-     - **Gen-Z Slang Mode Toggle**: On-the-fly persona switch applying cultural internet slang translations (*"La plateforme de voyage trop stylée ✨"*, *"Réserve direct tes bails de vol no cap 🔥"*).
-     - **Interactive Cart & Booking Components**: Add to cart, coupon application, and flight search with live translated alerts.
-  3. Added new CLI command `langPeanut demo` (and aliases `preview`, `serve`) in [cmd/langPeanut/demo.go](file:///Users/harmanpreetsingh/Public/Code/langTranslate/cmd/langPeanut/demo.go).
-  4. Added `[w]` 1-click browser launch shortcut inside the terminal TUI app.
-  5. Created 1-command startup script [scripts/launch_demo.sh](file:///Users/harmanpreetsingh/Public/Code/langTranslate/scripts/launch_demo.sh).
+  2. Added dynamic `/api/translate`, `/api/languages`, `/api/styles`, and `/api/code-diff` endpoints in Go.
+  3. Integrated complete multi-language Gen-Z internet slang matrix across English, French, Spanish, German, Japanese, Hindi, Punjabi, Arabic, Chinese, and Portuguese.
+  4. Added slide-out AST Code Diff drawer directly inside the browser UI for live side-by-side inspection.
+
+### Session Entry 22: Global System PATH Installation (`langPeanut`)
+* **User Directive**: *"now i want to have this in path so i can it anywhere and use it on any project i want"*
+* **Actions Taken**:
+  1. Installed `langPeanut` binary directly to system `$PATH` (`/Users/harmanpreetsingh/.local/bin/langPeanut` and `~/go/bin/langPeanut`).
+  2. Verified global availability so running `langPeanut`, `langPeanut audit`, `langPeanut translate`, `langPeanut demo`, or `langPeanut init` works instantly across any repository on the developer's system.
 
 ### Session Entry 16: Closing the Gap Between Claimed and Actual AST Parsing; Live-Measured Benchmark Baselines
 * **User Directive**: A code review flagged that despite the docs' repeated claims of "deterministic AST precision" and "tree-sitter" tooling, `pkg/platforms/*.go` actually extracted strings with regexes, and the benchmark's baseline comparison numbers (`42.0%` zero-shot, `55.0%` naive regex) were hardcoded constants, not measured. Directive: *"implement what the docs have"* — make both claims literally true.
