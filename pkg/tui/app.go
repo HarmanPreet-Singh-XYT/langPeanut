@@ -393,6 +393,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				case "before":
 					m.exampleTab = "after"
 				case "after":
+					m.exampleTab = "diff"
+				case "diff":
 					m.exampleTab = "locales"
 				case "locales":
 					m.exampleTab = "critic"
@@ -414,10 +416,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "3":
 			if m.state == ViewExampleFlow {
-				m.exampleTab = "locales"
+				m.exampleTab = "diff"
 				return m, nil
 			}
 		case "4":
+			if m.state == ViewExampleFlow {
+				m.exampleTab = "locales"
+				return m, nil
+			}
+		case "5":
 			if m.state == ViewExampleFlow {
 				m.exampleTab = "critic"
 				return m, nil
@@ -588,6 +595,120 @@ func (m *Model) handleSpace() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+var RawExamples = map[string]string{
+	"nextjs": `import React from 'react';
+
+export interface NavbarProps {
+  user?: { name: string; email: string };
+  cartCount: number;
+  onOpenCart: () => void;
+}
+
+export const Navbar: React.FC<NavbarProps> = ({ user, cartCount, onOpenCart }) => {
+  return (
+    <header className="navbar-container">
+      <div className="brand-logo">
+        <h1>FlightPeanut Store</h1>
+      </div>
+      <nav className="nav-links">
+        <a href="/flights">Flights</a>
+        <a href="/hotels">Hotels</a>
+        <a href="/deals">Deals</a>
+      </nav>
+      <div className="nav-actions">
+        <button onClick={onOpenCart} title="View your shopping cart">
+          Cart ({cartCount})
+        </button>
+        {user ? (
+          <div className="user-profile">
+            <span>Welcome back, {user.name}!</span>
+            <button onClick={() => console.log('LOGOUT_TRIGGERED')}>Sign Out</button>
+          </div>
+        ) : (
+          <button onClick={() => console.log('LOGIN_TRIGGERED')}>Sign In</button>
+        )}
+      </div>
+    </header>
+  );
+};`,
+
+	"flutter": `import 'package:flutter/material.dart';
+
+void main() {
+  runApp(const MyApp());
+}
+
+class MyApp extends StatelessWidget {
+  const MyApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'FlightPeanut Mobile',
+      home: const HomeScreen(),
+    );
+  }
+}
+
+class HomeScreen extends StatelessWidget {
+  const HomeScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text("Dashboard"),
+      ),
+      body: Center(
+        child: Column(
+          children: const [
+            Text("Welcome back, {name}!"),
+            Tooltip(message: "View settings"),
+          ],
+        ),
+      ),
+    );
+  }
+}`,
+
+	"swiftui": `import SwiftUI
+
+public struct ContentView: View {
+    @State private var notificationsEnabled = true
+
+    public init() {}
+
+    public var body: some View {
+        NavigationStack {
+            VStack(spacing: 20) {
+                Text("Welcome back, {name}!")
+                    .font(.headline)
+                
+                Button("Submit Order") {
+                    print("Order clicked")
+                }
+                .buttonStyle(.borderedProminent)
+            }
+            .navigationTitle("Dashboard")
+        }
+    }
+}`,
+
+	"android": `package com.example.app
+
+import androidx.compose.material3.Button
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+
+@Composable
+fun OrderScreen() {
+    Text(text = "Welcome back, {name}!")
+    Button(onClick = { /* process order */ }) {
+        Text(text = "Submit Order")
+    }
+}`,
+}
+
 func (m *Model) getExampleFilePath() (string, string) {
 	switch m.exampleFramework {
 	case "flutter":
@@ -602,11 +723,12 @@ func (m *Model) getExampleFilePath() (string, string) {
 }
 
 func (m *Model) loadExampleFlow() {
+	// Always keep the original unlocalized baseline in BeforeCode
+	m.exampleBeforeCode = RawExamples[m.exampleFramework]
+
 	filePath, _ := m.getExampleFilePath()
-	data, err := os.ReadFile(filePath)
-	if err == nil {
-		m.exampleBeforeCode = string(data)
-	}
+	diskData, _ := os.ReadFile(filePath)
+	currentDisk := string(diskData)
 
 	localeFile := ""
 	switch m.exampleFramework {
@@ -622,7 +744,7 @@ func (m *Model) loadExampleFlow() {
 
 	if locData, err := os.ReadFile(localeFile); err == nil {
 		m.exampleLocaleJSON = string(locData)
-		m.exampleAfterCode = m.exampleBeforeCode
+		m.exampleAfterCode = currentDisk
 	} else {
 		m.exampleLocaleJSON = ""
 		m.exampleAfterCode = ""
@@ -825,8 +947,9 @@ func (m *Model) renderExampleFlowView() string {
 	}{
 		{"before", "[1] 📄 RAW CODE (BEFORE)"},
 		{"after", "[2] ✨ SURGICAL AST (AFTER)"},
-		{"locales", "[3] 🌐 GENERATED LOCALES"},
-		{"critic", "[4] 🛡️ 4-TIER CRITIC REPORT"},
+		{"diff", "[3] 🔍 DIFF HIGHLIGHTS"},
+		{"locales", "[4] 🌐 GENERATED LOCALES"},
+		{"critic", "[5] 🛡️ 4-TIER CRITIC"},
 	}
 
 	tabHeader := ""
@@ -861,6 +984,76 @@ func (m *Model) renderExampleFlowView() string {
 		}
 		s.WriteString(lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(accentColor).Padding(0, 1).Render(boxContent) + "\n")
 
+	case "diff":
+		s.WriteString(lipgloss.NewStyle().Bold(true).Foreground(accentColor).Render("Unified Transformation Diff (Before vs After):") + "\n\n")
+		diffText := ""
+		if m.exampleFramework == "nextjs" {
+			diffText = `@@ -1,15 +1,16 @@
+ import React from 'react';
++import { useTranslation } from 'react-i18next';
+
+ export const Navbar: React.FC<NavbarProps> = ({ user, cartCount }) => {
++  const { t } = useTranslation();
+   return (
+     <header className="navbar-container">
+-      <h1>FlightPeanut Store</h1>
++      <h1>{t('flightpeanutStore')}</h1>
+       <nav>
+-        <a href="/flights">Flights</a>
+-        <a href="/deals">Deals</a>
++        <a href="/flights">{t('navbarFlights')}</a>
++        <a href="/deals">{t('navbarDeals')}</a>
+       </nav>
+-      <span>Welcome back, {user.name}!</span>
++      <span>{t('navbarWelcomeback', { name: user.name })}</span>
+     </header>`
+		} else if m.exampleFramework == "flutter" {
+			diffText = `@@ -1,10 +1,11 @@
+ import 'package:flutter/material.dart';
++import 'package:flutter_gen/gen_l10n/app_localizations.dart';
+
+ class HomeScreen extends StatelessWidget {
+   @override
+   Widget build(BuildContext context) {
++    final l10n = AppLocalizations.of(context)!;
+     return Scaffold(
+-      appBar: AppBar(title: const Text("Dashboard")),
++      appBar: AppBar(title: Text(l10n.dashboard)),
+       body: Center(
+-        child: Text("Welcome back, {name}!"),
++        child: Text(l10n.welcomeBack(name)),
+       ),
+     );`
+		} else if m.exampleFramework == "swiftui" {
+			diffText = `@@ -1,10 +1,10 @@
+ import SwiftUI
+
+ struct ContentView: View {
+   var body: some View {
+     VStack {
+-      Text("Welcome back, {name}!")
++      Text(String(localized: "welcomeBack", defaultValue: "Welcome back, \(name)!"))
+-      Button("Submit Order") { ... }
++      Button(String(localized: "submitOrder", defaultValue: "Submit Order")) { ... }
+     }
+-    .navigationTitle("Dashboard")
++    .navigationTitle(String(localized: "dashboard", defaultValue: "Dashboard"))
+   }`
+		} else {
+			diffText = `@@ -1,8 +1,9 @@
+ package com.example.app
++import androidx.compose.ui.res.stringResource
+
+ @Composable
+ fun OrderScreen() {
+-  Text(text = "Welcome back, {name}!")
++  Text(text = stringResource(R.string.welcome_back, name))
+-  Button(onClick = { ... }) { Text(text = "Submit Order") }
++  Button(onClick = { ... }) { Text(text = stringResource(R.string.submit_order)) }
+ }`
+		}
+		s.WriteString(lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(primaryColor).Padding(0, 1).Render(diffText) + "\n")
+
 	case "locales":
 		s.WriteString(lipgloss.NewStyle().Bold(true).Foreground(cyanColor).Render("Generated French (fr.json / app_fr.arb) Locale Output:") + "\n")
 		s.WriteString(lipgloss.NewStyle().Foreground(subtleColor).Render("Synthesized keys with ICU variable parity ({name}) & Gen-Z slang translation:") + "\n\n")
@@ -885,7 +1078,7 @@ Self-Correction Reflection Iterations: 0 retries needed`
 		s.WriteString(lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(primaryColor).Padding(0, 1).Render(criticReport) + "\n")
 	}
 
-	s.WriteString("\n" + lipgloss.NewStyle().Foreground(subtleColor).Render("Shortcuts: [Tab/1-4] Switch Tab | [f] Switch Framework | [r] Run Localization | [c] Reset | [Esc] Menu"))
+	s.WriteString("\n" + lipgloss.NewStyle().Foreground(subtleColor).Render("Shortcuts: [Tab/1-5] Switch Tab | [f] Switch Framework | [r] Run Localization | [c] Reset | [Esc] Menu"))
 
 	return s.String()
 }
