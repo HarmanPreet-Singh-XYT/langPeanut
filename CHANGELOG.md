@@ -212,6 +212,13 @@
   4. Executed `go test -v ./...` verifying 100% test pass rate across all modules.
   5. Validated that all 4 hackathon deliverables are 100% complete and ready for final submission.
 
+### Session Entry 16: Initial Repository Commit & Deliverable Release
+* **User Directive**: *"now do our first commit"*
+* **Actions Taken**:
+  1. Refined [.gitignore](file:///Users/harmanpreetsingh/Public/Code/langTranslate/.gitignore) to prevent binary path collisions with `/cmd/langPeanut/`.
+  2. Staged all 69 core source files, platform AST plugins, agents, test suites, benchmark harness, trajectories, and documentation.
+  3. Created root commit `1afeef4` with full micro1 hackathon release notes.
+
 ### Session Entry 16: Closing the Gap Between Claimed and Actual AST Parsing; Live-Measured Benchmark Baselines
 * **User Directive**: A code review flagged that despite the docs' repeated claims of "deterministic AST precision" and "tree-sitter" tooling, `pkg/platforms/*.go` actually extracted strings with regexes, and the benchmark's baseline comparison numbers (`42.0%` zero-shot, `55.0%` naive regex) were hardcoded constants, not measured. Directive: *"implement what the docs have"* — make both claims literally true.
 * **Failure Mode Observed**: The `go-tree-sitter` dependency sat unused in `go.mod`; `react_ts.go`, `flutter_dart.go`, `swift.go`, `kotlin.go` all used hand-rolled regexes (`>([^<>{}\n]+)<` for JSX text, similar patterns for Dart/Swift/Kotlin) — exactly the "naive regex tool" the project's own hot takes argue against. Separately, `benchmark/runner.go` set `BaselinePassRate: 42.0` and `RegexPassRate: 55.0` as literal constants labeled `// Historical ... Baseline`, so re-running the benchmark could never surface a regression or improvement in either comparison column.
