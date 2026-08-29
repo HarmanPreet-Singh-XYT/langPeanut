@@ -2,10 +2,10 @@ package agents
 
 import (
 	"fmt"
-	"regexp"
 	"sort"
 	"strings"
 
+	"github.com/langPeanut/langPeanut/pkg/platforms"
 	"github.com/langPeanut/langPeanut/pkg/types"
 )
 
@@ -50,7 +50,7 @@ func (pe *PatchEngine) ApplyRefactorPlan(plan *types.FileRefactorPlan) (string, 
 		}
 	}
 
-	// 5. In-memory AST syntax validation
+	// 5. In-memory AST syntax validation using real tree-sitter grammar
 	if err := pe.ValidateSyntax(resultStr, plan.FilePath); err != nil {
 		return "", fmt.Errorf("in-memory AST validation failed for %s: %w", plan.FilePath, err)
 	}
@@ -80,137 +80,21 @@ func (pe *PatchEngine) injectImport(src, importStmt string) string {
 		return strings.Join(newLines, "\n")
 	}
 
-	// If no existing imports, prepend at top
+	// If no existing imports, prepend at top (after "use client" if present)
+	if len(lines) > 0 && (strings.HasPrefix(strings.TrimSpace(lines[0]), "\"use client\"") || strings.HasPrefix(strings.TrimSpace(lines[0]), "'use client'")) {
+		newLines := make([]string, 0, len(lines)+2)
+		newLines = append(newLines, lines[0], "", importStmt)
+		newLines = append(newLines, lines[1:]...)
+		return strings.Join(newLines, "\n")
+	}
+
 	return importStmt + "\n\n" + src
 }
 
-// ValidateSyntax performs bracket parity, delimiter balance, and JSX tag checks
+// ValidateSyntax validates the refactored code using tree-sitter AST parsing
 func (pe *PatchEngine) ValidateSyntax(code string, filePath string) error {
-	var stack []rune
-	pairs := map[rune]rune{
-		')': '(',
-		'}': '{',
-		']': '[',
+	if platforms.ParsesCleanly(filePath, []byte(code)) {
+		return nil
 	}
-
-	inSingleQuote := false
-	inDoubleQuote := false
-	inBacktick := false
-	inLineComment := false
-	inBlockComment := false
-
-	runes := []rune(code)
-	for i := 0; i < len(runes); i++ {
-		r := runes[i]
-		next := rune(0)
-		if i+1 < len(runes) {
-			next = runes[i+1]
-		}
-
-		if inLineComment {
-			if r == '\n' {
-				inLineComment = false
-			}
-			continue
-		}
-
-		if inBlockComment {
-			if r == '*' && next == '/' {
-				inBlockComment = false
-				i++
-			}
-			continue
-		}
-
-		if r == '/' && next == '/' && !inSingleQuote && !inDoubleQuote && !inBacktick {
-			inLineComment = true
-			i++
-			continue
-		}
-
-		if r == '/' && next == '*' && !inSingleQuote && !inDoubleQuote && !inBacktick {
-			inBlockComment = true
-			i++
-			continue
-		}
-
-		// Handle quotes
-		if r == '\'' && !inDoubleQuote && !inBacktick {
-			inSingleQuote = !inSingleQuote
-			continue
-		}
-		if r == '"' && !inSingleQuote && !inBacktick {
-			inDoubleQuote = !inDoubleQuote
-			continue
-		}
-		if r == '`' && !inSingleQuote && !inDoubleQuote {
-			inBacktick = !inBacktick
-			continue
-		}
-
-		if inSingleQuote || inDoubleQuote || inBacktick {
-			continue
-		}
-
-		// Bracket balance
-		if r == '(' || r == '{' || r == '[' {
-			stack = append(stack, r)
-		} else if match, ok := pairs[r]; ok {
-			if len(stack) == 0 || stack[len(stack)-1] != match {
-				return fmt.Errorf("unbalanced bracket '%c' at character %d", r, i)
-			}
-			stack = stack[:len(stack)-1]
-		}
-	}
-
-	if len(stack) > 0 {
-		return fmt.Errorf("unclosed bracket '%c' remaining at end of file", stack[len(stack)-1])
-	}
-
-	// Check JSX tag matching if TSX/JSX
-	if strings.HasSuffix(filePath, ".tsx") || strings.HasSuffix(filePath, ".jsx") {
-		if err := validateJSXTagBalance(code); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func validateJSXTagBalance(code string) error {
-	// Match JSX element tags: <Tag ...> but NOT TypeScript generic type parameters like React.FC<Props> or useState<string>
-	// A JSX opening tag is typically preceded by whitespace, newline, return, (, =, or >
-	openTagRegex := regexp.MustCompile(`(?:^|[\s\(\[\{>=,])<([A-Z][a-zA-Z0-9]*)(?:\s+[^>]*)?[^/]?>`)
-	closeTagRegex := regexp.MustCompile(`</([A-Z][a-zA-Z0-9]*)>`)
-
-	openMatches := openTagRegex.FindAllStringSubmatch(code, -1)
-	closeMatches := closeTagRegex.FindAllStringSubmatch(code, -1)
-
-	openCount := make(map[string]int)
-	for _, m := range openMatches {
-		if len(m) > 1 {
-			tag := m[1]
-			// Ignore common TS types like FC, Props, State, Component, Record, Promise, Array
-			if strings.HasSuffix(tag, "Props") || strings.HasSuffix(tag, "State") ||
-				tag == "FC" || tag == "Component" || tag == "Record" || tag == "Array" || tag == "Promise" {
-				continue
-			}
-			openCount[tag]++
-		}
-	}
-
-	for _, m := range closeMatches {
-		if len(m) > 1 {
-			tag := m[1]
-			openCount[tag]--
-		}
-	}
-
-	for tag, diff := range openCount {
-		if diff > 0 {
-			return fmt.Errorf("JSX tag <%s> mismatch (open vs close delta: %d)", tag, diff)
-		}
-	}
-
-	return nil
+	return fmt.Errorf("tree-sitter detected syntax or grammar error in refactored output")
 }

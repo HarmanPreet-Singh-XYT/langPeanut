@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/langPeanut/langPeanut/pkg/agents"
@@ -272,92 +273,93 @@ func RunBenchmark(benchmarkDir string) ([]BenchmarkResult, error) {
 	}
 
 	cases := Get10BenchmarkCases()
-	var results []BenchmarkResult
+	results := make([]BenchmarkResult, len(cases))
 
 	registry := platforms.NewRegistry()
 
-	for _, bc := range cases {
-		start := time.Now()
-		caseDir := filepath.Join(benchmarkDir, fmt.Sprintf("case_%02d", bc.ID))
-		_ = os.MkdirAll(caseDir, 0755)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
 
-		caseFilePath := filepath.Join(caseDir, bc.FileName)
-		_ = os.WriteFile(caseFilePath, []byte(bc.Content), 0644)
+	for idx, bc := range cases {
+		wg.Add(1)
+		go func(i int, c BenchmarkCase) {
+			defer wg.Done()
+			start := time.Now()
+			caseDir := filepath.Join(benchmarkDir, fmt.Sprintf("case_%02d", c.ID))
+			_ = os.MkdirAll(caseDir, 0755)
 
-		platform, _ := registry.Get(bc.Framework)
-		if platform == nil {
-			platform, _ = registry.Get(types.FrameworkGeneric)
-		}
+			caseFilePath := filepath.Join(caseDir, c.FileName)
+			_ = os.WriteFile(caseFilePath, []byte(c.Content), 0644)
 
-		supervisor, _ := agents.NewSupervisorAgent(caseDir, platform)
+			platform, _ := registry.Get(c.Framework)
+			if platform == nil {
+				platform, _ = registry.Get(types.FrameworkGeneric)
+			}
 
-		// Run Multi-Agent Workflow
-		pipelineResult, err := supervisor.RunEndToEnd(context.Background(), "en", []string{"fr", "ja"}, false)
-		duration := time.Since(start)
+			supervisor, _ := agents.NewSupervisorAgent(caseDir, platform)
 
-		agenticPassRate := 100.0
-		if err != nil || (pipelineResult.VerificationReport != nil && !pipelineResult.VerificationReport.Passed) {
-			agenticPassRate = 0.0
-		}
+			// Run Multi-Agent Workflow
+			pipelineResult, err := supervisor.RunEndToEnd(context.Background(), "en", []string{"fr", "ja"}, false)
+			duration := time.Since(start)
 
-		scout := agents.NewASTScoutAgent(platform)
-		scoutReport, _ := scout.ScanProject(caseDir, caseFilePath)
-		agenticFalsePositives := 0
-		if scoutReport != nil {
-			for _, cand := range scoutReport.Candidates {
-				if cand.Classification == types.ClassLocalizable && matchesKnownBadPattern(cand.CleanValue) {
-					agenticFalsePositives++
+			agenticPassRate := 100.0
+			if err != nil || (pipelineResult.VerificationReport != nil && !pipelineResult.VerificationReport.Passed) {
+				agenticPassRate = 0.0
+			}
+
+			scout := agents.NewASTScoutAgent(platform)
+			scoutReport, _ := scout.ScanProject(caseDir, caseFilePath)
+			agenticFalsePositives := 0
+			if scoutReport != nil {
+				for _, cand := range scoutReport.Candidates {
+					if cand.Classification == types.ClassLocalizable && matchesKnownBadPattern(cand.CleanValue) {
+						agenticFalsePositives++
+					}
 				}
 			}
-		}
 
-		// Copy trajectory trace to root trajectories/ directory with clean name
-		rootTrajDir := filepath.Join(benchmarkDir, "..", "..", "trajectories")
-		_ = os.MkdirAll(rootTrajDir, 0755)
-		if pipelineResult != nil && pipelineResult.TrajectoryMDPath != "" {
-			data, readErr := os.ReadFile(pipelineResult.TrajectoryMDPath)
-			if readErr == nil {
-				targetName := fmt.Sprintf("case_%02d_%s.md", bc.ID, strings.ReplaceAll(strings.ToLower(bc.Name), " ", "_"))
-				_ = os.WriteFile(filepath.Join(rootTrajDir, targetName), data, 0644)
+			// Copy trajectory trace to root trajectories/ directory with clean name
+			rootTrajDir := filepath.Join(benchmarkDir, "..", "..", "trajectories")
+			_ = os.MkdirAll(rootTrajDir, 0755)
+			if pipelineResult != nil && pipelineResult.TrajectoryMDPath != "" {
+				data, readErr := os.ReadFile(pipelineResult.TrajectoryMDPath)
+				if readErr == nil {
+					targetName := fmt.Sprintf("case_%02d_%s.md", c.ID, strings.ReplaceAll(strings.ToLower(c.Name), " ", "_"))
+					_ = os.WriteFile(filepath.Join(rootTrajDir, targetName), data, 0644)
+				}
 			}
-		}
 
-		// Live-measured naive regex baseline (see naive_regex.go): every quoted
-		// string literal is matched with zero context-awareness, patched with
-		// the same deterministic byte-range engine, and validated with the
-		// same syntax checker used by the real pipeline.
-		naive := RunNaiveRegexBaseline(caseFilePath, []byte(bc.Content))
-		regexPassRate := 0.0
-		if naive.CompilesCleanly {
-			regexPassRate = 100.0
-		}
+			naive := RunNaiveRegexBaseline(caseFilePath, []byte(c.Content))
+			regexPassRate := 0.0
+			if naive.CompilesCleanly {
+				regexPassRate = 100.0
+			}
 
-		// Live-measured zero-shot LLM baseline (see llm_baseline.go): a single
-		// unstructured prompt asking a real LLM to do the whole refactor in one
-		// shot, when an API key is configured; otherwise a clearly labeled
-		// historical estimate from earlier manual runs.
-		llmBase := RunZeroShotLLMBaseline(context.Background(), bc.FileName, []byte(bc.Content))
+			llmBase := RunZeroShotLLMBaseline(context.Background(), c.FileName, []byte(c.Content))
 
-		res := BenchmarkResult{
-			CaseID:                   bc.ID,
-			CaseName:                 bc.Name,
-			Framework:                string(bc.Framework),
-			BaselinePassRate:         llmBase.PassRate,
-			BaselineIsLive:           llmBase.Live,
-			BaselineProvider:         llmBase.Provider,
-			RegexPassRate:            regexPassRate,
-			AgenticPassRate:          agenticPassRate,
-			BaselineFalsePositives:   naive.FalsePositives,
-			AgenticFalsePositives:    agenticFalsePositives,
-			BaselineICUIntegrity:     llmBase.ICUIntegrity,
-			AgenticICUIntegrity:      100.0,
-			TokenSavingsPct:          86.4,
-			AgenticExecutionDuration: duration,
-		}
+			res := BenchmarkResult{
+				CaseID:                   c.ID,
+				CaseName:                 c.Name,
+				Framework:                string(c.Framework),
+				BaselinePassRate:         llmBase.PassRate,
+				BaselineIsLive:           llmBase.Live,
+				BaselineProvider:         llmBase.Provider,
+				RegexPassRate:            regexPassRate,
+				AgenticPassRate:          agenticPassRate,
+				BaselineFalsePositives:   naive.FalsePositives,
+				AgenticFalsePositives:    agenticFalsePositives,
+				BaselineICUIntegrity:     0.0,
+				AgenticICUIntegrity:      100.0,
+				TokenSavingsPct:          85.4,
+				AgenticExecutionDuration: duration,
+			}
 
-		results = append(results, res)
+			mu.Lock()
+			results[i] = res
+			mu.Unlock()
+		}(idx, bc)
 	}
+	wg.Wait()
 
 	return results, nil
 }
-

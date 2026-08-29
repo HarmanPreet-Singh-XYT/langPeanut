@@ -110,6 +110,26 @@ type Diagnostic struct {
 	AutoFixHint string           `json:"auto_fix_hint,omitempty"`
 }
 
+// CompilerDiagnostic represents a compiler, linter, or AST syntax error for a specific file
+type CompilerDiagnostic struct {
+	FilePath string `json:"file_path"`
+	Line     int    `json:"line"`
+	Column   int    `json:"column"`
+	Message  string `json:"message"`
+	Source   string `json:"source"` // "tsc", "flutter analyze", "swift", "ast", "kotlinc", "go vet"
+	Severity string `json:"severity"` // "ERROR", "WARNING"
+}
+
+// CodeRepairResult represents the outcome of an automated code self-healing attempt
+type CodeRepairResult struct {
+	FilePath        string               `json:"file_path"`
+	OriginalErrors  []CompilerDiagnostic `json:"original_errors"`
+	Repaired        bool                 `json:"repaired"`
+	RemainingErrors []CompilerDiagnostic `json:"remaining_errors,omitempty"`
+	Attempts        int                  `json:"attempts"`
+	Explanation     string               `json:"explanation,omitempty"`
+}
+
 // VerificationReport contains all diagnostics from the 4-tier critic
 type VerificationReport struct {
 	Passed      bool         `json:"passed"`

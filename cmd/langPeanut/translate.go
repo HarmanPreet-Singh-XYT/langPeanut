@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/langPeanut/langPeanut/pkg/agents"
+	"github.com/langPeanut/langPeanut/pkg/llm"
 	"github.com/langPeanut/langPeanut/pkg/memory"
 	"github.com/langPeanut/langPeanut/pkg/orchestrator"
 	"github.com/langPeanut/langPeanut/pkg/platforms"
@@ -20,10 +21,15 @@ var (
 )
 
 var translateCmd = &cobra.Command{
-	Use:   "translate",
-	Short: "Translate source strings into target locales with 4-Tier Critic verification",
+	Use:     "translate [directory]",
+	Aliases: []string{"i18n", "trans"},
+	Short:   "Translate source strings into target locales with 4-Tier Critic verification",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		absRoot, err := filepath.Abs(projectRoot)
+		targetDir := projectRoot
+		if len(args) > 0 {
+			targetDir = args[0]
+		}
+		absRoot, err := filepath.Abs(targetDir)
 		if err != nil {
 			return err
 		}
@@ -35,17 +41,21 @@ var translateCmd = &cobra.Command{
 		if stylePreset != "" && stylePreset != "default" {
 			fmt.Printf("🎭 Style Tone Applied: %s\n", stylePreset)
 		}
-		if providerFlag != "" {
-			fmt.Printf("🤖 Provider Override: %s (Model: %s)\n", providerFlag, modelFlag)
-		}
-		fmt.Println()
-
 		supervisor, err := agents.NewSupervisorAgent(absRoot, platform)
 		if err != nil {
 			return err
 		}
 
-		if stylePreset != "" && supervisor.ProjectMemory != nil {
+		if providerFlag != "" {
+			supervisor.Translator.LLM = llm.NewClient(llm.ProviderType(providerFlag), modelFlag)
+			fmt.Printf("🤖 Provider Override: %s (Model: %s)\n", providerFlag, modelFlag)
+		} else if modelFlag != "" {
+			supervisor.Translator.LLM = llm.NewClient(llm.ProviderOpenAI, modelFlag)
+			fmt.Printf("🤖 Model Override: %s\n", modelFlag)
+		}
+		fmt.Println()
+
+		if stylePreset != "" && stylePreset != "default" && supervisor.ProjectMemory != nil {
 			supervisor.ProjectMemory.Style = memory.StylePreset(stylePreset)
 		}
 
@@ -74,6 +84,31 @@ var translateCmd = &cobra.Command{
 				for _, d := range result.VerificationReport.Diagnostics {
 					fmt.Printf("  • [%s] Tier %d: %s\n", d.Severity, d.Tier, d.Message)
 				}
+			}
+		}
+
+		// Print Code Repair report if any repairs were triggered
+		if len(result.CodeRepairs) > 0 {
+			fmt.Println("\n┌────────────────────────────────────────────────────────┐")
+			fmt.Printf("│ 🔧 Autonomous Code Self-Healing & Repair Report        │\n")
+			fmt.Println("├────────────────────────────────────────────────────────┤")
+			for _, r := range result.CodeRepairs {
+				if r.Repaired {
+					fmt.Printf("│  ✓ %-35s AUTO-HEALED │\n", filepath.Base(r.FilePath))
+					if r.Explanation != "" {
+						fmt.Printf("│    ↳ %s\n", r.Explanation)
+					}
+				} else {
+					fmt.Printf("│  ⚠️ %-35s MANUAL FIX NEEDED │\n", filepath.Base(r.FilePath))
+				}
+			}
+			fmt.Println("└────────────────────────────────────────────────────────┘")
+		}
+
+		if len(result.UnresolvedErrors) > 0 {
+			fmt.Printf("\n⚠️  %d compiler diagnostic(s) require manual review:\n", len(result.UnresolvedErrors))
+			for _, ue := range result.UnresolvedErrors {
+				fmt.Printf("   • %s:%d:%d — [%s] %s\n", filepath.Base(ue.FilePath), ue.Line, ue.Column, ue.Source, ue.Message)
 			}
 		}
 

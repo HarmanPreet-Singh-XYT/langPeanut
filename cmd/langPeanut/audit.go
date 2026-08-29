@@ -14,10 +14,15 @@ import (
 var auditFile string
 
 var auditCmd = &cobra.Command{
-	Use:   "audit",
-	Short: "Scan codebase and report hardcoded strings and localization coverage",
+	Use:     "audit [directory]",
+	Aliases: []string{"scan", "check", "inspect"},
+	Short:   "Scan codebase and report hardcoded strings and localization coverage",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		absRoot, err := filepath.Abs(projectRoot)
+		targetDir := projectRoot
+		if len(args) > 0 {
+			targetDir = args[0]
+		}
+		absRoot, err := filepath.Abs(targetDir)
 		if err != nil {
 			return err
 		}
@@ -35,10 +40,7 @@ var auditCmd = &cobra.Command{
 			return err
 		}
 
-		candidates, err := contextAgent.DisambiguateAndEnhance(report.Candidates)
-		if err != nil {
-			return err
-		}
+		candidates := contextAgent.EnhanceFast(report.Candidates)
 
 		fmt.Println("┌────────────────────────────────────────────────────────┐")
 		fmt.Printf("│ Audit Summary                                          │\n")

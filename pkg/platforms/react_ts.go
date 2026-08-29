@@ -150,7 +150,7 @@ func (ex *reactExtractor) walk(n *sitter.Node) {
 	case "jsx_attribute":
 		ex.extractJSXAttribute(n)
 	case "template_string":
-		if !ex.isInsideSkippedCall(n) && !ex.isInsideJSXAttribute(n) {
+		if ex.isInsideJSX(n) && !ex.isInsideSkippedCall(n) && !ex.isInsideJSXAttribute(n) {
 			ex.extractTemplateString(n)
 		}
 	}
@@ -158,6 +158,17 @@ func (ex *reactExtractor) walk(n *sitter.Node) {
 	for i := uint(0); i < n.NamedChildCount(); i++ {
 		ex.walk(n.NamedChild(i))
 	}
+}
+
+func (ex *reactExtractor) isInsideJSX(n *sitter.Node) bool {
+	p := n.Parent()
+	for p != nil {
+		if p.Kind() == "jsx_element" || p.Kind() == "jsx_fragment" || p.Kind() == "jsx_attribute" || p.Kind() == "jsx_expression" {
+			return true
+		}
+		p = p.Parent()
+	}
+	return false
 }
 
 // extractJSXChildren scans the direct children of a JSX element/fragment for
@@ -181,6 +192,14 @@ func (ex *reactExtractor) extractJSXChildren(n *sitter.Node) {
 		switch child.Kind() {
 		case "jsx_text":
 			run = append(run, jsxSegment{isText: true, node: child, text: child.Utf8Text(ex.src)})
+		case "html_character_reference":
+			ent := child.Utf8Text(ex.src)
+			decoded := decodeHTMLEntity(ent)
+			run = append(run, jsxSegment{isText: true, node: child, text: decoded})
+		case "ERROR":
+			// Tree-sitter flags raw unescaped '&' in JSX as an ERROR node; treat its text as literal JSX text
+			errText := child.Utf8Text(ex.src)
+			run = append(run, jsxSegment{isText: true, node: child, text: errText})
 		case "jsx_expression":
 			// A simple {identifier} or {a.b.c} substitution can be inlined into
 			// the surrounding text as an ICU placeholder. Anything more complex
@@ -197,6 +216,25 @@ func (ex *reactExtractor) extractJSXChildren(n *sitter.Node) {
 		}
 	}
 	flush()
+}
+
+func decodeHTMLEntity(ent string) string {
+	switch ent {
+	case "&apos;", "&#39;":
+		return "'"
+	case "&quot;", "&#34;":
+		return "\""
+	case "&amp;", "&#38;":
+		return "&"
+	case "&lt;", "&#60;":
+		return "<"
+	case "&gt;", "&#62;":
+		return ">"
+	case "&nbsp;", "&#160;":
+		return " "
+	default:
+		return ent
+	}
 }
 
 type jsxSegment struct {
@@ -475,7 +513,82 @@ func (p *ReactPlatform) GenerateRefactorPlan(filePath string, content []byte, ca
 		})
 	}
 
+	// If patches were generated, ensure component body has the hook
+	if len(plan.Patches) > 0 {
+		plan.Patches = injectComponentHooks(content, plan.Patches)
+	}
+
 	return plan, nil
+}
+
+func injectComponentHooks(content []byte, patches []types.ByteRangePatch) []types.ByteRangePatch {
+	srcStr := string(content)
+	if strings.Contains(srcStr, "useTranslation()") || strings.Contains(srcStr, "useTranslation(") {
+		return patches
+	}
+
+	parser := newTSXParser()
+	defer parser.Close()
+	tree := parser.Parse(content, nil)
+	if tree == nil {
+		return patches
+	}
+	defer tree.Close()
+
+	root := tree.RootNode()
+	var hookPatch *types.ByteRangePatch
+
+	var findComponent func(n *sitter.Node)
+	findComponent = func(n *sitter.Node) {
+		if n == nil || hookPatch != nil {
+			return
+		}
+
+		if n.Kind() == "function_declaration" || n.Kind() == "arrow_function" || n.Kind() == "function_expression" {
+			body := n.ChildByFieldName("body")
+			if body != nil && body.Kind() == "statement_block" {
+				if hasJSX(body) {
+					openBrace := body.Child(0)
+					if openBrace != nil && openBrace.Utf8Text(content) == "{" {
+						insertPos := int(openBrace.EndByte())
+						hookPatch = &types.ByteRangePatch{
+							StartByte:       insertPos,
+							EndByte:         insertPos,
+							ReplacementText: "\n  const { t } = useTranslation();",
+							Description:     "Inject useTranslation hook",
+						}
+						return
+					}
+				}
+			}
+		}
+
+		for i := uint(0); i < n.NamedChildCount(); i++ {
+			findComponent(n.NamedChild(i))
+		}
+	}
+
+	findComponent(root)
+	if hookPatch != nil {
+		patches = append(patches, *hookPatch)
+	}
+
+	return patches
+}
+
+func hasJSX(n *sitter.Node) bool {
+	if n == nil {
+		return false
+	}
+	if n.Kind() == "jsx_element" || n.Kind() == "jsx_fragment" || n.Kind() == "jsx_self_closing_element" {
+		return true
+	}
+	for i := uint(0); i < n.NamedChildCount(); i++ {
+		if hasJSX(n.NamedChild(i)) {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *ReactPlatform) FormatLocaleFile(localeData types.LocaleData) ([]byte, error) {
@@ -499,7 +612,38 @@ func isValidUIString(s string) bool {
 	if len(s) < 2 {
 		return false
 	}
+
+	// Must have at least one alphabetic letter
+	stripped := stripICUTags(s)
+	hasLetter := false
+	for _, r := range stripped {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') {
+			hasLetter = true
+			break
+		}
+	}
+	if !hasLetter {
+		return false
+	}
+
 	if urlPattern.MatchString(s) || hexColorRegex.MatchString(s) {
+		return false
+	}
+	if strings.Contains(s, "http://") || strings.Contains(s, "https://") || strings.Contains(s, "mailto:") {
+		return false
+	}
+	if strings.HasSuffix(s, ".png") || strings.HasSuffix(s, ".jpg") || strings.HasSuffix(s, ".svg") || strings.HasSuffix(s, ".webp") || strings.HasSuffix(s, ".ico") {
+		return false
+	}
+	if strings.Contains(s, "/issues/") || strings.Contains(s, "/blob/") || strings.Contains(s, "/api/") {
+		return false
+	}
+	// Skip SVG path syntax
+	if strings.Contains(s, " L ") || strings.Contains(s, " Z") || strings.Contains(s, " M ") {
+		return false
+	}
+	// Skip markdown templates
+	if strings.HasPrefix(s, "### ") || strings.HasPrefix(s, "## ") || strings.HasPrefix(s, "# ") {
 		return false
 	}
 	// Skip common code artifacts

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -60,10 +61,10 @@ func NewClientWithConfig(provider ProviderType, model string, customDescription 
 	case ProviderOpenAI:
 		apiKey = os.Getenv("OPENAI_API_KEY")
 		if model == "" {
-			model = "gpt-4o"
+			model = "gpt-5.4-mini-2026-03-17"
 		}
 		if desc == "" {
-			desc = fmt.Sprintf("Custom OpenAI (%s) — High-speed multilingual translation", model)
+			desc = fmt.Sprintf("OpenAI (%s) — High-speed multilingual translation", model)
 		}
 		if customEndpoint == "" {
 			customEndpoint = "https://api.openai.com/v1/chat/completions"
@@ -103,7 +104,7 @@ func NewClientWithConfig(provider ProviderType, model string, customDescription 
 		model:       model,
 		endpoint:    customEndpoint,
 		description: desc,
-		http:        &http.Client{Timeout: 30 * time.Second},
+		http:        &http.Client{Timeout: 60 * time.Second},
 	}
 }
 
@@ -154,6 +155,49 @@ func (c *MultiProviderClient) Complete(ctx context.Context, systemPrompt, userPr
 	}
 }
 
+func (c *MultiProviderClient) executeHTTPRequestWithRetry(ctx context.Context, makeReq func() (*http.Request, error)) ([]byte, error) {
+	var lastErr error
+	var body []byte
+
+	const maxAttempts = 3
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		req, err := makeReq()
+		if err != nil {
+			return nil, err
+		}
+
+		resp, err := c.http.Do(req)
+		if err == nil {
+			body, _ = io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+
+			if resp.StatusCode == http.StatusOK {
+				return body, nil
+			}
+
+			// Non-retriable authentication or schema client errors
+			if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusBadRequest {
+				return nil, fmt.Errorf("API auth/client error (%d): %s", resp.StatusCode, string(body))
+			}
+
+			lastErr = fmt.Errorf("API returned status %d: %s", resp.StatusCode, string(body))
+		} else {
+			lastErr = err
+		}
+
+		if attempt < maxAttempts-1 {
+			backoff := time.Duration(500*(1<<attempt)) * time.Millisecond
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(backoff):
+			}
+		}
+	}
+
+	return nil, fmt.Errorf("request failed after %d attempts: %w", maxAttempts, lastErr)
+}
+
 func (c *MultiProviderClient) callCustom(ctx context.Context, system, user string) (string, error) {
 	reqBody := map[string]any{
 		"model": c.model,
@@ -161,28 +205,25 @@ func (c *MultiProviderClient) callCustom(ctx context.Context, system, user strin
 			{"role": "system", "content": system},
 			{"role": "user", "content": user},
 		},
+		"response_format": map[string]string{"type": "json_object"},
 	}
 
 	data, _ := json.Marshal(reqBody)
-	req, err := http.NewRequestWithContext(ctx, "POST", c.endpoint, bytes.NewBuffer(data))
+	makeReq := func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, "POST", c.endpoint, bytes.NewBuffer(data))
+		if err != nil {
+			return nil, err
+		}
+		if c.apiKey != "" {
+			req.Header.Set("Authorization", "Bearer "+c.apiKey)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		return req, nil
+	}
+
+	body, err := c.executeHTTPRequestWithRetry(ctx, makeReq)
 	if err != nil {
 		return "", err
-	}
-
-	if c.apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+c.apiKey)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("custom endpoint error (%d): %s", resp.StatusCode, string(body))
 	}
 
 	var res struct {
@@ -191,64 +232,92 @@ func (c *MultiProviderClient) callCustom(ctx context.Context, system, user strin
 				Content string `json:"content"`
 			} `json:"message"`
 		} `json:"choices"`
+		Usage struct {
+			PromptTokens     int64 `json:"prompt_tokens"`
+			CompletionTokens int64 `json:"completion_tokens"`
+		} `json:"usage"`
 	}
 	if err := json.Unmarshal(body, &res); err != nil || len(res.Choices) == 0 {
-		return "", fmt.Errorf("failed to parse custom model response")
+		return "", fmt.Errorf("failed to parse custom model response: %w", err)
 	}
 
-	return res.Choices[0].Message.Content, nil
+	content := res.Choices[0].Message.Content
+	inTokens := res.Usage.PromptTokens
+	outTokens := res.Usage.CompletionTokens
+	if inTokens == 0 {
+		inTokens = EstimateTokens(system + " " + user)
+	}
+	if outTokens == 0 {
+		outTokens = EstimateTokens(content)
+	}
+	RecordUsage(string(c.provider), c.model, inTokens, outTokens)
+
+	return content, nil
 }
 
 func (c *MultiProviderClient) callClaude(ctx context.Context, system, user string) (string, error) {
 	url := "https://api.anthropic.com/v1/messages"
 
 	reqBody := map[string]any{
-		"model":       c.model,
-		"max_tokens":  2048,
-		"system":      system,
+		"model":      c.model,
+		"max_tokens": 16384,
+		"system":     system,
 		"messages": []map[string]string{
 			{"role": "user", "content": user},
 		},
 	}
 
 	data, _ := json.Marshal(reqBody)
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(data))
-	if err != nil {
-		return "", err
+	makeReq := func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(data))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("x-api-key", c.apiKey)
+		req.Header.Set("anthropic-version", "2023-06-01")
+		req.Header.Set("content-type", "application/json")
+		return req, nil
 	}
 
-	req.Header.Set("x-api-key", c.apiKey)
-	req.Header.Set("anthropic-version", "2023-06-01")
-	req.Header.Set("content-type", "application/json")
-
-	resp, err := c.http.Do(req)
+	body, err := c.executeHTTPRequestWithRetry(ctx, makeReq)
 	if err != nil {
 		return "", err
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("claude api error (%d): %s", resp.StatusCode, string(body))
 	}
 
 	var res struct {
 		Content []struct {
 			Text string `json:"text"`
 		} `json:"content"`
+		Usage struct {
+			InputTokens  int64 `json:"input_tokens"`
+			OutputTokens int64 `json:"output_tokens"`
+		} `json:"usage"`
 	}
 	if err := json.Unmarshal(body, &res); err != nil || len(res.Content) == 0 {
-		return "", fmt.Errorf("failed to parse claude response")
+		return "", fmt.Errorf("failed to parse claude response: %w", err)
 	}
 
-	return res.Content[0].Text, nil
+	content := res.Content[0].Text
+	inTokens := res.Usage.InputTokens
+	outTokens := res.Usage.OutputTokens
+	if inTokens == 0 {
+		inTokens = EstimateTokens(system + " " + user)
+	}
+	if outTokens == 0 {
+		outTokens = EstimateTokens(content)
+	}
+	RecordUsage(string(c.provider), c.model, inTokens, outTokens)
+
+	return content, nil
 }
 
 func (c *MultiProviderClient) callOpenAI(ctx context.Context, system, user string) (string, error) {
 	url := "https://api.openai.com/v1/chat/completions"
 
 	reqBody := map[string]any{
-		"model": c.model,
+		"model":                 c.model,
+		"max_completion_tokens": 16384,
+		"response_format":       map[string]string{"type": "json_object"},
 		"messages": []map[string]string{
 			{"role": "system", "content": system},
 			{"role": "user", "content": user},
@@ -256,23 +325,43 @@ func (c *MultiProviderClient) callOpenAI(ctx context.Context, system, user strin
 	}
 
 	data, _ := json.Marshal(reqBody)
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(data))
-	if err != nil {
-		return "", err
+	makeReq := func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(data))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+		req.Header.Set("Content-Type", "application/json")
+		return req, nil
 	}
 
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.http.Do(req)
+	body, err := c.executeHTTPRequestWithRetry(ctx, makeReq)
 	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("openai api error (%d): %s", resp.StatusCode, string(body))
+		// Fallback for endpoints without response_format or max_completion_tokens support
+		if strings.Contains(err.Error(), "response_format") || strings.Contains(err.Error(), "max_completion_tokens") {
+			fallbackBody := map[string]any{
+				"model":      c.model,
+				"max_tokens": 16384,
+				"messages": []map[string]string{
+					{"role": "system", "content": system},
+					{"role": "user", "content": user},
+				},
+			}
+			fbData, _ := json.Marshal(fallbackBody)
+			makeFbReq := func() (*http.Request, error) {
+				req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(fbData))
+				if err != nil {
+					return nil, err
+				}
+				req.Header.Set("Authorization", "Bearer "+c.apiKey)
+				req.Header.Set("Content-Type", "application/json")
+				return req, nil
+			}
+			body, err = c.executeHTTPRequestWithRetry(ctx, makeFbReq)
+		}
+		if err != nil {
+			return "", err
+		}
 	}
 
 	var res struct {
@@ -281,12 +370,27 @@ func (c *MultiProviderClient) callOpenAI(ctx context.Context, system, user strin
 				Content string `json:"content"`
 			} `json:"message"`
 		} `json:"choices"`
+		Usage struct {
+			PromptTokens     int64 `json:"prompt_tokens"`
+			CompletionTokens int64 `json:"completion_tokens"`
+		} `json:"usage"`
 	}
 	if err := json.Unmarshal(body, &res); err != nil || len(res.Choices) == 0 {
-		return "", fmt.Errorf("failed to parse openai response")
+		return "", fmt.Errorf("failed to parse openai response: %w", err)
 	}
 
-	return res.Choices[0].Message.Content, nil
+	content := res.Choices[0].Message.Content
+	inTokens := res.Usage.PromptTokens
+	outTokens := res.Usage.CompletionTokens
+	if inTokens == 0 {
+		inTokens = EstimateTokens(system + " " + user)
+	}
+	if outTokens == 0 {
+		outTokens = EstimateTokens(content)
+	}
+	RecordUsage(string(c.provider), c.model, inTokens, outTokens)
+
+	return content, nil
 }
 
 func (c *MultiProviderClient) callGemini(ctx context.Context, system, user string) (string, error) {
@@ -300,24 +404,25 @@ func (c *MultiProviderClient) callGemini(ctx context.Context, system, user strin
 				},
 			},
 		},
+		"generationConfig": map[string]any{
+			"maxOutputTokens":  16384,
+			"responseMimeType": "application/json",
+		},
 	}
 
 	data, _ := json.Marshal(reqBody)
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(data))
+	makeReq := func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(data))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		return req, nil
+	}
+
+	body, err := c.executeHTTPRequestWithRetry(ctx, makeReq)
 	if err != nil {
 		return "", err
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("gemini api error (%d): %s", resp.StatusCode, string(body))
 	}
 
 	var res struct {
@@ -328,10 +433,42 @@ func (c *MultiProviderClient) callGemini(ctx context.Context, system, user strin
 				} `json:"parts"`
 			} `json:"content"`
 		} `json:"candidates"`
+		UsageMetadata struct {
+			PromptTokenCount     int64 `json:"promptTokenCount"`
+			CandidatesTokenCount int64 `json:"candidatesTokenCount"`
+		} `json:"usageMetadata"`
 	}
 	if err := json.Unmarshal(body, &res); err != nil || len(res.Candidates) == 0 || len(res.Candidates[0].Content.Parts) == 0 {
-		return "", fmt.Errorf("failed to parse gemini response")
+		return "", fmt.Errorf("failed to parse gemini response: %w", err)
 	}
 
-	return res.Candidates[0].Content.Parts[0].Text, nil
+	content := res.Candidates[0].Content.Parts[0].Text
+	inTokens := res.UsageMetadata.PromptTokenCount
+	outTokens := res.UsageMetadata.CandidatesTokenCount
+	if inTokens == 0 {
+		inTokens = EstimateTokens(system + " " + user)
+	}
+	if outTokens == 0 {
+		outTokens = EstimateTokens(content)
+	}
+	RecordUsage(string(c.provider), c.model, inTokens, outTokens)
+
+	return content, nil
+}
+
+// AutoDetectClient instantiates the best available LLM provider from environment variables
+func AutoDetectClient() *MultiProviderClient {
+	if os.Getenv("ANTHROPIC_API_KEY") != "" {
+		return NewClient(ProviderClaude, "")
+	}
+	if os.Getenv("OPENAI_API_KEY") != "" {
+		return NewClient(ProviderOpenAI, "")
+	}
+	if os.Getenv("GEMINI_API_KEY") != "" {
+		return NewClient(ProviderGemini, "")
+	}
+	if os.Getenv("OPENAI_BASE_URL") != "" {
+		return NewClient(ProviderCustom, "")
+	}
+	return NewClient(ProviderLocal, "")
 }

@@ -384,6 +384,14 @@ func unquoteDartString(s string) string {
 }
 
 func (p *FlutterPlatform) GenerateRefactorPlan(filePath string, content []byte, candidates []types.StringCandidate) (*types.FileRefactorPlan, error) {
+	if strings.HasSuffix(filePath, ".arb") {
+		return &types.FileRefactorPlan{
+			FilePath:          filePath,
+			OriginalContent:   string(content),
+			RefactoredContent: string(content),
+		}, nil
+	}
+
 	plan := &types.FileRefactorPlan{
 		FilePath:        filePath,
 		OriginalContent: string(content),

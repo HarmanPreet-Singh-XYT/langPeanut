@@ -13,10 +13,15 @@ import (
 var autoApprove bool
 
 var extractCmd = &cobra.Command{
-	Use:   "extract",
-	Short: "Extract hardcoded strings with AI classification and generate base locale files",
+	Use:     "extract [directory]",
+	Aliases: []string{"pull", "localize"},
+	Short:   "Extract hardcoded strings with AI classification and generate base locale files",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		absRoot, err := filepath.Abs(projectRoot)
+		targetDir := projectRoot
+		if len(args) > 0 {
+			targetDir = args[0]
+		}
+		absRoot, err := filepath.Abs(targetDir)
 		if err != nil {
 			return err
 		}
@@ -52,10 +57,15 @@ var extractCmd = &cobra.Command{
 }
 
 var refactorCmd = &cobra.Command{
-	Use:   "refactor",
-	Short: "Surgically refactor source code with deterministic AST patches",
+	Use:     "refactor [directory]",
+	Aliases: []string{"patch", "apply"},
+	Short:   "Surgically refactor source code with deterministic AST patches",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		absRoot, err := filepath.Abs(projectRoot)
+		targetDir := projectRoot
+		if len(args) > 0 {
+			targetDir = args[0]
+		}
+		absRoot, err := filepath.Abs(targetDir)
 		if err != nil {
 			return err
 		}
