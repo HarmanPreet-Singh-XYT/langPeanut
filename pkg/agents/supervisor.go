@@ -119,6 +119,7 @@ type PipelineResult struct {
 	DependencyStatus    *types.DependencyStatus     `json:"dependency_status,omitempty"`
 	CodeRepairs         []types.CodeRepairResult    `json:"code_repairs,omitempty"`
 	DirectiveResult     *types.DirectiveResult      `json:"directive_result,omitempty"`
+	Translations        map[string]map[string]string `json:"translations,omitempty"`
 	UnresolvedErrors    []types.CompilerDiagnostic  `json:"unresolved_errors,omitempty"`
 	DiagnosticAdvice    *logger.DiagnosticAdvice `json:"diagnostic_advice,omitempty"`
 	ExecutionLogs       []logger.LogEvent        `json:"execution_logs,omitempty"`
@@ -560,6 +561,13 @@ func (s *SupervisorAgent) RunEndToEnd(ctx context.Context, sourceLocale string, 
 		if s.Platform.Name() == types.FrameworkReact {
 			allLocales := append([]string{sourceLocale}, targetLocales...)
 			platforms.EnsureReactI18nBootstrapWithLocales(s.ProjectRoot, allLocales)
+		}
+
+		// Populate in-memory Translations map for PRs and Web Studio matrix
+		result.Translations = make(map[string]map[string]string)
+		result.Translations[sourceLocale] = sourceLocaleData.Entries
+		for tgtCode, tgtData := range targetLocaleDataMap {
+			result.Translations[tgtCode] = tgtData.Entries
 		}
 
 		// Save Translation Memory

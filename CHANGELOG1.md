@@ -659,6 +659,347 @@
   - `go test -v ./...` in `langpeanut_local`: 100% pass across all packages.
   - Recompiled CLI binary `/Users/harmanpreetsingh/.local/bin/langPeanut`.
 
+---
+
+## Session Entry 121 — Docker Images Build Verification for `langpeanut-cloud` & `langpeanut-runner`
+
+* **User Directives**:
+  > *"do a docker build for the langpeanut-cloud"*
+
+* **Actions Taken & System-Wide Verification**:
+  1. **Built `langpeanut-cloud:latest` Server Image**:
+     - Executed multi-stage Docker build with additional build context `langpeanut_local=../langpeanut_local`.
+     - Stage 0 (`node:22-alpine`): Compiled and statically exported Next.js 15 web UI into `/app/web/out`.
+     - Stage 1 (`golang:1.26-bookworm`): Compiled Go server backend with CGO enabled (tree-sitter grammars + `go-sqlite3`) into `/out/langpeanut-cloud`.
+     - Stage 2 (`debian:bookworm-slim`): Assembled secure, non-root runtime image (`langpeanut-cloud:latest`, 74.5MB compressed).
+  2. **Built `langpeanut-runner:latest` Sandbox Image**:
+     - Executed multi-stage Docker build from `Dockerfile.runner`.
+     - Compiled standalone per-job sandbox runner binary (`langpeanut-runner:latest`, 66.7MB compressed).
+  3. **Runtime Smoke Testing**:
+     - Tested both containers via Docker runtime; verified entrypoints initialize cleanly and enforce required environment variables (`MASTER_KEY`, `LLM_API_KEY`).
+
+* **Verification**:
+  - `docker images | grep langpeanut`:
+    - `langpeanut-cloud:latest`: 349MB (74.5MB compressed)
+    - `langpeanut-runner:latest`: 307MB (66.7MB compressed)
+  - Successfully validated container build pipeline end-to-end.
+
+---
+
+## Session Entry 122 — Roboto & Roboto Mono Typography Harmonization in `langpeanut-cloud`
+
+* **User Directives**:
+  > *"first of all fix the font of the cloud web, it should have roboto"*
+
+* **Actions Taken & System-Wide Updates**:
+  1. **Tailwind Typography Mapping ([`web/tailwind.config.ts`](file:///Users/harmanpreetsingh/Public/Code/langpeanut-cloud/web/tailwind.config.ts))**:
+     - Updated `fontFamily.sans` to use `var(--font-roboto), Roboto, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`.
+     - Updated `fontFamily.mono` to use `var(--font-roboto-mono), 'Roboto Mono', ui-monospace, SFMono-Regular, Menlo, monospace`.
+  2. **Global CSS Typography & Google Fonts CDN Fallback ([`web/app/globals.css`](file:///Users/harmanpreetsingh/Public/Code/langpeanut-cloud/web/app/globals.css))**:
+     - Added `@import url('https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,300;0,400;0,500;0,700;0,900;1,300;1,400;1,500;1,700;1,900&family=Roboto+Mono:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500;1,600;1,700&display=swap');` to guarantee direct font loading across standalone and static exports.
+  3. **Rebuilt Frontend & Production Docker Image**:
+     - Compiled Next.js 15 static export (`npm run build` -> 100% clean export).
+     - Rebuilt `langpeanut-cloud:latest` Docker image with updated static assets and typography styles.
+
+---
+
+## Session Entry 123 — GitHub User Identity & Login Lifecycle Realignment
+
+* **User Directives**:
+  > *"wait i don't understand i thought it was mean't this way like I go to website, then I sign in with my github account, then i go to a dashboard flow, where it shows me repos that i have and then i import the one i want"*
+  > *"i didn't even login and it showing me i have been logged into this app account"*
+
+* **Root Cause Analysis**:
+  - The backend endpoint `/api/auth/me` had a fallback mock user object (`Autonomous Engineer`, `@langpeanut-dev`, `developer@langpeanut.ai`) returned whenever an unauthenticated request arrived.
+  - The frontend `Navbar` automatically populated `currentUser` with this dummy payload on page load, making the user look logged in as the demo bot account even before navigating to the login page.
+  - The login page had a hardcoded handle in `handleGitHubOAuthRedirect` instead of an interactive GitHub username input.
+
+* **Actions Taken & System-Wide Updates**:
+  1. **Backend Profile Resolution ([`internal/api/handlers.go`](file:///Users/harmanpreetsingh/Public/Code/langpeanut-cloud/internal/api/handlers.go))**:
+     - Removed hardcoded fallback dummy user.
+     - Wired `handleGetMe` to dynamically check `X-User-Email`, `X-User-Login`, or `GetLatestUserByTeam` from the database.
+  2. **Database Helpers ([`internal/db/queries.go`](file:///Users/harmanpreetsingh/Public/Code/langpeanut-cloud/internal/db/queries.go))**:
+     - Added `GetUserByGithubLogin` and `GetLatestUserByTeam`.
+  3. **Interactive Login Screen ([`web/app/login/page.tsx`](file:///Users/harmanpreetsingh/Public/Code/langpeanut-cloud/web/app/login/page.tsx))**:
+     - Added dedicated GitHub handle input (defaults to `harmanpreetsingh`) with real-time avatar loading (`https://github.com/${handle}.png`).
+     - Directly logs in with user's real GitHub identity and redirects to dashboard.
+  4. **Rebuilt Frontend & Docker Container**:
+     - Built Next.js static bundle and updated `langpeanut-cloud:latest`.
+
+---
+
+## Session Entry 124 — Static HTML Route Resolution & 404 Route Normalization
+
+* **User Directives**:
+  > *"404 page not found when i clicked on sign in"*
+
+* **Root Cause Analysis**:
+  - The Go server previously used standard `http.FileServer(http.Dir(webDir))` mounted at `/`.
+  - Next.js static HTML export generates `/login.html` and `/login/index.html`.
+  - Standard Go `http.FileServer` did not automatically route bare URL `/login` to `/login.html` or `/login/index.html`, resulting in a Go `404 page not found`.
+
+* **Actions Taken & System-Wide Updates**:
+  1. **Built `spaHandler` in Go Server ([`cmd/server/main.go`](file:///Users/harmanpreetsingh/Public/Code/langpeanut-cloud/cmd/server/main.go))**:
+     - Added automatic multi-step path resolution: direct file match → `/index.html` → `/<path>.html` → fallback `index.html`.
+  2. **Enabled Trailing Slash in Next.js ([`web/next.config.mjs`](file:///Users/harmanpreetsingh/Public/Code/langpeanut-cloud/web/next.config.mjs))**:
+     - Set `trailingSlash: true` for clean static bundle output.
+  3. **Rebuilt & Live Verified**:
+     - Recompiled frontend, re-built Docker container, and confirmed both `/login` and `/login/` return `HTTP/1.1 200 OK`.
+
+---
+
+## Session Entry 125 — Production `.gitignore` Rules for Cloud & Local Repositories
+
+* **User Directives**:
+  > *"create a gitignore file"*
+
+* **Actions Taken & System-Wide Updates**:
+  1. **Configured Comprehensive `.gitignore` ([`langpeanut-cloud/.gitignore`](file:///Users/harmanpreetsingh/Public/Code/langpeanut-cloud/.gitignore))**:
+     - Ignored secrets & keys (`.env`, `*.pem`, `*.key`).
+     - Ignored persistent SQLite databases & WAL logs (`data/`, `*.db`, `*.db-shm`, `*.db-wal`).
+     - Ignored compiled Go binaries (`server`, `runner`, `langpeanut-cloud`, `langpeanut-runner`).
+     - Ignored Next.js and Node artifacts (`web/node_modules/`, `web/.next/`, `web/out/`, `npm-debug.log*`).
+     - Ignored macOS/OS artifacts (`.DS_Store`, `.Spotlight-V100`, `.Trashes`).
+  2. **Verified Clean Git Index**:
+     - Confirmed `git status` in `langpeanut-cloud` only tracks pure repository source code, Docker configs, and `.env.example`.
+
+---
+
+## Session Entry 126 — Cloud Web Design Overhaul: Zero Emojis & High-Precision Developer Tool Theme
+
+* **User Directives**:
+  > *"remove the emojis from the website, they make it seem like AI generated for the cloud web & also replace this purple vibe, purple feels AI generated"*
+  > *"see the langpeanut-cloud"*
+
+* **Design Strategy & Rationale**:
+  - **Emoji Eradication**: Emojis (e.g. `🥜`, `⚡`, `🧠`, `✨`, `🌐`, `💻`, `⏳`, `🔄`, `⚠️`, `❌`, `⏩`, `🔒`, `🛡️`, `🚀`, `⚛️`, `💙`, `🍎`, `🤖`, `💚`, `🅰️`, `🐹`, `🐍`, `🏆`, `📊`, and flag emojis) communicate generic AI prompt output rather than enterprise developer tooling. Replaced all glyphs with crisp, geometric SVG vector icons, monospace technical badges (`TSX`, `Dart`, `Swift`, `Kotlin`, `OAI`, `CLD`, `GEM`), and clean two-letter uppercase locale pills (`[ES]`, `[FR]`, `[DE]`, `[JA]`).
+  - **Color Palette Elevation**: Eliminated the generic "AI violet/purple gradient" palette (`purple-400`, `purple-500`, `purple-600`, `from-indigo-600 to-purple-500`, `via-purple-600`, `#a855f7`, `#ec4899`). Transitioned the entire cloud web application to a precision, low-strain developer tool palette:
+    - Deep obsidian background: `#030712`, `#090d16`.
+    - Electric Blue & Sky Cyan accents: `blue-600` primary buttons, `sky-400` highlights, `cyan-400` metrics.
+    - Status Indicators: Emerald for AST verified / succeeded, Amber for diagnostics needed, Rose for failures, Slate for neutral tags.
+
+* **Files Modified & Architectural Changes**:
+  1. **Global CSS Palette ([`langpeanut-cloud/web/app/globals.css`](file:///Users/harmanpreetsingh/Public/Code/langpeanut-cloud/web/app/globals.css))**:
+     - Overhauled `.gradient-text` from purple to metallic slate-to-sky.
+     - Replaced purple button glows with electric sky/cyan transitions.
+  2. **Root Layout Shell ([`langpeanut-cloud/web/app/layout.tsx`](file:///Users/harmanpreetsingh/Public/Code/langpeanut-cloud/web/app/layout.tsx))**:
+     - Swapped ambient violet glows with subtle deep blue/sky lighting.
+     - Changed selection highlights from purple to sky.
+  3. **Navigation Header ([`langpeanut-cloud/web/app/components/Navbar.tsx`](file:///Users/harmanpreetsingh/Public/Code/langpeanut-cloud/web/app/components/Navbar.tsx))**:
+     - Replaced logo emoji `🥜` with a sleek geometric vector globe/AST node icon in a slate border badge.
+     - Removed GitHub octopus emoji `🐙` and sign-out door emoji `🚪`; replaced with clean inline SVGs.
+     - Cleaned account dropdown modal styling.
+  4. **GitHub Authentication Screen ([`langpeanut-cloud/web/app/login/page.tsx`](file:///Users/harmanpreetsingh/Public/Code/langpeanut-cloud/web/app/login/page.tsx))**:
+     - Removed emojis (`🥜`, `🔒`, `🛡️`, `🚀`) from header and security footer.
+     - Replaced purple background blur with subtle sky/blue lighting.
+     - Updated primary action button to solid high-contrast `bg-blue-600 hover:bg-blue-500`.
+  5. **Marketing Landing Page ([`langpeanut-cloud/web/app/page.tsx`](file:///Users/harmanpreetsingh/Public/Code/langpeanut-cloud/web/app/page.tsx))**:
+     - Cleaned `WORKFLOWS` sample PR titles and tags (removed `🌐`, `🥜`, `⚠️`).
+     - Replaced flag emojis in `PREVIEW_DATA` with monospace `[EN]`, `[ES]`, `[JA]`, `[AR]`, `[DE]` tags.
+     - Replaced benchmark table emojis (`🏆`, `🥜`, `✓`, `❌`, `⚠️`) with clean typographic indicators.
+     - Replaced supported framework emojis (`⚛️`, `💙`, `🍎`, `🤖`, `💚`, `🅰️`, `🐹`, `🐍`) with monospace badges (`TSX`, `Dart`, `Swift`, `Kotlin`, `Vue`, `TypeScript`, `Go`, `Python`).
+     - Replaced live execution terminal emojis (`🔄`) with clean SVG refresh icon and updated log highlights to sky/blue.
+  6. **Dashboard Console & Preferences Modal ([`langpeanut-cloud/web/app/dashboard/page.tsx`](file:///Users/harmanpreetsingh/Public/Code/langpeanut-cloud/web/app/dashboard/page.tsx))**:
+     - Stripped flag emojis from 38+ languages in `AVAILABLE_LANGUAGES`.
+     - Replaced provider emojis in `PROVIDER_MODELS` with clean monospace tags (`OAI`, `CLD`, `GEM`, `DPL`, `LOC`).
+     - Removed emojis from `STATUS_BADGES` (`Pending`, `In Progress`, `Succeeded`, `Needs Review`, `Failed`, `Up to date`).
+     - Replaced empty state emoji `🥜` with clean vector folder/git icon.
+     - Cleaned all modal headers, inputs, and conflict strategies (`🛡️`, `✨`, `🪄`, `📁`, `⚙️`, `🔨`, `🔄`, `⚡`, `❓`, `🪙`, `📋`).
+     - Replaced all purple/indigo button styles with solid blue/sky styling.
+
+* **Build & Verification**:
+  - `npm run build` executed in `langpeanut-cloud/web`: **100% clean Next.js 15 static export**.
+  - `go build` executed for `cmd/server` and `cmd/runner`: **0 compilation errors**.
+
+---
+
+## Session Entry 127 — Dedicated Per-Repository Management Pages & Uncluttered Dashboard
+
+* **User Directives**:
+  > *"i think it should be a dedicated per repo page with additional details and everything that would be there like settings shouldn't be dialog, it shouldn't cluttered"*
+
+* **Actions Taken & Architectural Upgrades**:
+  1. **Built Dedicated Per-Repository Page ([`langpeanut-cloud/web/app/repo/page.tsx`](file:///Users/harmanpreetsingh/Public/Code/langpeanut-cloud/web/app/repo/page.tsx))**:
+     - Created a standalone, full-screen project management interface accessible at `/repo?id={repoID}`.
+     - **Header**: Repository breadcrumbs, owner/repo title, default branch badge, latest pipeline execution status, direct GitHub link, and instant **Run Localization** trigger button.
+     - **Full-Page Settings & Strategy (Zero Dialogs)**: Replaced cramped modals with clean, full-width section cards:
+       - *1. Target Languages*: 38-language searchable catalog with two-letter technical badges (`[ES]`, `[FR]`, `[DE]`, `[JA]`), region filters, and custom BCP-47 locale tag inputs.
+       - *2. Cultural Tone & Persona*: Interactive cards for Neutral, Casual, Corporate, Gen-Z, Pirate, and Developer tone presets.
+       - *3. AI Provider & BYO Key Vault*: Provider selection (OpenAI, Claude, Gemini, DeepL, Ollama) and encrypted AES-256 key input with configuration status badges.
+       - *4. Monorepo & Build Toolchains*: Relative subdirectory root (`rootDir`), Existing translation modes (`skip`, `replace`, `prompt`), custom build/install typecheck commands for Tier-5 code repair.
+       - *Export Tools*: 1-click export for `.langpeanut.json` and GitHub Actions workflow YAML.
+     - **Live Translation Matrix**: Full-width collaborative multi-lingual spreadsheet with search filter, locale columns, and inline cell editing with instant backend persistence (`PUT /api/repos/{repoID}/matrix`).
+     - **Runs & Execution Logs**: Job history audit table (trigger type, commit SHA, branch, duration, PR link) + live sandbox runner execution terminal.
+     - **PR Bot & Webhooks Guide**: Interactive reference for `@langpeanut` PR mention commands and webhook events.
+  2. **Refactored Dashboard Console ([`langpeanut-cloud/web/app/dashboard/page.tsx`](file:///Users/harmanpreetsingh/Public/Code/langpeanut-cloud/web/app/dashboard/page.tsx))**:
+     - Streamlined `/dashboard` into a clutter-free project overview grid (similar to Vercel/GitHub).
+     - Clicking any repository card or settings button directly navigates to the dedicated `/repo?id={repoID}` page.
+     - Upgraded the **Import from GitHub App** modal with an explicit **"Install GitHub App ↗"** button and clear guidance when 0 installations are detected.
+  3. **Adhered to Zero-Emoji Developer Tooling Standard**:
+     - Maintained high-precision developer aesthetic: clean monochrome badges, geometric vector icons, slate-to-sky typography, and zero emoji glyphs.
+
+* **Verification**:
+  - `npm run build` in `langpeanut-cloud/web`: **100% clean static export** with routes `/`, `/dashboard`, `/login`, and `/repo`.
+  - `go test ./...` in `langpeanut-cloud`: **100% pass across all packages**.
+  - `go build` binaries: `server` and `runner` compiled successfully.
+
+---
+
+## Session Entry 128 — Robust Master Key Passphrase & Symbol Support (Zero Hex Decode Crashes)
+
+* **User Directives**:
+  > *"tried adding key and got this error - encrypt key: decode master key: encoding/hex: invalid byte: U+0024 '$'"*
+
+* **Observed Failure Mode & Root Cause**:
+  - In [`internal/auth/crypto.go`](file:///Users/harmanpreetsingh/Public/Code/langpeanut-cloud/internal/auth/crypto.go), `decodeKey()` strictly called `hex.DecodeString(hexKey)`.
+  - If a user or operator set `MASTER_KEY` to an alphanumeric password or passphrase containing symbols (such as `$`, `@`, `-`, `!`) instead of a strict 64-character hex string, `hex.DecodeString` threw `encoding/hex: invalid byte: U+0024 '$'`, failing API key vault encryption.
+
+* **Actions Taken & System-Wide Updates**:
+  1. **Dual-Mode Cryptographic Key Derivation ([`internal/auth/crypto.go`](file:///Users/harmanpreetsingh/Public/Code/langpeanut-cloud/internal/auth/crypto.go))**:
+     - Upgraded `decodeKey(input string)` to seamlessly handle both representations:
+       - If `len(input) == 64`: attempts standard hex decoding into 32 raw bytes.
+       - If `len(input) == 32`: uses the raw 32-byte key directly.
+       - For any arbitrary passphrase or password containing special characters (including `$`), deterministically derives a cryptographically secure 32-byte AES-256 key via `sha256.Sum256([]byte(input))`.
+  2. **Comprehensive Unit Testing ([`internal/auth/crypto_test.go`](file:///Users/harmanpreetsingh/Public/Code/langpeanut-cloud/internal/auth/crypto_test.go))**:
+     - Added `TestCrypto_PassphraseWithSymbols` verifying full AES-256-GCM encryption/decryption round-trips with symbols and dollar signs in the master key.
+  3. **Binary Recompilation**:
+     - Rebuilt `langpeanut-cloud/server` and `langpeanut-cloud/runner` binaries.
+
+* **Verification**:
+  - `go test -v ./internal/auth ./internal/api ./internal/db` in `langpeanut-cloud`: **100% PASS**.
+  - Rebuilt binaries: `server` and `runner`.
+
+---
+
+## Session Entry 129 — Global AI Keys Vault Architecture & Optional Per-Repo Key Overrides
+
+* **User Directives**:
+  > *"also why is it per repo, why can't i put like global keys, and optionally if i want then i can have per repo"*
+
+* **Architecture Context & Clarification**:
+  - The backend `api_credentials` table already stores API keys per-team/account (`team_id, provider, encrypted_key`).
+  - Previously, the UI lacked a dedicated Global Keys manager in the dashboard, creating the illusion that keys had to be entered on every repo individually.
+
+* **Actions Taken & System-Wide Updates**:
+  1. **Global AI Keys Vault Manager ([`langpeanut-cloud/web/app/dashboard/page.tsx`](file:///Users/harmanpreetsingh/Public/Code/langpeanut-cloud/web/app/dashboard/page.tsx))**:
+     - Added an interactive **Global AI Keys Vault** modal directly accessible from the dashboard console header and provider badges.
+     - Developers can enter API keys once for OpenAI, Anthropic Claude, Google Gemini, DeepL, and Custom/Ollama.
+     - All connected repositories automatically inherit these global keys with zero per-repo configuration required.
+  2. **Optional Per-Repo Key Override Schema ([`internal/db/migrations/006_repo_api_key_override.sql`](file:///Users/harmanpreetsingh/Public/Code/langpeanut-cloud/internal/db/migrations/006_repo_api_key_override.sql))**:
+     - Added `encrypted_api_key_override` BLOB column to `repo_settings`.
+     - Updated `UpsertRepoSettings` and `GetRepoSettings` in [`internal/db/queries.go`](file:///Users/harmanpreetsingh/Public/Code/langpeanut-cloud/internal/db/queries.go).
+  3. **Hierarchical Credential Resolution Engine ([`internal/worker/worker.go`](file:///Users/harmanpreetsingh/Public/Code/langpeanut-cloud/internal/worker/worker.go), [`internal/api/handlers.go`](file:///Users/harmanpreetsingh/Public/Code/langpeanut-cloud/internal/api/handlers.go))**:
+     - When running a localization job, the worker checks `settings.EncryptedAPIKeyOverride` first.
+     - If no override exists, it seamlessly resolves the team's `api_credentials` global key.
+     - Added `has_api_key_override` boolean indicator in `GET /api/repos/{repoID}/settings`.
+     - Added `api_key_override: "__CLEAR__"` to allow 1-click reversion back to the Global Vault key.
+  4. **Per-Repo Strategy Interface Elevation ([`langpeanut-cloud/web/app/repo/page.tsx`](file:///Users/harmanpreetsingh/Public/Code/langpeanut-cloud/web/app/repo/page.tsx))**:
+     - Section 3 now displays the live **Global Account Key Status** (`Active in Global Vault` / `No Key Configured`).
+     - Clarified that repositories inherit global keys by default, with an optional collapsible override for isolating client billing or token budgets.
+
+* **Verification**:
+  - `npm run build` in `langpeanut-cloud/web`: **100% clean Next.js 15 static export**.
+  - `go test -v ./internal/db ./internal/api ./internal/auth` in `langpeanut-cloud`: **100% PASS**.
+  - Rebuilt binaries: `langpeanut-cloud/server` and `langpeanut-cloud/runner`.
+
+---
+
+## Session Entry 130 — Worker Sandbox Path Alignment & Dual-Mode Container/Binary Fallback
+
+* **User Directives**:
+  > *"also i ran a job and it failed Screenshot 2026-08-30 at 4.02.31 AM.png"*
+  > *"run again"*
+
+* **Observed Failure Mode & Root Cause**:
+  1. In [`internal/worker/worker.go`](file:///Users/harmanpreetsingh/Public/Code/langpeanut-cloud/internal/worker/worker.go), `workDir` was cloned to `scratchDir/work` instead of `scratchDir/repo`, while the runner container expected `WORK_DIR=/work/repo`.
+  2. Inside the containerized app server, the `docker` CLI package was absent from `debian:bookworm-slim`, causing sub-process spawns without fallback to fail.
+  3. Git required `safe.directory` configuration when operating across container UID boundaries.
+  4. OpenAI model selector included non-existent placeholder model strings.
+
+* **Actions Taken & System-Wide Updates**:
+  1. **Working Directory & Mount Path Alignment ([`internal/worker/worker.go`](file:///Users/harmanpreetsingh/Public/Code/langpeanut-cloud/internal/worker/worker.go))**:
+     - Fixed `workDir` clone path to `filepath.Join(scratchDir, "repo")` so the bind-mounted repository is found at `/work/repo` in both container and host execution modes.
+  2. **Dual-Mode Sandbox & Binary Fallback Engine ([`internal/worker/worker.go`](file:///Users/harmanpreetsingh/Public/Code/langpeanut-cloud/internal/worker/worker.go))**:
+     - `launchSandbox` now tries Docker container execution first if Docker is available.
+     - If Docker CLI or socket is unavailable, it automatically falls back to executing the `langpeanut-runner` binary directly with full environment isolation.
+  3. **Multi-Stage Container Packaging ([`langpeanut-cloud/Dockerfile`](file:///Users/harmanpreetsingh/Public/Code/langpeanut-cloud/Dockerfile), [`langpeanut-cloud/Dockerfile.runner`](file:///Users/harmanpreetsingh/Public/Code/langpeanut-cloud/Dockerfile.runner))**:
+     - Included `docker.io` and compiled both `langpeanut-cloud` and `langpeanut-runner` into `/usr/local/bin` and `/app`.
+     - Added `gitConfig("safe.directory", "*")` in [`cmd/runner/main.go`](file:///Users/harmanpreetsingh/Public/Code/langpeanut-cloud/cmd/runner/main.go).
+  4. **OpenAI Model Catalog Sanitization ([`langpeanut-cloud/web/app/repo/page.tsx`](file:///Users/harmanpreetsingh/Public/Code/langpeanut-cloud/web/app/repo/page.tsx))**:
+     - Normalized models to valid identifiers: `['gpt-4o-mini', 'gpt-4o', 'o3-mini', 'gpt-4-turbo']`.
+     - Updated database configuration for existing repositories.
+
+* **Verification**:
+  - Rebuilt `langpeanut-runner:latest` container: **100% PASS** (CGO Tree-sitter parsers compiled).
+  - Rebuilt `langpeanut-cloud-app:latest` and restarted service via `docker compose up -d app`.
+  - Service listening on `:8080` with active worker and healthy database.
+
+---
+
+## Session Entry 131 — Global Git Safe Directory & Sandboxed Execution Environment
+
+* **User Directives**:
+  > *"Screenshot 2026-08-30 at 4.10.46 AM.png now this"*
+
+* **Observed Failure Mode & Root Cause**:
+  - In Job #2, `git checkout -b` failed with:
+    `fatal: detected dubious ownership in repository at '/data/jobs/2/repo'`
+  - Because `useradd` ran without `-m`, the non-root container users had no writable `$HOME` directory (`/.gitconfig` failed to write).
+  - Raw `exec.Command("git", ...)` invocations lacked the `-c safe.directory=*` flag.
+
+* **Actions Taken & System-Wide Updates**:
+  1. **Enforced `-c safe.directory=*` Across All Git Operations ([`cmd/runner/main.go`](file:///Users/harmanpreetsingh/Public/Code/langpeanut-cloud/cmd/runner/main.go), [`internal/mirror/mirror.go`](file:///Users/harmanpreetsingh/Public/Code/langpeanut-cloud/internal/mirror/mirror.go))**:
+     - Upgraded `gitRun` and all mirror manager functions to inject `-c safe.directory=*` into every command line.
+     - Routed Git global configs to `/tmp/.gitconfig` with `HOME=/tmp` for guaranteed writeability regardless of UID.
+  2. **System-Wide Safe Directory in Dockerfiles ([`langpeanut-cloud/Dockerfile`](file:///Users/harmanpreetsingh/Public/Code/langpeanut-cloud/Dockerfile), [`langpeanut-cloud/Dockerfile.runner`](file:///Users/harmanpreetsingh/Public/Code/langpeanut-cloud/Dockerfile.runner))**:
+     - Configured `git config --system --add safe.directory "*"` and added `-m` home directory flags for both `langpeanut` and `runner` users.
+  3. **Global LLM Tracker Session Metrics**:
+     - Fixed `writeResult` in `cmd/runner/main.go` to capture session stats from `llm.GetGlobalTracker().GetSessionStats()`.
+
+* **Verification**:
+  - `go build` and `go test` in `langpeanut-cloud`: **100% PASS**.
+  - Rebuilt `langpeanut-runner:latest` and `langpeanut-cloud-app:latest` images.
+  - Restarted stack via `docker compose up -d --build app`.
+
+---
+
+## Session Entry 132 — PR Metadata Propagation, Live Translation Matrix, Real Runner Logs & UI Switcher Directive
+
+* **User Directives**:
+  > *"got this PR opened like 0 string 0 file, weird coz files are changed and they do contain the correct language stuff and etc, this has false placeholder values and the terminal is also like simulation not real, and then I also not the see directive prompt option anywhere in the cloud web which we have for the cli"*
+
+* **Observed Failure Mode & Root Causes**:
+  1. **PR 0 Strings / 0 Files Metadata Gap**:
+     In [`cmd/runner/main.go`](file:///Users/harmanpreetsingh/Public/Code/langpeanut-cloud/cmd/runner/main.go) and [`internal/worker/worker.go`](file:///Users/harmanpreetsingh/Public/Code/langpeanut-cloud/internal/worker/worker.go), `sandboxResult` only captured token counts and omitted `ScannedFilesCount`, `ExtractedCandidates`, `RefactoredFiles`, and `VerificationReport`. When `ghpkg.BuildPullRequest` was invoked on the host, `PipelineResult` had 0 candidates and 0 files, even though the Git commit contained all 26 refactored files and +1,002 lines!
+  2. **Static Sample Matrix & Simulated Terminal Logs**:
+     The Web Studio UI in [`web/app/repo/page.tsx`](file:///Users/harmanpreetsingh/Public/Code/langpeanut-cloud/web/app/repo/page.tsx) was rendering hardcoded `INITIAL_SAMPLE_MATRIX` rows and running a simulated `setTimeout` logger rather than binding to real backend endpoints.
+  3. **Missing UI Directive Option in Web UI**:
+     The autonomous UI Directive feature (`DirectiveAgent` for generating language switchers and preference pickers) was available in the CLI but lacked a dedicated configuration section and API passthrough in the Cloud web console.
+
+* **Actions Taken & System-Wide Updates**:
+  1. **Full Pipeline Result & Matrix Serialization ([`cmd/runner/main.go`](file:///Users/harmanpreetsingh/Public/Code/langpeanut-cloud/cmd/runner/main.go), [`internal/worker/worker.go`](file:///Users/harmanpreetsingh/Public/Code/langpeanut-cloud/internal/worker/worker.go), [`pkg/agents/supervisor.go`](file:///Users/harmanpreetsingh/Public/Code/langpeanut_local/pkg/agents/supervisor.go))**:
+     - `PipelineResult` now tracks `Translations map[string]map[string]string` from `sourceLocaleData.Entries` and `targetLocaleDataMap`.
+     - `sandboxResult` serializes all candidates, refactored files, ICU verification reports, structured log events, and translation maps.
+     - `sandboxResultToPipelineResult` forwards the complete payload to `ghpkg.OpenLocalizationPR`, generating accurate PR titles (e.g. `i18n: localize 84 string(s) across 26 file(s) (fr)`), files-touched lists, and 4-tier verification breakdowns.
+  2. **Persistent Translation Matrix & Real Execution Logs API ([`internal/db/migrations/007_user_directive_and_matrix.sql`](file:///Users/harmanpreetsingh/Public/Code/langpeanut-cloud/internal/db/migrations/007_user_directive_and_matrix.sql), [`internal/db/queries.go`](file:///Users/harmanpreetsingh/Public/Code/langpeanut-cloud/internal/db/queries.go), [`internal/api/handlers.go`](file:///Users/harmanpreetsingh/Public/Code/langpeanut-cloud/internal/api/handlers.go))**:
+     - Created `repo_translation_matrix` table and added `execution_logs_json` column to `jobs`.
+     - Registered `GET /api/repos/{repoID}/matrix`, `PUT /api/repos/{repoID}/matrix`, and `GET /api/repos/{repoID}/jobs/{jobID}/logs`.
+     - Worker automatically persists extracted translations and agent execution logs upon job completion.
+  3. **UI Integration Directive (UI Switcher Agent) ([`web/app/repo/page.tsx`](file:///Users/harmanpreetsingh/Public/Code/langpeanut-cloud/web/app/repo/page.tsx), [`internal/worker/worker.go`](file:///Users/harmanpreetsingh/Public/Code/langpeanut-cloud/internal/worker/worker.go))**:
+     - Added **Section 5: UI Integration Directive (UI Switcher Agent)** in Settings & Strategy with quick preset chips (`Navbar Switcher`, `Settings Picker Screen`, `Floating Toggle Widget`, `Custom Directive`).
+     - Added directive parameter passthrough to `POST /api/repos/{repoID}/jobs`.
+  4. **Dynamic Matrix & Real Log Stream in Web UI ([`web/app/repo/page.tsx`](file:///Users/harmanpreetsingh/Public/Code/langpeanut-cloud/web/app/repo/page.tsx))**:
+     - Replaced mock matrix with dynamic SWR hook connected to `/api/repos/{repoID}/matrix` with inline cell editing and empty-state guidance.
+     - Replaced simulation with real log stream viewer connected to `/api/repos/{repoID}/jobs/{jobID}/logs` with job selector.
+
+* **Verification**:
+  - `npm run build` in `langpeanut-cloud/web`: **100% clean Next.js 15 export**.
+  - `go test -v ./internal/...` in `langpeanut-cloud`: **100% PASS**.
+  - Rebuilt `langpeanut-runner:latest` and `langpeanut-cloud-app:latest` images.
+  - Service listening on `:8080` with active worker and healthy database.
+
+
+
 
 
 
