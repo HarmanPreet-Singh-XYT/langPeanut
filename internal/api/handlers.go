@@ -28,6 +28,7 @@ import (
 	"github.com/langPeanut/langPeanut/pkg/llm"
 	"github.com/langPeanut/langPeanut/pkg/logger"
 	"github.com/langPeanut/langPeanut/pkg/platforms"
+	"github.com/langPeanut/langPeanut/pkg/seo"
 )
 
 // Handler groups dependencies needed by all route handlers.
@@ -60,6 +61,10 @@ func RegisterRoutes(mux *http.ServeMux, h *Handler) {
 	mux.HandleFunc("GET /api/repos", h.requireSession(h.handleListRepos))
 	// Enable (upsert) a repo for localization.
 	mux.HandleFunc("POST /api/repos", h.requireSession(h.handleUpsertRepo))
+	// Reset all translations, jobs, and SEO data for a repo (fresh start).
+	mux.HandleFunc("POST /api/repos/{repoID}/reset", h.requireSession(h.handleResetRepoData))
+	// Delete a repo entirely.
+	mux.HandleFunc("DELETE /api/repos/{repoID}", h.requireSession(h.handleDeleteRepo))
 
 	// ── Repo Settings & Translation Matrix ───────────────────────────────────
 	mux.HandleFunc("GET /api/repos/{repoID}/settings", h.requireSession(h.handleGetSettings))
@@ -68,6 +73,13 @@ func RegisterRoutes(mux *http.ServeMux, h *Handler) {
 	mux.HandleFunc("PUT /api/repos/{repoID}/matrix", h.requireSession(h.handleUpdateMatrixCell))
 	mux.HandleFunc("POST /api/repos/{repoID}/matrix/copilot", h.requireSession(h.handleMatrixCopilot))
 	mux.HandleFunc("GET /api/repos/{repoID}/branches", h.requireSession(h.handleListBranches))
+
+	// ── SEO & Market Growth Studio ────────────────────────────────────────────
+	mux.HandleFunc("GET /api/repos/{repoID}/seo", h.requireSession(h.handleGetSEOOverview))
+	mux.HandleFunc("POST /api/repos/{repoID}/seo/strategy", h.requireSession(h.handleSaveSEOStrategy))
+	mux.HandleFunc("POST /api/repos/{repoID}/seo/scout", h.requireSession(h.handleRunSEOScout))
+	mux.HandleFunc("POST /api/repos/{repoID}/seo/optimize", h.requireSession(h.handleRunSEOOptimize))
+	mux.HandleFunc("POST /api/repos/{repoID}/seo/apply", h.requireSession(h.handleApplySEOToMatrix))
 
 	// ── Agentic Capabilities: Doctor, Persona, & Pruner ──────────────────────
 	mux.HandleFunc("GET /api/repos/{repoID}/doctor", h.requireSession(h.handleRepoDoctor))
@@ -250,6 +262,50 @@ func (h *Handler) handleUpsertRepo(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, repo)
 }
 
+func (h *Handler) handleResetRepoData(w http.ResponseWriter, r *http.Request) {
+	repo, ok := h.authorizeRepo(w, r)
+	if !ok {
+		return
+	}
+
+	if err := h.DB.ResetRepoData(repo.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, "reset repo data: "+err.Error())
+		return
+	}
+
+	// Remove mirror cache if exists
+	mirrorPath := filepath.Join("data", "mirrors", fmt.Sprintf("%d.git", repo.ID))
+	_ = os.RemoveAll(mirrorPath)
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":  "ok",
+		"message": fmt.Sprintf("Successfully reset all translation matrix keys, jobs, and SEO data for %s/%s. You can now start fresh from the beginning.", repo.Owner, repo.Name),
+		"repo_id": repo.ID,
+	})
+}
+
+func (h *Handler) handleDeleteRepo(w http.ResponseWriter, r *http.Request) {
+	repo, ok := h.authorizeRepo(w, r)
+	if !ok {
+		return
+	}
+
+	if err := h.DB.DeleteRepo(repo.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, "delete repo: "+err.Error())
+		return
+	}
+
+	// Clean up mirror bare git repo
+	mirrorPath := filepath.Join("data", "mirrors", fmt.Sprintf("%d.git", repo.ID))
+	_ = os.RemoveAll(mirrorPath)
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":  "ok",
+		"message": fmt.Sprintf("Repository %s/%s deleted successfully.", repo.Owner, repo.Name),
+		"repo_id": repo.ID,
+	})
+}
+
 // authorizeRepo loads a repo by path-parameter ID and verifies it belongs to
 // the caller's team (via its installation), writing a 403/404 response and
 // returning ok=false if not. Every {repoID}-scoped handler must call this
@@ -340,10 +396,10 @@ func (h *Handler) handleUpsertSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.Provider == "" {
-		req.Provider = "openai"
+		req.Provider = "gemini"
 	}
 	if req.Model == "" {
-		req.Model = "gpt-4o-mini"
+		req.Model = "gemini-3.5-flash"
 	}
 	if req.TonePreset == "" {
 		req.TonePreset = "neutral"
@@ -1169,10 +1225,11 @@ func (h *Handler) handleWebhook(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "decode push: "+err.Error())
 			return
 		}
-		// Ignore commits not on default branch
+
 		branch := strings.TrimPrefix(pushEv.Ref, "refs/heads/")
-		if branch != pushEv.Repository.DefaultBranch && pushEv.Repository.DefaultBranch != "" {
-			writeJSON(w, http.StatusOK, map[string]string{"status": "ignored_non_default_branch"})
+		// Ignore deleted branches, tags, and internal langpeanut PR branches to prevent recursion loops
+		if pushEv.Deleted || !strings.HasPrefix(pushEv.Ref, "refs/heads/") || strings.HasPrefix(branch, "langpeanut/") {
+			writeJSON(w, http.StatusOK, map[string]string{"status": "ignored_internal_or_tag"})
 			return
 		}
 
@@ -1189,14 +1246,14 @@ func (h *Handler) handleWebhook(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Queue job for continuous autopilot workflow
-		job, err := h.DB.CreateJob(repo.ID, "webhook_push")
+		// Queue job with target branch for continuous autopilot workflow
+		job, err := h.DB.CreateJobWithBranch(repo.ID, "webhook_push", branch)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "queue job: "+err.Error())
 			return
 		}
-		slog.Info("webhook: queued push job", "job_id", job.ID, "repo", repo.Owner+"/"+repo.Name)
-		writeJSON(w, http.StatusOK, map[string]any{"status": "job_queued", "job_id": job.ID})
+		slog.Info("webhook: queued push job for branch", "job_id", job.ID, "repo", repo.Owner+"/"+repo.Name, "branch", branch)
+		writeJSON(w, http.StatusOK, map[string]any{"status": "job_queued", "job_id": job.ID, "branch": branch})
 		return
 
 	case "issue_comment":
@@ -1304,3 +1361,460 @@ func parseRepoID(w http.ResponseWriter, r *http.Request) (int64, bool) {
 	}
 	return id, true
 }
+
+func (h *Handler) resolveClientForRepo(repo *db.Repo) llm.Client {
+	settings, err := h.DB.GetRepoSettings(repo.ID)
+	if err != nil || settings == nil {
+		return llm.AutoDetectClient()
+	}
+
+	var apiKey string
+	var encKey []byte
+	if len(settings.EncryptedAPIKeyOverride) > 0 {
+		encKey = settings.EncryptedAPIKeyOverride
+	} else {
+		inst, err := h.DB.GetInstallationByID(repo.InstallationID)
+		if err == nil && inst != nil {
+			cred, _ := h.DB.GetAPICredential(inst.TeamID, settings.Provider)
+			if cred != nil {
+				encKey = cred.EncryptedKey
+			}
+		}
+	}
+	if len(encKey) > 0 {
+		apiKey, _ = auth.Decrypt(h.MasterKey, encKey)
+	}
+
+	if apiKey != "" {
+		return llm.NewClientWithAPIKey(llm.ProviderType(settings.Provider), settings.Model, apiKey)
+	}
+	return llm.AutoDetectClient()
+}
+
+func (h *Handler) handleGetSEOOverview(w http.ResponseWriter, r *http.Request) {
+	repo, ok := h.authorizeRepo(w, r)
+	if !ok {
+		return
+	}
+
+	strategy, err := h.DB.GetSEOStrategy(repo.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to get SEO strategy: "+err.Error())
+		return
+	}
+
+	// Auto-infer if empty
+	if strategy == nil {
+		scanDir := h.getRepoScanDir(repo.ID)
+		client := h.resolveClientForRepo(repo)
+		scout := agents.NewPersonaScoutAgent(client)
+		persona, _ := scout.DiscoverPersona(scanDir)
+
+		projName := repo.Name
+		cat := "Software Platform"
+		locales := []string{"ja", "de", "es"}
+		if persona != nil {
+			if persona.ProjectName != "" {
+				projName = persona.ProjectName
+			}
+			if persona.Audience != "" && len(persona.Audience) <= 25 {
+				cat = persona.Audience
+			} else if persona.Summary != "" && len(persona.Summary) <= 30 && !strings.HasPrefix(persona.Summary, "Autonomous localization") {
+				cat = persona.Summary
+			} else if strings.Contains(strings.ToLower(projName), "store") || strings.Contains(strings.ToLower(projName), "shop") || strings.Contains(strings.ToLower(projName), "commerce") {
+				cat = "E-Commerce Platform"
+			} else if strings.Contains(strings.ToLower(projName), "app") {
+				cat = "Application"
+			}
+			if len(persona.LocalesSuggested) > 0 {
+				locales = persona.LocalesSuggested
+			}
+		}
+
+		strategy = &db.RepoSEOStrategy{
+			RepoID:             repo.ID,
+			ProjectName:        projName,
+			Category:           cat,
+			ProductDescription: fmt.Sprintf("Modern software platform: %s", projName),
+			TargetLocales:      locales,
+			Goal:               "traffic",
+			ScopeTier:          "high_impact",
+			CompetitorURLs:     []string{},
+		}
+		_ = h.DB.UpsertSEOStrategy(strategy)
+	}
+
+	comps, _ := h.DB.GetSEOCompetitors(repo.ID, "")
+	kws, _ := h.DB.GetSEOKeywords(repo.ID, "")
+	opts, _ := h.DB.GetSEOOptimizations(repo.ID, "")
+
+	// Group by locale
+	compMap := make(map[string][]db.RepoSEOCompetitor)
+	for _, c := range comps {
+		compMap[c.Locale] = append(compMap[c.Locale], c)
+	}
+	kwMap := make(map[string][]db.RepoSEOKeyword)
+	for _, k := range kws {
+		kwMap[k.Locale] = append(kwMap[k.Locale], k)
+	}
+	optMap := make(map[string][]db.RepoSEOOptimization)
+	for _, o := range opts {
+		optMap[o.Locale] = append(optMap[o.Locale], o)
+	}
+
+	metricsMap := make(map[string]*db.RepoSEOMetrics)
+	simAgent := seo.NewSERPSimulatorAgent()
+	simMap := make(map[string]*seo.SERPSimulation)
+	for _, loc := range strategy.TargetLocales {
+		if m, err := h.DB.GetSEOMetrics(repo.ID, loc); err == nil && m != nil {
+			metricsMap[loc] = m
+		}
+		if oList, ok := optMap[loc]; ok && len(oList) > 0 {
+			coreOpts := make([]seo.KeyOptimization, 0, len(oList))
+			for _, o := range oList {
+				coreOpts = append(coreOpts, seo.KeyOptimization{
+					Key:                  o.TranslationKey,
+					SourceEn:             o.SourceEn,
+					BaselineTranslation:  o.BaselineTranslation,
+					OptimizedTranslation: o.OptimizedTranslation,
+					InjectedKeywords:     o.InjectedKeywords,
+					Rationale:            o.Rationale,
+					ImpactTier:           o.ImpactTier,
+					CharacterLength:      o.CharacterLength,
+					PixelWidthDesktop:    o.PixelWidthDesktop,
+					IsTitleTruncated:     o.IsTitleTruncated,
+					ICUVariablesMatched:  o.ICUVariablesMatched,
+				})
+			}
+			kwList := kwMap[loc]
+			coreKws := make([]seo.KeywordInsight, 0, len(kwList))
+			for _, k := range kwList {
+				coreKws = append(coreKws, seo.KeywordInsight{
+					Keyword:          k.Keyword,
+					Locale:           k.Locale,
+					Intent:           k.Intent,
+					VolumeTier:       k.VolumeTier,
+					EstMonthlyVolume: k.EstMonthlyVolume,
+					Difficulty:       k.Difficulty,
+					Relevance:        k.Relevance,
+					IsPrimary:        k.IsPrimary,
+					IsLocked:         k.IsLocked,
+				})
+			}
+			coreStrat := &seo.SEOStrategy{
+				ProjectName:        strategy.ProjectName,
+				Category:           strategy.Category,
+				ProductDescription: strategy.ProductDescription,
+				TargetLocales:      strategy.TargetLocales,
+				Goal:               seo.GrowthGoal(strategy.Goal),
+				ScopeTier:          seo.KeyScopeTier(strategy.ScopeTier),
+				CompetitorURLs:     strategy.CompetitorURLs,
+			}
+			sim := simAgent.GenerateSimulation(coreStrat, loc, coreKws, coreOpts)
+			simMap[loc] = sim
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"strategy":      strategy,
+		"competitors":   compMap,
+		"keywords":      kwMap,
+		"optimizations": optMap,
+		"metrics":       metricsMap,
+		"simulations":   simMap,
+	})
+}
+
+func (h *Handler) handleSaveSEOStrategy(w http.ResponseWriter, r *http.Request) {
+	repo, ok := h.authorizeRepo(w, r)
+	if !ok {
+		return
+	}
+
+	var req db.RepoSEOStrategy
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request payload: "+err.Error())
+		return
+	}
+	req.RepoID = repo.ID
+	if len(req.TargetLocales) == 0 {
+		req.TargetLocales = []string{"ja", "de", "es"}
+	}
+	if req.Goal == "" {
+		req.Goal = "traffic"
+	}
+	if req.ScopeTier == "" {
+		req.ScopeTier = "high_impact"
+	}
+
+	if err := h.DB.UpsertSEOStrategy(&req); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to save SEO strategy: "+err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, req)
+}
+
+func (h *Handler) handleRunSEOScout(w http.ResponseWriter, r *http.Request) {
+	repo, ok := h.authorizeRepo(w, r)
+	if !ok {
+		return
+	}
+
+	var req struct {
+		Locale string `json:"locale"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	locale := req.Locale
+	if locale == "" {
+		locale = "ja"
+	}
+
+	strategy, err := h.DB.GetSEOStrategy(repo.ID)
+	if err != nil || strategy == nil {
+		writeError(w, http.StatusBadRequest, "please configure SEO strategy first")
+		return
+	}
+
+	client := h.resolveClientForRepo(repo)
+	scoutAgent := seo.NewSERPScoutAgent(client)
+	kwAgent := seo.NewKeywordIntelligenceAgent(client)
+
+	coreStrategy := &seo.SEOStrategy{
+		ProjectName:        strategy.ProjectName,
+		Category:           strategy.Category,
+		ProductDescription: strategy.ProductDescription,
+		TargetLocales:      strategy.TargetLocales,
+		Goal:               seo.GrowthGoal(strategy.Goal),
+		ScopeTier:          seo.KeyScopeTier(strategy.ScopeTier),
+		CompetitorURLs:     strategy.CompetitorURLs,
+	}
+
+	comps, err := scoutAgent.ScoutLocale(r.Context(), coreStrategy, locale)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "scouting failed: "+err.Error())
+		return
+	}
+
+	dbComps := make([]db.RepoSEOCompetitor, 0, len(comps))
+	for _, c := range comps {
+		dbComps = append(dbComps, db.RepoSEOCompetitor{
+			RepoID:          repo.ID,
+			Locale:          locale,
+			Domain:          c.Domain,
+			Rank:            c.Rank,
+			URL:             c.URL,
+			Title:           c.Title,
+			MetaDescription: c.MetaDescription,
+			H1s:             c.H1s,
+			H2s:             c.H2s,
+			Keywords:        c.Keywords,
+			ValueProps:      c.ValueProps,
+			IsDiscovered:    c.IsDiscovered,
+		})
+	}
+	_ = h.DB.UpsertSEOCompetitors(repo.ID, locale, dbComps)
+
+	kws, _ := kwAgent.AnalyzeKeywords(r.Context(), coreStrategy, locale, comps)
+	dbKws := make([]db.RepoSEOKeyword, 0, len(kws))
+	for _, k := range kws {
+		dbKws = append(dbKws, db.RepoSEOKeyword{
+			RepoID:           repo.ID,
+			Locale:           locale,
+			Keyword:          k.Keyword,
+			Intent:           k.Intent,
+			VolumeTier:       k.VolumeTier,
+			EstMonthlyVolume: k.EstMonthlyVolume,
+			Difficulty:       k.Difficulty,
+			Relevance:        k.Relevance,
+			IsPrimary:        k.IsPrimary,
+			IsLocked:         k.IsLocked,
+		})
+	}
+	_ = h.DB.UpsertSEOKeywords(repo.ID, locale, dbKws)
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"locale":      locale,
+		"competitors": dbComps,
+		"keywords":    dbKws,
+	})
+}
+
+func (h *Handler) handleRunSEOOptimize(w http.ResponseWriter, r *http.Request) {
+	repo, ok := h.authorizeRepo(w, r)
+	if !ok {
+		return
+	}
+
+	var req struct {
+		Locale string `json:"locale"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	locale := req.Locale
+	if locale == "" {
+		locale = "ja"
+	}
+
+	strategy, err := h.DB.GetSEOStrategy(repo.ID)
+	if err != nil || strategy == nil {
+		writeError(w, http.StatusBadRequest, "please configure SEO strategy first")
+		return
+	}
+
+	client := h.resolveClientForRepo(repo)
+	weaverAgent := seo.NewSemanticCopyWeaverAgent(client)
+	criticAgent := seo.NewGrowthPredictorCritic()
+	simAgent := seo.NewSERPSimulatorAgent()
+
+	coreStrategy := &seo.SEOStrategy{
+		ProjectName:        strategy.ProjectName,
+		Category:           strategy.Category,
+		ProductDescription: strategy.ProductDescription,
+		TargetLocales:      strategy.TargetLocales,
+		Goal:               seo.GrowthGoal(strategy.Goal),
+		ScopeTier:          seo.KeyScopeTier(strategy.ScopeTier),
+		CompetitorURLs:     strategy.CompetitorURLs,
+	}
+
+	// Fetch existing translation matrix keys for English and target locale
+	matrix, _ := h.DB.GetTranslationMatrix(repo.ID)
+	sourceKeys := make(map[string]string)
+	baselineTranslations := make(map[string]string)
+
+	if matrix["en"] != nil {
+		for k, v := range matrix["en"] {
+			sourceKeys[k] = v
+		}
+	}
+	if matrix[locale] != nil {
+		for k, v := range matrix[locale] {
+			baselineTranslations[k] = v
+			if sourceKeys[k] == "" {
+				sourceKeys[k] = v
+			}
+		}
+	}
+
+	if len(sourceKeys) == 0 {
+		// Scan directory if matrix is empty
+		scanDir := h.getRepoScanDir(repo.ID)
+		reg := platforms.NewRegistry()
+		plat, _ := reg.AutoDetect(scanDir)
+		if plat != nil {
+			sourceKeys = seo.ExtractLocaleCatalog(scanDir, plat, "en")
+			baselineTranslations = seo.ExtractLocaleCatalog(scanDir, plat, locale)
+		}
+	}
+
+	if len(sourceKeys) == 0 {
+		sourceKeys = map[string]string{
+			"home.hero.title": fmt.Sprintf("The fastest platform for %s", strategy.Category),
+			"home.hero.desc":  strategy.ProductDescription,
+			"cta.button":      "Get Started Free",
+		}
+	}
+
+	// Get keywords
+	dbKws, _ := h.DB.GetSEOKeywords(repo.ID, locale)
+	kwInsights := make([]seo.KeywordInsight, 0, len(dbKws))
+	for _, k := range dbKws {
+		kwInsights = append(kwInsights, seo.KeywordInsight{
+			Keyword:          k.Keyword,
+			Locale:           k.Locale,
+			Intent:           k.Intent,
+			VolumeTier:       k.VolumeTier,
+			EstMonthlyVolume: k.EstMonthlyVolume,
+			Difficulty:       k.Difficulty,
+			Relevance:        k.Relevance,
+			IsPrimary:        k.IsPrimary,
+			IsLocked:         k.IsLocked,
+		})
+	}
+
+	opts, err := weaverAgent.WeaveTranslations(r.Context(), coreStrategy, locale, sourceKeys, baselineTranslations, kwInsights)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "optimization failed: "+err.Error())
+		return
+	}
+
+	dbOpts := make([]db.RepoSEOOptimization, 0, len(opts))
+	for _, o := range opts {
+		dbOpts = append(dbOpts, db.RepoSEOOptimization{
+			RepoID:               repo.ID,
+			Locale:               locale,
+			TranslationKey:       o.Key,
+			SourceEn:             o.SourceEn,
+			BaselineTranslation:  o.BaselineTranslation,
+			OptimizedTranslation: o.OptimizedTranslation,
+			InjectedKeywords:     o.InjectedKeywords,
+			Rationale:            o.Rationale,
+			ImpactTier:           o.ImpactTier,
+			CharacterLength:      o.CharacterLength,
+			PixelWidthDesktop:    o.PixelWidthDesktop,
+			IsTitleTruncated:     o.IsTitleTruncated,
+			ICUVariablesMatched:  o.ICUVariablesMatched,
+		})
+	}
+	_ = h.DB.UpsertSEOOptimizations(repo.ID, locale, dbOpts)
+
+	metrics := criticAgent.EvaluateGrowth(coreStrategy, locale, kwInsights, opts)
+	dbMetrics := &db.RepoSEOMetrics{
+		RepoID:                repo.ID,
+		Locale:                locale,
+		SearchVolumeBaseline:  metrics.SearchVolumeBaseline,
+		SearchVolumeOptimized: metrics.SearchVolumeOptimized,
+		SearchVolumeUpliftPct: metrics.SearchVolumeUpliftPct,
+		ProjectedCTRBaseline:  metrics.ProjectedCTRBaseline,
+		ProjectedCTROptimized: metrics.ProjectedCTROptimized,
+		ProjectedCTRUpliftPct: metrics.ProjectedCTRUpliftPct,
+		AvgKeywordDifficulty:  metrics.AvgKeywordDifficulty,
+		ReadabilityScore:      metrics.ReadabilityScore,
+		LocalTrustScore:       metrics.LocalTrustScore,
+		KeywordDensityPct:     metrics.KeywordDensityPct,
+		DensitySafe:           metrics.DensitySafe,
+		EstimatedRankingDays:  metrics.EstimatedRankingDays,
+	}
+	_ = h.DB.UpsertSEOMetrics(dbMetrics)
+
+	sim := simAgent.GenerateSimulation(coreStrategy, locale, kwInsights, opts)
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"locale":        locale,
+		"optimizations": dbOpts,
+		"metrics":       dbMetrics,
+		"simulation":    sim,
+	})
+}
+
+func (h *Handler) handleApplySEOToMatrix(w http.ResponseWriter, r *http.Request) {
+	repo, ok := h.authorizeRepo(w, r)
+	if !ok {
+		return
+	}
+
+	var req struct {
+		Locale string `json:"locale"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	opts, err := h.DB.GetSEOOptimizations(repo.ID, req.Locale)
+	if err != nil || len(opts) == 0 {
+		writeError(w, http.StatusBadRequest, "no SEO optimizations found to apply")
+		return
+	}
+
+	appliedCount := 0
+	for _, o := range opts {
+		if o.OptimizedTranslation != "" {
+			_ = h.DB.UpdateTranslationCell(repo.ID, o.Locale, o.TranslationKey, o.OptimizedTranslation)
+			appliedCount++
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":        "applied",
+		"applied_count": appliedCount,
+		"locale":        req.Locale,
+	})
+}
+

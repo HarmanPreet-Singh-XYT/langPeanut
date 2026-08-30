@@ -93,31 +93,107 @@ const AVAILABLE_LANGUAGES = [
   { code: 'hu', label: 'Hungarian', native: 'Magyar', tag: 'HU', region: 'eu' },
 ]
 
-const PROVIDER_MODELS: Record<string, { label: string; tag: string; models: string[] }> = {
-  openai: {
-    label: 'OpenAI',
-    tag: 'OAI',
-    models: ['gpt-4o-mini', 'gpt-4o', 'o3-mini', 'gpt-4-turbo'],
+export interface ModelMetadata {
+  id: string
+  name: string
+  contextWindow: string
+  maxOutput: string
+  inputPrice: string
+  outputPrice: string
+  desc?: string
+}
+
+const PROVIDER_MODELS: Record<string, { label: string; tag: string; models: string[]; details: Record<string, ModelMetadata> }> = {
+  gemini: {
+    label: 'Google Gemini',
+    tag: 'GEM',
+    models: [
+      'gemini-3.5-flash',
+      'gemini-3.7-flash',
+      'gemini-3.6-flash',
+      'gemini-3.5-flash-lite',
+      'gemini-3.1-pro-preview',
+      'gemini-3.1-flash-live-preview',
+      'gemini-2.5-flash',
+    ],
+    details: {
+      'gemini-3.5-flash': { id: 'gemini-3.5-flash', name: 'Gemini 3.5 Flash', contextWindow: '1,000,000', maxOutput: '8,192', inputPrice: '$1.50', outputPrice: '$9.00', desc: 'Optimized for fast, long-horizon agentic workflows and autonomous loops' },
+      'gemini-3.7-flash': { id: 'gemini-3.7-flash', name: 'Gemini 3.7 Flash', contextWindow: '1,000,000', maxOutput: '8,192', inputPrice: '$0.75', outputPrice: '$3.75', desc: 'High-intelligence workhorse model for coding and agentic tasks' },
+      'gemini-3.6-flash': { id: 'gemini-3.6-flash', name: 'Gemini 3.6 Flash', contextWindow: '1,000,000', maxOutput: '8,192', inputPrice: '$0.75', outputPrice: '$3.75', desc: 'Fast multimodal agentic execution' },
+      'gemini-3.5-flash-lite': { id: 'gemini-3.5-flash-lite', name: 'Gemini 3.5 Flash-Lite', contextWindow: '1,000,000', maxOutput: '8,192', inputPrice: '$0.30', outputPrice: '$2.50', desc: 'High-volume, cost-sensitive workhorse model' },
+      'gemini-3.1-pro-preview': { id: 'gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro', contextWindow: '1,000,000', maxOutput: '65,536', inputPrice: '$2.00', outputPrice: '$12.00', desc: 'Advanced reasoning and complex coding model' },
+      'gemini-3.1-flash-live-preview': { id: 'gemini-3.1-flash-live-preview', name: 'Gemini 3.1 Flash Live', contextWindow: '1,000,000', maxOutput: '8,192', inputPrice: '$0.75', outputPrice: '$3.75', desc: 'Low-latency audio-to-audio dialogue model' },
+      'gemini-2.5-flash': { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', contextWindow: '1,000,000', maxOutput: '8,192', inputPrice: '$0.10', outputPrice: '$0.40', desc: 'Ultra cost-efficient high-speed model' },
+    },
   },
   claude: {
     label: 'Anthropic Claude',
     tag: 'CLD',
-    models: ['claude-3-7-sonnet-20250219', 'claude-3-5-haiku-20241022'],
+    models: [
+      'claude-sonnet-5',
+      'claude-fable-5',
+      'claude-opus-5',
+      'claude-opus-4.8',
+      'claude-opus-4.7',
+      'claude-opus-4.6',
+      'claude-sonnet-4.6',
+      'claude-sonnet-4.5',
+      'claude-haiku-4.5',
+    ],
+    details: {
+      'claude-sonnet-5': { id: 'claude-sonnet-5', name: 'Claude Sonnet 5', contextWindow: '1,000,000', maxOutput: '128,000', inputPrice: '$2.00', outputPrice: '$10.00', desc: 'Optimal balance of frontier intelligence and speed' },
+      'claude-fable-5': { id: 'claude-fable-5', name: 'Claude Fable 5', contextWindow: '1,000,000', maxOutput: '128,000', inputPrice: '$10.00', outputPrice: '$50.00', desc: 'Frontier narrative and hyper-contextual reasoning' },
+      'claude-opus-5': { id: 'claude-opus-5', name: 'Claude Opus 5', contextWindow: '1,000,000', maxOutput: '128,000', inputPrice: '$5.00', outputPrice: '$25.00', desc: 'Flagship intelligence for deep code refactoring' },
+      'claude-opus-4.8': { id: 'claude-opus-4.8', name: 'Claude Opus 4.8', contextWindow: '1,000,000', maxOutput: '128,000', inputPrice: '$5.00', outputPrice: '$25.00', desc: 'Enterprise complex reasoning model' },
+      'claude-opus-4.7': { id: 'claude-opus-4.7', name: 'Claude Opus 4.7', contextWindow: '1,000,000', maxOutput: '128,000', inputPrice: '$5.00', outputPrice: '$25.00', desc: 'Advanced code synthesis and architectural modeling' },
+      'claude-opus-4.6': { id: 'claude-opus-4.6', name: 'Claude Opus 4.6', contextWindow: '1,000,000', maxOutput: '128,000', inputPrice: '$5.00', outputPrice: '$25.00', desc: 'High-precision multi-file AST transform engine' },
+      'claude-sonnet-4.6': { id: 'claude-sonnet-4.6', name: 'Claude Sonnet 4.6', contextWindow: '1,000,000', maxOutput: '128,000', inputPrice: '$3.00', outputPrice: '$15.00', desc: 'High-accuracy AST localization and grammar fidelity' },
+      'claude-sonnet-4.5': { id: 'claude-sonnet-4.5', name: 'Claude Sonnet 4.5', contextWindow: '200,000', maxOutput: '8,192', inputPrice: '$3.00', outputPrice: '$15.00', desc: 'Reliable production workhorse' },
+      'claude-haiku-4.5': { id: 'claude-haiku-4.5', name: 'Claude Haiku 4.5', contextWindow: '200,000', maxOutput: '64,000', inputPrice: '$1.00', outputPrice: '$5.00', desc: 'Ultra-fast translation and key validation' },
+    },
   },
-  gemini: {
-    label: 'Google Gemini',
-    tag: 'GEM',
-    models: ['gemini-3.5-flash', 'gemini-2.5-pro'],
+  openai: {
+    label: 'OpenAI',
+    tag: 'OAI',
+    models: [
+      'gpt-5.4-mini',
+      'gpt-5.6-sol',
+      'gpt-5.6-terra',
+      'gpt-5.6-luna',
+      'gpt-5.5',
+      'gpt-5.5-pro',
+      'gpt-5.4',
+      'gpt-5.4-pro',
+    ],
+    details: {
+      'gpt-5.4-mini': { id: 'gpt-5.4-mini', name: 'GPT-5.4 Mini', contextWindow: '400,000', maxOutput: '128,000', inputPrice: '$0.75', outputPrice: '$4.50', desc: 'Fast, efficient 400K context model' },
+      'gpt-5.6-sol': { id: 'gpt-5.6-sol', name: 'GPT-5.6 Sol (Flagship)', contextWindow: '1,050,000', maxOutput: '128,000', inputPrice: '$4.00', outputPrice: '$20.00', desc: 'Flagship generation with 1.05M context window' },
+      'gpt-5.6-terra': { id: 'gpt-5.6-terra', name: 'GPT-5.6 Terra', contextWindow: '1,050,000', maxOutput: '128,000', inputPrice: '$2.00', outputPrice: '$12.00', desc: 'Balanced flagship model for large-scale codebases' },
+      'gpt-5.6-luna': { id: 'gpt-5.6-luna', name: 'GPT-5.6 Luna', contextWindow: '1,050,000', maxOutput: '128,000', inputPrice: '$0.20', outputPrice: '$1.20', desc: 'High-speed, ultra-low-cost tier with 1.05M context' },
+      'gpt-5.5': { id: 'gpt-5.5', name: 'GPT-5.5 Standard', contextWindow: '500,000', maxOutput: '128,000', inputPrice: '$5.00', outputPrice: '$25.00', desc: 'Previous-generation standard architecture' },
+      'gpt-5.5-pro': { id: 'gpt-5.5-pro', name: 'GPT-5.5 Pro', contextWindow: '500,000', maxOutput: '128,000', inputPrice: '$30.00', outputPrice: '$180.00', desc: 'Maintained for intensive reasoning capabilities' },
+      'gpt-5.4': { id: 'gpt-5.4', name: 'GPT-5.4 Standard', contextWindow: '500,000', maxOutput: '128,000', inputPrice: '$2.50', outputPrice: '$15.00', desc: 'Standard production text & localization' },
+      'gpt-5.4-pro': { id: 'gpt-5.4-pro', name: 'GPT-5.4 Pro', contextWindow: '500,000', maxOutput: '128,000', inputPrice: '$30.00', outputPrice: '$180.00', desc: 'Intensive reasoning & complex code refactoring' },
+    },
   },
   deepl: {
     label: 'DeepL Translate',
     tag: 'DPL',
     models: ['deepl-default'],
+    details: {
+      'deepl-default': { id: 'deepl-default', name: 'DeepL Default', contextWindow: '128,000', maxOutput: '32,000', inputPrice: '$20.00', outputPrice: '$20.00', desc: 'Specialized neural translation engine' },
+    },
   },
   custom: {
     label: 'Custom / Local Ollama',
     tag: 'LOC',
     models: ['qwen2.5:32b', 'llama3.3:70b', 'deepseek-r1:32b', 'mistral-large'],
+    details: {
+      'qwen2.5:32b': { id: 'qwen2.5:32b', name: 'Qwen 2.5 32B', contextWindow: '128,000', maxOutput: '8,192', inputPrice: '$0.00', outputPrice: '$0.00', desc: 'Local open-weights model' },
+      'llama3.3:70b': { id: 'llama3.3:70b', name: 'LLaMA 3.3 70B', contextWindow: '128,000', maxOutput: '8,192', inputPrice: '$0.00', outputPrice: '$0.00', desc: 'Local open-weights model' },
+      'deepseek-r1:32b': { id: 'deepseek-r1:32b', name: 'DeepSeek R1 32B', contextWindow: '128,000', maxOutput: '8,192', inputPrice: '$0.00', outputPrice: '$0.00', desc: 'Local reasoning model' },
+      'mistral-large': { id: 'mistral-large', name: 'Mistral Large', contextWindow: '128,000', maxOutput: '8,192', inputPrice: '$0.00', outputPrice: '$0.00', desc: 'Local open-weights model' },
+    },
   },
 }
 
@@ -151,9 +227,9 @@ function RepoDetailsContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const repoIdParam = searchParams.get('id')
-  const initialTab = (searchParams.get('tab') as 'overview' | 'settings' | 'matrix' | 'runs' | 'bot') || 'overview'
+  const initialTab = (searchParams.get('tab') as 'overview' | 'settings' | 'matrix' | 'seo' | 'runs' | 'bot') || 'overview'
 
-  const [activeTab, setActiveTab] = useState<'overview' | 'settings' | 'matrix' | 'runs' | 'bot'>(initialTab)
+  const [activeTab, setActiveTab] = useState<'overview' | 'settings' | 'matrix' | 'seo' | 'runs' | 'bot'>(initialTab)
   const [authed, setAuthed] = useState(false)
   const [authChecked, setAuthChecked] = useState(false)
 
@@ -179,7 +255,7 @@ function RepoDetailsContent() {
   }, [router])
 
   // Sync tab with URL
-  const setTab = (t: 'overview' | 'settings' | 'matrix' | 'runs' | 'bot') => {
+  const setTab = (t: 'overview' | 'settings' | 'matrix' | 'seo' | 'runs' | 'bot') => {
     setActiveTab(t)
     const newUrl = `/repo?id=${repoIdParam}&tab=${t}`
     window.history.replaceState(null, '', newUrl)
@@ -209,8 +285,8 @@ function RepoDetailsContent() {
   const [localeSearch, setLocaleSearch] = useState<string>('')
   const [customLocaleInput, setCustomLocaleInput] = useState<string>('')
   const [selectedTone, setSelectedTone] = useState<string>('neutral')
-  const [selectedProvider, setSelectedProvider] = useState<string>('openai')
-  const [selectedModel, setSelectedModel] = useState<string>('gpt-4o-mini')
+  const [selectedProvider, setSelectedProvider] = useState<string>('gemini')
+  const [selectedModel, setSelectedModel] = useState<string>('gemini-3.5-flash')
   const [customPrompt, setCustomPrompt] = useState<string>('')
   const [customInstallCmd, setCustomInstallCmd] = useState<string>('')
   const [customBuildCmd, setCustomBuildCmd] = useState<string>('')
@@ -234,6 +310,22 @@ function RepoDetailsContent() {
   const [editingCell, setEditingCell] = useState<{ rowKey: string; colKey: string } | null>(null)
   const [cellValue, setCellValue] = useState('')
   const [savingCell, setSavingCell] = useState(false)
+
+  // SEO & Market Growth Studio State
+  const { data: seoData, mutate: mutateSEO } = useSWR<any>(
+    authed && repo ? `/api/repos/${repo.ID}/seo` : null,
+    fetcher
+  )
+  const [seoLocale, setSeoLocale] = useState<string>('ja')
+  const [seoGoal, setSeoGoal] = useState<string>('traffic')
+  const [seoScope, setSeoScope] = useState<string>('high_impact')
+  const [seoCompetitorInput, setSeoCompetitorInput] = useState<string>('')
+  const [seoSimView, setSeoSimView] = useState<'desktop' | 'mobile' | 'social'>('desktop')
+  const [scoutingSEO, setScoutingSEO] = useState(false)
+  const [optimizingSEO, setOptimizingSEO] = useState(false)
+  const [applyingSEO, setApplyingSEO] = useState(false)
+  const [resettingData, setResettingData] = useState(false)
+  const [deletingRepo, setDeletingRepo] = useState(false)
 
   // AI Translation Copilot State
   const [copilotState, setCopilotState] = useState<{
@@ -301,8 +393,8 @@ function RepoDetailsContent() {
     if (repo?.settings) {
       setSelectedLocales(repo.settings.Locales || ['es', 'fr', 'de'])
       setSelectedTone(repo.settings.TonePreset || 'neutral')
-      setSelectedProvider(repo.settings.Provider || 'openai')
-      setSelectedModel(repo.settings.Model || 'gpt-4o-mini')
+      setSelectedProvider(repo.settings.Provider || 'gemini')
+      setSelectedModel(repo.settings.Model || 'gemini-3.5-flash')
       setCustomPrompt(repo.settings.CustomPrompt || '')
       setCustomInstallCmd(repo.settings.CustomInstallCmd || '')
       setCustomBuildCmd(repo.settings.CustomBuildCmd || '')
@@ -324,6 +416,22 @@ function RepoDetailsContent() {
       setKeyConvention(repo.settings.KeyConvention || 'camelCase')
     }
   }, [repo])
+
+  // Sync SEO Strategy & Locales when seoData loads
+  useEffect(() => {
+    if (seoData?.strategy) {
+      if (seoData.strategy.goal) setSeoGoal(seoData.strategy.goal)
+      if (seoData.strategy.scope_tier) setSeoScope(seoData.strategy.scope_tier)
+      if (seoData.strategy.competitor_urls && seoData.strategy.competitor_urls.length > 0) {
+        setSeoCompetitorInput(seoData.strategy.competitor_urls.join(', '))
+      }
+      if (seoData.strategy.target_locales && seoData.strategy.target_locales.length > 0) {
+        if (!seoData.strategy.target_locales.includes(seoLocale)) {
+          setSeoLocale(seoData.strategy.target_locales[0])
+        }
+      }
+    }
+  }, [seoData])
 
   function showToast(text: string, type: 'success' | 'error' = 'success') {
     setToastMsg({ text, type })
@@ -568,7 +676,7 @@ function RepoDetailsContent() {
         if (data.locales_suggested && data.locales_suggested.length > 0) {
           setSelectedLocales(Array.from(new Set([...selectedLocales, ...data.locales_suggested])))
         }
-        showToast(`✨ Persona discovered: Tone '${data.recommended_tone}', ${data.brand_lexicon?.length || 0} brand terms locked`)
+        showToast(`Persona discovered: Tone '${data.recommended_tone}', ${data.brand_lexicon?.length || 0} brand terms locked`)
       } else {
         showToast(data.error || 'Failed to discover persona', 'error')
       }
@@ -576,6 +684,125 @@ function RepoDetailsContent() {
       showToast('Network error during persona discovery', 'error')
     } finally {
       setDiscoveringPersona(false)
+    }
+  }
+
+  async function handleSaveSEOStrategy() {
+    if (!repo) return
+    const comps = seoCompetitorInput
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+    try {
+      const res = await fetch(`/api/repos/${repo.ID}/seo/strategy`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          project_name: repo.Name,
+          goal: seoGoal,
+          scope_tier: seoScope,
+          target_locales: selectedLocales,
+          competitor_urls: comps,
+        }),
+      })
+      if (res.ok) {
+        showToast('SEO strategy and market targets saved')
+        mutateSEO()
+      } else {
+        showToast('Failed to save SEO strategy', 'error')
+      }
+    } catch {
+      showToast('Network error saving SEO strategy', 'error')
+    }
+  }
+
+  async function handleTriggerSEOScout() {
+    if (!repo) return
+    setScoutingSEO(true)
+    try {
+      const comps = seoCompetitorInput
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)
+      await fetch(`/api/repos/${repo.ID}/seo/strategy`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          project_name: repo.Name,
+          goal: seoGoal,
+          scope_tier: seoScope,
+          target_locales: selectedLocales,
+          competitor_urls: comps,
+        }),
+      })
+      const res = await fetch(`/api/repos/${repo.ID}/seo/scout`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ locale: seoLocale }),
+      })
+      const data = await res.json()
+      if (res.ok) {
+        showToast(`Scouted ${data.competitors?.length || 0} competitors & discovered ${data.keywords?.length || 0} keywords for [${seoLocale.toUpperCase()}]`)
+        mutateSEO()
+      } else {
+        showToast(data.error || 'Scout failed', 'error')
+      }
+    } catch {
+      showToast('Network error during competitor scouting', 'error')
+    } finally {
+      setScoutingSEO(false)
+    }
+  }
+
+  async function handleTriggerSEOOptimize() {
+    if (!repo) return
+    setOptimizingSEO(true)
+    try {
+      const res = await fetch(`/api/repos/${repo.ID}/seo/optimize`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ locale: seoLocale }),
+      })
+      const data = await res.json()
+      if (res.ok) {
+        showToast(`SEO-optimized ${data.optimizations?.length || 0} keys for [${seoLocale.toUpperCase()}]`)
+        mutateSEO()
+      } else {
+        showToast(data.error || 'SEO optimization failed', 'error')
+      }
+    } catch {
+      showToast('Network error during SEO optimization', 'error')
+    } finally {
+      setOptimizingSEO(false)
+    }
+  }
+
+  async function handleApplySEOToMatrix() {
+    if (!repo) return
+    setApplyingSEO(true)
+    try {
+      const res = await fetch(`/api/repos/${repo.ID}/seo/apply`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ locale: seoLocale }),
+      })
+      const data = await res.json()
+      if (res.ok) {
+        showToast(`Successfully applied ${data.applied_count || 0} SEO translations to Live Matrix`)
+        mutateSEO()
+        mutateMatrix()
+      } else {
+        showToast(data.error || 'Failed to apply SEO keys', 'error')
+      }
+    } catch {
+      showToast('Network error applying SEO translations', 'error')
+    } finally {
+      setApplyingSEO(false)
     }
   }
 
@@ -623,6 +850,63 @@ function RepoDetailsContent() {
       showToast('Network error during dead key pruning', 'error')
     } finally {
       setPruningKeys(false)
+    }
+  }
+
+  async function handleResetRepoData() {
+    if (!repo) return
+    const confirmed = window.confirm(
+      `Are you sure you want to reset all stored localization data for ${repo.Owner}/${repo.Name}?\n\nThis will permanently clear all translation matrix keys, jobs, execution logs, and SEO intelligence so you can start completely fresh from the beginning.`
+    )
+    if (!confirmed) return
+
+    setResettingData(true)
+    try {
+      const res = await fetch(`/api/repos/${repo.ID}/reset`, {
+        method: 'POST',
+        credentials: 'include',
+      })
+      const data = await res.json()
+      if (res.ok) {
+        showToast(data.message || 'Repository data has been reset to baseline.')
+        mutateRepos()
+        mutateMatrix()
+        mutateJobs()
+        mutateSEO()
+      } else {
+        showToast(data.error || 'Failed to reset repository data', 'error')
+      }
+    } catch {
+      showToast('Network error while resetting repository data', 'error')
+    } finally {
+      setResettingData(false)
+    }
+  }
+
+  async function handleDeleteRepo() {
+    if (!repo) return
+    const confirmed = window.confirm(
+      `Are you sure you want to permanently delete repository ${repo.Owner}/${repo.Name}?\n\nThis will remove the repository connection, all translation matrices, and cached git mirrors. This action cannot be undone.`
+    )
+    if (!confirmed) return
+
+    setDeletingRepo(true)
+    try {
+      const res = await fetch(`/api/repos/${repo.ID}`, {
+        method: 'DELETE',
+        credentials: 'include',
+      })
+      const data = await res.json()
+      if (res.ok) {
+        showToast(data.message || 'Repository deleted successfully.')
+        router.push('/dashboard')
+      } else {
+        showToast(data.error || 'Failed to delete repository', 'error')
+        setDeletingRepo(false)
+      }
+    } catch {
+      showToast('Network error while deleting repository', 'error')
+      setDeletingRepo(false)
     }
   }
 
@@ -902,6 +1186,7 @@ jobs:
             { id: 'overview', label: 'Overview' },
             { id: 'settings', label: 'Settings & Strategy' },
             { id: 'matrix', label: 'Translation Matrix' },
+            { id: 'seo', label: 'SEO & Growth Studio' },
             { id: 'runs', label: 'Runs & Logs' },
             { id: 'bot', label: 'PR Bot & Webhooks' },
           ].map((t) => (
@@ -1267,14 +1552,48 @@ jobs:
                   onChange={(e) => setSelectedModel(e.target.value)}
                   className="w-full rounded-xl bg-slate-900 border border-white/10 px-3.5 py-2 text-xs text-white focus:outline-none focus:border-sky-400"
                 >
-                  {PROVIDER_MODELS[selectedProvider]?.models.map((m) => (
-                    <option key={m} value={m}>
-                      {m}
-                    </option>
-                  ))}
+                  {PROVIDER_MODELS[selectedProvider]?.models.map((m) => {
+                    const d = PROVIDER_MODELS[selectedProvider]?.details?.[m]
+                    return (
+                      <option key={m} value={m}>
+                        {d ? `${d.name} (${d.inputPrice} in / ${d.outputPrice} out)` : m}
+                      </option>
+                    )
+                  })}
                 </select>
               </div>
             </div>
+
+            {/* Model Architecture & Pricing Specs Badge */}
+            {(() => {
+              const currentDetail = PROVIDER_MODELS[selectedProvider]?.details?.[selectedModel]
+              if (!currentDetail) return null
+              return (
+                <div className="p-3.5 rounded-xl bg-slate-900/90 border border-sky-500/20 grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                  <div>
+                    <span className="text-[10px] uppercase font-bold text-slate-500 block">Context Limit</span>
+                    <span className="font-mono text-sky-300 font-bold">{currentDetail.contextWindow} tokens</span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] uppercase font-bold text-slate-500 block">Max Output</span>
+                    <span className="font-mono text-slate-200 font-bold">{currentDetail.maxOutput} tokens</span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] uppercase font-bold text-slate-500 block">Input / 1M Tok</span>
+                    <span className="font-mono text-emerald-400 font-bold">{currentDetail.inputPrice}</span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] uppercase font-bold text-slate-500 block">Output / 1M Tok</span>
+                    <span className="font-mono text-emerald-400 font-bold">{currentDetail.outputPrice}</span>
+                  </div>
+                  {currentDetail.desc && (
+                    <div className="col-span-2 sm:col-span-4 pt-1 text-[11px] text-slate-400 border-t border-white/[0.04]">
+                      {currentDetail.desc}
+                    </div>
+                  )}
+                </div>
+              )
+            })()}
 
             {/* Global Key Status Banner & Repo Override */}
             <div className="rounded-xl border border-white/[0.08] bg-slate-900/60 p-4 space-y-3">
@@ -1419,9 +1738,9 @@ jobs:
                     type="button"
                     onClick={discoverPersona}
                     disabled={discoveringPersona}
-                    className="text-[11px] text-purple-400 hover:text-purple-300 font-semibold cursor-pointer"
+                    className="rounded-xl bg-purple-600/20 hover:bg-purple-600/30 border border-purple-500/40 text-purple-300 text-xs font-semibold px-3.5 py-1.5 flex items-center gap-1.5 cursor-pointer transition-all shrink-0"
                   >
-                    {discoveringPersona ? 'Mining…' : '✨ Auto-Detect Terms'}
+                    {discoveringPersona ? 'Mining Assets…' : 'Auto-Discover Persona & Tone'}
                   </button>
                 </div>
                 <input
@@ -1498,6 +1817,52 @@ jobs:
               </button>
             </div>
           </div>
+
+          {/* ── Section 6: Danger Zone (Reset Data & Delete Repository) ── */}
+          <div className="glass-panel p-6 rounded-2xl border border-rose-500/20 bg-rose-950/10 space-y-4">
+            <div>
+              <h3 className="text-xs font-bold text-rose-300 uppercase tracking-wider flex items-center gap-2">
+                <span>Danger Zone</span> — Reset Localization State & Repository Management
+              </h3>
+              <p className="text-[11px] text-slate-400 mt-0.5">
+                Permanently purge derived translation matrices, job run history, and SEO intelligence to start fresh from the beginning, or remove this repository.
+              </p>
+            </div>
+
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pt-3 border-t border-rose-500/10">
+              <div className="space-y-0.5">
+                <h4 className="text-xs font-bold text-slate-200">Reset Repository Data (Start Fresh)</h4>
+                <p className="text-[11px] text-slate-400">
+                  Clears all translation matrix key-values, job logs, and SEO competitor caches. Preserves your settings and API keys.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={handleResetRepoData}
+                disabled={resettingData}
+                className="rounded-xl bg-rose-600/20 hover:bg-rose-600/30 border border-rose-500/40 text-rose-300 hover:text-rose-200 text-xs font-semibold px-4 py-2 flex items-center gap-1.5 transition-all cursor-pointer shrink-0"
+              >
+                {resettingData ? 'Resetting Data…' : 'Reset All Localization Data'}
+              </button>
+            </div>
+
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pt-3 border-t border-rose-500/10">
+              <div className="space-y-0.5">
+                <h4 className="text-xs font-bold text-slate-200">Delete Repository</h4>
+                <p className="text-[11px] text-slate-400">
+                  Permanently deletes this repository, its configuration, translation matrices, and cached git mirrors from langPeanut Cloud.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={handleDeleteRepo}
+                disabled={deletingRepo}
+                className="rounded-xl bg-rose-600 hover:bg-rose-500 disabled:bg-rose-900 text-white text-xs font-semibold px-4 py-2 shadow-lg shadow-rose-900/40 flex items-center gap-1.5 transition-all cursor-pointer shrink-0"
+              >
+                {deletingRepo ? 'Deleting Repo…' : 'Delete Repository'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -1526,14 +1891,14 @@ jobs:
                 disabled={pruningKeys}
                 className="rounded-xl bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-300 text-xs font-medium px-3.5 py-1.5 cursor-pointer flex items-center gap-1.5 transition-all"
               >
-                {pruningKeys ? 'Pruning…' : '🧹 Prune Dead Keys'}
+                {pruningKeys ? 'Pruning…' : 'Prune Dead Keys'}
               </button>
               <button
                 type="button"
                 onClick={copyGitHubActionsYAML}
                 className="rounded-xl bg-white/[0.05] hover:bg-white/[0.1] border border-white/10 text-slate-300 text-xs font-medium px-3.5 py-1.5 cursor-pointer"
               >
-                {copiedYAML ? '✓ Copied' : 'Export Actions YAML'}
+                {copiedYAML ? 'Copied' : 'Export Actions YAML'}
               </button>
             </div>
           </div>
@@ -1617,7 +1982,7 @@ jobs:
                                       title="Open AI Copilot"
                                       className="bg-purple-600/80 hover:bg-purple-500 text-white px-2 py-1 rounded text-[10px] font-bold flex items-center gap-1 cursor-pointer"
                                     >
-                                      ✨
+                                      AI
                                     </button>
                                   </div>
                                 ) : (
@@ -1637,7 +2002,7 @@ jobs:
                                       title="AI Translation Copilot"
                                       className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-purple-500/20 text-purple-400 hover:text-purple-300 text-[10px] font-mono shrink-0 flex items-center gap-0.5 border border-purple-500/30 cursor-pointer"
                                     >
-                                      ✨ AI
+                                      AI Copilot
                                     </button>
                                   </div>
                                 )}
@@ -1660,8 +2025,8 @@ jobs:
                 {/* Header */}
                 <div className="flex items-center justify-between border-b border-white/10 pb-3.5">
                   <div className="flex items-center gap-2.5">
-                    <div className="w-8 h-8 rounded-xl bg-purple-500/20 border border-purple-500/40 text-purple-300 flex items-center justify-center font-bold text-sm shadow-inner">
-                      ✨
+                    <div className="w-8 h-8 rounded-xl bg-purple-500/20 border border-purple-500/40 text-purple-300 flex items-center justify-center font-bold text-xs font-mono shadow-inner">
+                      AI
                     </div>
                     <div>
                       <h3 className="text-sm font-bold text-white flex items-center gap-2">
@@ -1678,9 +2043,9 @@ jobs:
                   <button
                     type="button"
                     onClick={() => setCopilotState((prev) => ({ ...prev, isOpen: false }))}
-                    className="text-slate-400 hover:text-white p-1 text-lg font-bold cursor-pointer"
+                    className="text-slate-400 hover:text-white p-1 text-sm font-bold cursor-pointer"
                   >
-                    ✕
+                    Close
                   </button>
                 </div>
 
@@ -1703,10 +2068,10 @@ jobs:
                   </label>
                   <div className="flex flex-wrap gap-2">
                     {[
-                      { id: 'shorter', label: '⚡ Make Shorter (-30%)', hint: 'Compact synonym for mobile buttons' },
-                      { id: 'casual', label: '😊 Casual & Friendly', hint: 'Warm colloquial phrasing' },
-                      { id: 'formal', label: '👔 Formal & Enterprise', hint: 'B2B professional phrasing' },
-                      { id: 'brand_safe', label: '🛡️ Brand Safe', hint: 'Keep technical names untouched' },
+                      { id: 'shorter', label: 'Make Shorter (-30%)', hint: 'Compact synonym for mobile buttons' },
+                      { id: 'casual', label: 'Casual & Friendly', hint: 'Warm colloquial phrasing' },
+                      { id: 'formal', label: 'Formal & Enterprise', hint: 'B2B professional phrasing' },
+                      { id: 'brand_safe', label: 'Brand Safe', hint: 'Keep technical names untouched' },
                     ].map((preset) => (
                       <button
                         key={preset.id}
@@ -1746,7 +2111,7 @@ jobs:
                         disabled={copilotState.loading}
                         className="rounded-xl bg-purple-600 hover:bg-purple-500 disabled:bg-purple-900 text-white text-xs font-semibold px-4 py-2 flex items-center gap-1.5 cursor-pointer shadow-lg shadow-purple-600/30"
                       >
-                        {copilotState.loading ? 'Generating…' : 'Regenerate ✨'}
+                        {copilotState.loading ? 'Generating…' : 'Regenerate'}
                       </button>
                     </div>
                   </div>
@@ -1813,6 +2178,604 @@ jobs:
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* ─── TAB: SEO & GROWTH STUDIO ────────────────────────────────────────── */}
+      {activeTab === 'seo' && (
+        <div className="space-y-6">
+          {/* Header & Intake Bar */}
+          <div className="glass-panel p-6 rounded-3xl border border-sky-500/20 bg-gradient-to-r from-sky-950/20 via-slate-900/40 to-indigo-950/20 space-y-5">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div>
+                <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-sky-500/10 border border-sky-500/30 text-sky-300 text-xs font-semibold mb-2">
+                  <span>Autonomous Multilingual SEO & Market Growth Engine</span>
+                </div>
+                <h2 className="text-xl font-bold text-white tracking-tight">Regional SERP & Keyword Optimization Studio</h2>
+                <p className="text-xs text-slate-400 mt-1 max-w-2xl leading-relaxed">
+                  Transform technical AST localization keys into high-ranking, region-dominating search copy.
+                  Scout local competitors, discover intent-rich native keywords, simulate live Google SERPs, and preview growth metrics before deploying.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2.5">
+                <button
+                  type="button"
+                  onClick={handleTriggerSEOScout}
+                  disabled={scoutingSEO}
+                  className="rounded-xl bg-sky-600/20 hover:bg-sky-600/30 border border-sky-500/40 text-sky-200 font-semibold px-4 py-2.5 text-xs transition-all flex items-center gap-2 cursor-pointer shadow-lg shadow-sky-950/40"
+                >
+                  <svg className={`w-3.5 h-3.5 ${scoutingSEO ? 'animate-spin' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                    <circle cx="11" cy="11" r="8" />
+                    <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                  </svg>
+                  <span>{scoutingSEO ? 'Scouting SERP…' : 'Scout Competitors & Keywords'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleTriggerSEOOptimize}
+                  disabled={optimizingSEO}
+                  className="rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-semibold px-5 py-2.5 text-xs shadow-lg shadow-blue-600/30 transition-all flex items-center gap-2 cursor-pointer"
+                >
+                  <svg className={`w-3.5 h-3.5 ${optimizingSEO ? 'animate-spin' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                    <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" />
+                  </svg>
+                  <span>{optimizingSEO ? 'Weaving Copy…' : 'Run Semantic Copy Weaver'}</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Strategic Controls Bar */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 pt-3 border-t border-white/[0.06]">
+              {/* Target Locale Selector */}
+              <div className="space-y-1.5">
+                <label className="text-[11px] font-semibold text-slate-300 uppercase tracking-wider">Target Market / Language</label>
+                <select
+                  value={seoLocale}
+                  onChange={(e) => setSeoLocale(e.target.value)}
+                  className="w-full rounded-xl bg-slate-900/80 border border-white/10 text-white text-xs px-3 py-2 font-medium focus:border-sky-500 focus:outline-none"
+                >
+                  {selectedLocales.map((loc) => {
+                    const found = AVAILABLE_LANGUAGES.find((l) => l.code === loc)
+                    return (
+                      <option key={loc} value={loc}>
+                        {found ? `${found.label} (${found.native})` : loc.toUpperCase()}
+                      </option>
+                    )
+                  })}
+                </select>
+              </div>
+
+              {/* Commercial Goal Selector */}
+              <div className="space-y-1.5">
+                <label className="text-[11px] font-semibold text-slate-300 uppercase tracking-wider">Growth & SEO Goal</label>
+                <select
+                  value={seoGoal}
+                  onChange={(e) => setSeoGoal(e.target.value)}
+                  className="w-full rounded-xl bg-slate-900/80 border border-white/10 text-white text-xs px-3 py-2 font-medium focus:border-sky-500 focus:outline-none"
+                >
+                  <option value="traffic">Top-of-Funnel Search Traffic</option>
+                  <option value="conversion">High-Intent Buyer Conversion</option>
+                  <option value="trust">Local Trust & Regional Compliance</option>
+                </select>
+              </div>
+
+              {/* Key Scope Tier */}
+              <div className="space-y-1.5">
+                <label className="text-[11px] font-semibold text-slate-300 uppercase tracking-wider">Optimization Scope</label>
+                <select
+                  value={seoScope}
+                  onChange={(e) => setSeoScope(e.target.value)}
+                  className="w-full rounded-xl bg-slate-900/80 border border-white/10 text-white text-xs px-3 py-2 font-medium focus:border-sky-500 focus:outline-none"
+                >
+                  <option value="high_impact">High-Impact Keys Only (Hero, Meta, FAQs)</option>
+                  <option value="full_site">Full-Site Optimization (All Keys)</option>
+                </select>
+              </div>
+
+              {/* Competitors Input */}
+              <div className="space-y-1.5">
+                <label className="text-[11px] font-semibold text-slate-300 uppercase tracking-wider">Competitors (Optional / Auto-Scout)</label>
+                <input
+                  type="text"
+                  placeholder="e.g. competitor.jp, rival.de"
+                  value={seoCompetitorInput}
+                  onChange={(e) => setSeoCompetitorInput(e.target.value)}
+                  onBlur={handleSaveSEOStrategy}
+                  className="w-full rounded-xl bg-slate-900/80 border border-white/10 text-white text-xs px-3 py-2 placeholder:text-slate-600 focus:border-sky-500 focus:outline-none"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Predictive Growth & Metrics Scorecard */}
+          {(() => {
+            const metrics = seoData?.metrics?.[seoLocale]
+            return (
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
+                <div className="glass-panel p-4 rounded-2xl space-y-1 border border-emerald-500/20 bg-emerald-950/10">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-semibold uppercase tracking-wider text-emerald-400">Target Search Reach</span>
+                    {metrics ? (
+                      <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300">
+                        +{metrics.search_volume_uplift_pct.toFixed(0)}%
+                      </span>
+                    ) : (
+                      <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-800 text-slate-400">
+                        Pending Analysis
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-2xl font-bold text-white">
+                    {metrics ? (
+                      <>
+                        {metrics.search_volume_optimized.toLocaleString()}{' '}
+                        <span className="text-xs font-normal text-slate-400">searches/mo</span>
+                      </>
+                    ) : (
+                      <span className="text-slate-500 font-normal text-lg">Not analyzed</span>
+                    )}
+                  </p>
+                  <p className="text-[11px] text-slate-400">
+                    {metrics
+                      ? `Baseline without SEO: ${metrics.search_volume_baseline.toLocaleString()}/mo`
+                      : 'Run Semantic Copy Weaver to calculate reach'}
+                  </p>
+                </div>
+
+                <div className="glass-panel p-4 rounded-2xl space-y-1 border border-sky-500/20 bg-sky-950/10">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-semibold uppercase tracking-wider text-sky-400">Projected SERP CTR</span>
+                    {metrics ? (
+                      <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-sky-500/20 text-sky-300">
+                        +{metrics.projected_ctr_uplift_pct.toFixed(0)}%
+                      </span>
+                    ) : (
+                      <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-800 text-slate-400">
+                        Pending Analysis
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-2xl font-bold text-white">
+                    {metrics ? (
+                      `${metrics.projected_ctr_optimized.toFixed(1)}%`
+                    ) : (
+                      <span className="text-slate-500 font-normal text-lg">Not modeled</span>
+                    )}
+                  </p>
+                  <p className="text-[11px] text-slate-400">
+                    {metrics
+                      ? `Baseline un-optimized: ${metrics.projected_ctr_baseline.toFixed(1)}%`
+                      : 'Models click-through curve vs. rank position'}
+                  </p>
+                </div>
+
+                <div className="glass-panel p-4 rounded-2xl space-y-1 border border-purple-500/20 bg-purple-950/10">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-semibold uppercase tracking-wider text-purple-400">Local Trust Factor</span>
+                    {metrics ? (
+                      <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-300">Native Idioms</span>
+                    ) : (
+                      <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-800 text-slate-400">
+                        Pending Analysis
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-2xl font-bold text-white">
+                    {metrics ? (
+                      <>
+                        {metrics.local_trust_score}<span className="text-xs font-normal text-slate-400">/100</span>
+                      </>
+                    ) : (
+                      <span className="text-slate-500 font-normal text-lg">Not evaluated</span>
+                    )}
+                  </p>
+                  <p className="text-[11px] text-slate-400">
+                    {metrics
+                      ? `Est. Top 10 Ranking: ~${metrics.estimated_ranking_days} days`
+                      : 'Evaluates native phrasing & market authority'}
+                  </p>
+                </div>
+
+                <div className="glass-panel p-4 rounded-2xl space-y-1 border border-amber-500/20 bg-amber-950/10">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-semibold uppercase tracking-wider text-amber-400">Keyword Density</span>
+                    {metrics ? (
+                      <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                        metrics.density_safe ? 'bg-emerald-500/20 text-emerald-300' : 'bg-rose-500/20 text-rose-300'
+                      }`}>
+                        {metrics.density_safe ? 'Safe & Natural' : 'High Density'}
+                      </span>
+                    ) : (
+                      <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-800 text-slate-400">
+                        Pending Analysis
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-2xl font-bold text-white">
+                    {metrics ? (
+                      `${metrics.keyword_density_pct.toFixed(1)}%`
+                    ) : (
+                      <span className="text-slate-500 font-normal text-lg">Not scanned</span>
+                    )}
+                  </p>
+                  <p className="text-[11px] text-slate-400">
+                    {metrics
+                      ? (metrics.density_safe ? 'Anti-stuffing guard: Clean' : 'Warning: High keyword concentration')
+                      : 'Guards against search penalty stuffing'}
+                  </p>
+                </div>
+              </div>
+            )
+          })()}
+
+          {/* Regional Competitor Intelligence & High-Intent Keyword Cloud */}
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+            {/* Competitors List */}
+            <div className="lg:col-span-6 glass-panel p-5 rounded-2xl space-y-4">
+              <div className="flex items-center justify-between border-b border-white/[0.06] pb-3">
+                <div className="flex items-center gap-2">
+                  <h3 className="text-sm font-bold text-white">Regional Competitors in [{seoLocale.toUpperCase()}]</h3>
+                </div>
+                <span className="text-[11px] text-slate-400">
+                  {seoData?.competitors?.[seoLocale]?.length || 0} competitors tracked
+                </span>
+              </div>
+
+              {(!seoData?.competitors?.[seoLocale] || seoData.competitors[seoLocale].length === 0) ? (
+                <div className="py-8 text-center space-y-2">
+                  <p className="text-xs text-slate-400">No regional competitor data scouted yet.</p>
+                  <button
+                    onClick={handleTriggerSEOScout}
+                    disabled={scoutingSEO}
+                    className="text-xs text-sky-400 hover:text-sky-300 font-semibold underline cursor-pointer"
+                  >
+                    Click to Scout Market Competitors
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-3 max-h-[300px] overflow-y-auto pr-1">
+                  {seoData.competitors[seoLocale].map((comp: any, idx: number) => (
+                    <div key={idx} className="p-3 rounded-xl bg-slate-900/60 border border-white/[0.05] space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-blue-600/30 text-sky-300">
+                            #{comp.rank || idx + 1}
+                          </span>
+                          <span className="text-xs font-bold text-white">{comp.domain}</span>
+                        </div>
+                        {comp.is_discovered && (
+                          <span className="text-[9px] px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-300 font-semibold">
+                            AI Discovered
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-xs text-slate-300 font-medium line-clamp-1">{comp.title}</p>
+                      <p className="text-[11px] text-slate-400 line-clamp-2">{comp.meta_description}</p>
+                      {comp.keywords && comp.keywords.length > 0 && (
+                        <div className="flex flex-wrap gap-1 pt-1">
+                          {comp.keywords.slice(0, 4).map((kw: string, kidx: number) => (
+                            <span key={kidx} className="text-[10px] px-1.5 py-0.2 rounded bg-slate-800 text-slate-300 border border-white/5">
+                              {kw}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Keyword Intelligence Radar */}
+            <div className="lg:col-span-6 glass-panel p-5 rounded-2xl space-y-4">
+              <div className="flex items-center justify-between border-b border-white/[0.06] pb-3">
+                <div className="flex items-center gap-2">
+                  <h3 className="text-sm font-bold text-white">High-Intent Regional Keywords [{seoLocale.toUpperCase()}]</h3>
+                </div>
+                <span className="text-[11px] text-slate-400">
+                  {seoData?.keywords?.[seoLocale]?.length || 0} target queries
+                </span>
+              </div>
+
+              {(!seoData?.keywords?.[seoLocale] || seoData.keywords[seoLocale].length === 0) ? (
+                <div className="py-8 text-center space-y-2">
+                  <p className="text-xs text-slate-400">No keyword pool synthesized yet.</p>
+                  <button
+                    onClick={handleTriggerSEOScout}
+                    disabled={scoutingSEO}
+                    className="text-xs text-sky-400 hover:text-sky-300 font-semibold underline cursor-pointer"
+                  >
+                    Scout Regional Search Intelligence
+                  </button>
+                </div>
+              ) : (
+                <div className="flex flex-wrap gap-2 max-h-[300px] overflow-y-auto pr-1">
+                  {seoData.keywords[seoLocale].map((kw: any, idx: number) => (
+                    <div
+                      key={idx}
+                      className={`p-2.5 rounded-xl border transition-all ${
+                        kw.is_primary
+                          ? 'bg-sky-950/40 border-sky-500/40 text-sky-200'
+                          : 'bg-slate-900/60 border-white/[0.06] text-slate-300'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-bold text-white">{kw.keyword}</span>
+                        {kw.is_primary && <span className="text-[9px] px-1 py-0.5 rounded bg-sky-500/30 text-sky-200 font-bold">Primary</span>}
+                      </div>
+                      <div className="flex items-center gap-2 mt-1 text-[10px] text-slate-400 font-mono">
+                        <span>~{kw.est_monthly_volume?.toLocaleString()} vol/mo</span>
+                        <span>•</span>
+                        <span>KD: {kw.difficulty}</span>
+                        <span>•</span>
+                        <span className="capitalize">{kw.intent}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Multi-Modal Visual SERP & Social Preview Simulator */}
+          <div className="glass-panel p-6 rounded-3xl space-y-4 border border-white/[0.08]">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-white/[0.06] pb-4">
+              <div>
+                <h3 className="text-base font-bold text-white flex items-center gap-2">
+                  <span>Multi-Modal Visual SERP & Share Simulator</span>
+                  <span className="text-[10px] uppercase font-mono px-2 py-0.5 rounded bg-slate-800 text-sky-400">
+                    [{seoLocale}]
+                  </span>
+                </h3>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Live emulation of Google Search snippets and Social OpenGraph share cards for the target country.
+                </p>
+              </div>
+
+              <div className="flex items-center p-1 rounded-xl bg-slate-900 border border-white/10">
+                <button
+                  type="button"
+                  onClick={() => setSeoSimView('desktop')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                    seoSimView === 'desktop' ? 'bg-blue-600 text-white shadow' : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  Desktop (600px)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSeoSimView('mobile')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                    seoSimView === 'mobile' ? 'bg-blue-600 text-white shadow' : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  Mobile
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSeoSimView('social')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                    seoSimView === 'social' ? 'bg-blue-600 text-white shadow' : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  Social OG Card
+                </button>
+              </div>
+            </div>
+
+            {/* Render Selected Visual Mockup */}
+            {(() => {
+              const opts = seoData?.optimizations?.[seoLocale] || []
+              const sim = seoData?.simulations?.[seoLocale]
+              const hasData = Boolean(sim || opts.length > 0)
+
+              if (!hasData) {
+                return (
+                  <div className="py-12 text-center space-y-2 max-w-md mx-auto">
+                    <p className="text-xs text-slate-400">No SERP simulation generated yet for [{seoLocale.toUpperCase()}].</p>
+                    <button
+                      type="button"
+                      onClick={handleTriggerSEOOptimize}
+                      disabled={optimizingSEO}
+                      className="text-xs text-sky-400 hover:text-sky-300 font-semibold underline cursor-pointer"
+                    >
+                      Run Semantic Copy Weaver to generate live Google Search & Social snippets
+                    </button>
+                  </div>
+                )
+              }
+
+              let titleTag = sim?.title_tag || `${repo?.Name || 'Application'} | Optimized Platform`
+              let metaDesc = sim?.meta_description || `Discover ${repo?.Name || 'Application'} for fast workflows and high conversion.`
+              let displayUrl = sim?.display_url || `https://${repo?.Name?.toLowerCase()}.io/${seoLocale}`
+              let isTruncated = sim ? sim.is_title_truncated : false
+
+              if (!sim && opts.length > 0) {
+                opts.forEach((o: any) => {
+                  const k = o.translation_key.toLowerCase()
+                  if (k.includes('title') || k.includes('hero')) {
+                    if (o.optimized_translation) {
+                      titleTag = o.optimized_translation
+                      isTruncated = o.is_title_truncated
+                    }
+                  } else if (k.includes('desc')) {
+                    if (o.optimized_translation) metaDesc = o.optimized_translation
+                  }
+                })
+              }
+
+              if (seoSimView === 'social') {
+                return (
+                  <div className="max-w-xl mx-auto rounded-2xl border border-white/10 bg-slate-950 overflow-hidden shadow-2xl space-y-3 p-4">
+                    <div className="h-44 rounded-xl bg-gradient-to-tr from-sky-900 via-indigo-950 to-slate-900 flex items-center justify-center border border-white/10 relative overflow-hidden">
+                      <div className="text-center space-y-1 p-4 z-10">
+                        <span className="text-xs font-mono font-bold text-sky-400 uppercase tracking-widest">{repo?.Name}</span>
+                        <h4 className="text-lg font-bold text-white">{titleTag}</h4>
+                      </div>
+                      <div className="absolute inset-0 bg-blue-500/10 blur-xl"></div>
+                    </div>
+                    <div className="space-y-1">
+                      <span className="text-[11px] font-mono text-slate-500 uppercase">{displayUrl.replace('https://', '')}</span>
+                      <h4 className="text-sm font-bold text-white leading-snug">{sim?.og_card_title || titleTag}</h4>
+                      <p className="text-xs text-slate-400 line-clamp-2">{sim?.og_card_description || metaDesc}</p>
+                    </div>
+                  </div>
+                )
+              }
+
+              return (
+                <div className={`p-6 rounded-2xl bg-[#202124] border border-white/5 font-sans text-left mx-auto shadow-2xl space-y-2 ${
+                  seoSimView === 'mobile' ? 'max-w-md' : 'max-w-2xl'
+                }`}>
+                  <div className="flex items-center gap-2">
+                    <div className="w-6 h-6 rounded-full bg-slate-700 flex items-center justify-center text-[10px] text-white font-bold">
+                      {repo?.Name ? repo.Name[0].toUpperCase() : 'A'}
+                    </div>
+                    <div className="space-y-0.5">
+                      <p className="text-xs text-[#dadce0] font-medium">{repo?.Name}</p>
+                      <p className="text-[11px] text-[#bdc1c6] font-mono">{displayUrl}</p>
+                    </div>
+                  </div>
+
+                  <div className="space-y-1">
+                    <h3 className="text-lg text-[#8ab4f8] hover:underline cursor-pointer font-medium leading-snug">
+                      {titleTag}
+                    </h3>
+                    <p className="text-sm text-[#bdc1c6] leading-relaxed">
+                      {metaDesc}
+                    </p>
+                  </div>
+
+                  {sim?.rich_snippet_faq && sim.rich_snippet_faq.length > 0 && (
+                    <div className="pt-2 border-t border-white/[0.06] space-y-1">
+                      {sim.rich_snippet_faq.map((faq: string, fidx: number) => (
+                        <div key={fidx} className="text-xs text-[#dadce0] flex items-center gap-1.5">
+                          <span className="text-sky-400 font-bold">›</span>
+                          <span>{faq}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <div className="flex items-center justify-between pt-2 text-[11px] font-mono text-slate-500 border-t border-white/[0.04]">
+                    <span>Target Market: [{seoLocale.toUpperCase()}]</span>
+                    {isTruncated ? (
+                      <span className="text-rose-400 font-semibold">Pixel Truncated (&gt; 600px)</span>
+                    ) : (
+                      <span className="text-emerald-400 font-semibold">Desktop Safe Width (≤ 600px)</span>
+                    )}
+                  </div>
+                </div>
+              )
+            })()}
+          </div>
+
+          {/* Interactive Semantic Copy Diff Matrix */}
+          <div className="glass-panel p-6 rounded-3xl space-y-5 border border-white/[0.08]">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-white/[0.06] pb-4">
+              <div>
+                <h3 className="text-base font-bold text-white flex items-center gap-2">
+                  <span>Semantic Copy Diff & Keyword Injection Matrix</span>
+                  <span className="text-xs font-mono px-2 py-0.5 rounded bg-slate-800 text-sky-300">
+                    [{seoLocale.toUpperCase()}]
+                  </span>
+                </h3>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Side-by-side comparison of baseline literal translation vs. SEO-optimized copy with search intent reasoning.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleApplySEOToMatrix}
+                  disabled={applyingSEO || !seoData?.optimizations?.[seoLocale]}
+                  className="rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-800 disabled:text-slate-600 text-white text-xs font-semibold px-5 py-2.5 shadow-lg shadow-emerald-600/30 flex items-center gap-2 cursor-pointer transition-all"
+                >
+                  <svg className={`w-3.5 h-3.5 ${applyingSEO ? 'animate-spin' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                    <polyline points="20 6 9 17 4 12" />
+                  </svg>
+                  <span>{applyingSEO ? 'Applying to Matrix…' : 'Apply SEO Copy to Live Matrix'}</span>
+                </button>
+              </div>
+            </div>
+
+            {(!seoData?.optimizations?.[seoLocale] || seoData.optimizations[seoLocale].length === 0) ? (
+              <div className="py-12 text-center space-y-3">
+                <h4 className="text-sm font-bold text-white">No SEO Optimizations Generated Yet</h4>
+                <p className="text-xs text-slate-400 max-w-md mx-auto">
+                  Run the Semantic Copy Weaver to automatically inject regional keywords into your landing page and UI keys.
+                </p>
+                <button
+                  onClick={handleTriggerSEOOptimize}
+                  disabled={optimizingSEO}
+                  className="rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold px-5 py-2.5 shadow cursor-pointer inline-flex items-center gap-2"
+                >
+                  <span>Run Semantic Copy Weaver</span>
+                </button>
+              </div>
+            ) : (
+              <div className="overflow-x-auto rounded-2xl border border-white/[0.06]">
+                <table className="w-full text-left text-xs border-collapse">
+                  <thead>
+                    <tr className="bg-slate-900/80 text-[11px] uppercase tracking-wider text-slate-400 border-b border-white/[0.08]">
+                      <th className="py-3 px-4 font-semibold">Key / Impact</th>
+                      <th className="py-3 px-4 font-semibold">Source English (en)</th>
+                      <th className="py-3 px-4 font-semibold">Baseline Literal Translation</th>
+                      <th className="py-3 px-4 font-semibold text-sky-300">SEO-Optimized Translation</th>
+                      <th className="py-3 px-4 font-semibold">Injected Keywords & Rationale</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-white/[0.04] bg-slate-950/40 font-sans">
+                    {seoData.optimizations[seoLocale].map((opt: any, idx: number) => (
+                      <tr key={idx} className="hover:bg-white/[0.02] transition-colors">
+                        <td className="py-3.5 px-4 font-mono font-medium text-slate-300 align-top">
+                          <div className="space-y-1">
+                            <div>{opt.translation_key}</div>
+                            <span className={`text-[10px] font-sans px-2 py-0.5 rounded font-semibold uppercase ${
+                              opt.impact_tier === 'high' ? 'bg-sky-500/20 text-sky-300' : 'bg-slate-800 text-slate-400'
+                            }`}>
+                              {opt.impact_tier === 'high' ? 'High Impact' : 'Standard'}
+                            </span>
+                          </div>
+                        </td>
+                        <td className="py-3.5 px-4 text-slate-300 align-top max-w-xs">
+                          {opt.source_en || '—'}
+                        </td>
+                        <td className="py-3.5 px-4 text-slate-400 italic align-top max-w-xs">
+                          {opt.baseline_translation || '(untranslated)'}
+                        </td>
+                        <td className="py-3.5 px-4 text-white font-medium align-top max-w-sm bg-sky-950/10">
+                          <div className="space-y-1.5">
+                            <div className="text-sky-200 font-semibold">{opt.optimized_translation}</div>
+                            {opt.icu_variables_matched && (
+                              <span className="text-[10px] font-mono text-emerald-400">ICU Variables Preserved</span>
+                            )}
+                          </div>
+                        </td>
+                        <td className="py-3.5 px-4 text-slate-300 align-top max-w-sm">
+                          <div className="space-y-1.5">
+                            {opt.injected_keywords && opt.injected_keywords.length > 0 && (
+                              <div className="flex flex-wrap gap-1">
+                                {opt.injected_keywords.map((kw: string, kidx: number) => (
+                                  <span key={kidx} className="text-[10px] px-1.5 py-0.5 rounded bg-sky-500/20 text-sky-300 font-semibold">
+                                    +{kw}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                            <p className="text-[11px] text-slate-400">{opt.rationale}</p>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
         </div>
       )}
 

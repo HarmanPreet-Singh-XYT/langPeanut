@@ -100,6 +100,7 @@ export default function DashboardPage() {
 
   const [repoSearch, setRepoSearch] = useState('')
   const [triggeringId, setTriggeringId] = useState<number | null>(null)
+  const [deletingRepoId, setDeletingRepoId] = useState<number | null>(null)
   const [toastMsg, setToastMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
 
   // Available GitHub Repos for import
@@ -199,6 +200,30 @@ export default function DashboardPage() {
       setVaultFeedback(e instanceof Error ? e.message : 'Failed to save key')
     } finally {
       setSavingVaultKey(false)
+    }
+  }
+
+  async function deleteRepo(r: Repo, e: React.MouseEvent) {
+    e.stopPropagation()
+    const confirmed = window.confirm(
+      `Are you sure you want to permanently delete repository ${r.Owner}/${r.Name}?\n\nThis will remove the repository connection, all stored translation data, and cached git mirrors.`
+    )
+    if (!confirmed) return
+
+    setDeletingRepoId(r.ID)
+    try {
+      const res = await fetch(`/api/repos/${r.ID}`, { method: 'DELETE', credentials: 'include' })
+      const data = await res.json()
+      if (res.ok) {
+        showToast(data.message || 'Repository deleted successfully.')
+        mutateRepos()
+      } else {
+        showToast(data.error || 'Failed to delete repository', 'error')
+      }
+    } catch {
+      showToast('Network error while deleting repository', 'error')
+    } finally {
+      setDeletingRepoId(null)
     }
   }
 
@@ -434,15 +459,29 @@ export default function DashboardPage() {
 
                     {/* Card Footer Actions */}
                     <div className="flex items-center justify-between pt-3 border-t border-white/[0.06] gap-2">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          router.push(`/repo?id=${r.ID}&tab=settings`)
-                        }}
-                        className="rounded-lg bg-white/5 hover:bg-white/10 text-slate-300 text-xs px-3 py-1.5 transition-colors flex items-center gap-1.5"
-                      >
-                        <span>Strategy</span>
-                      </button>
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            router.push(`/repo?id=${r.ID}&tab=settings`)
+                          }}
+                          className="rounded-lg bg-white/5 hover:bg-white/10 text-slate-300 text-xs px-3 py-1.5 transition-colors flex items-center gap-1.5"
+                        >
+                          <span>Strategy</span>
+                        </button>
+                        <button
+                          onClick={(e) => deleteRepo(r, e)}
+                          disabled={deletingRepoId === r.ID}
+                          title="Delete repository connection"
+                          className="rounded-lg bg-rose-500/10 hover:bg-rose-500/25 border border-rose-500/20 text-rose-400 text-xs p-1.5 transition-colors flex items-center justify-center cursor-pointer"
+                        >
+                          <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M3 6h18" />
+                            <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
+                            <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
+                          </svg>
+                        </button>
+                      </div>
 
                       <button
                         onClick={(e) => triggerJob(r, e)}

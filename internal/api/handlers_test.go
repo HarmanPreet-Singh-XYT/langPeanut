@@ -120,6 +120,26 @@ func TestAPI_RepoFlow(t *testing.T) {
 	if w.Code != http.StatusAccepted {
 		t.Fatalf("POST /api/repos/1/jobs status = %d, body = %s", w.Code, w.Body.String())
 	}
+
+	// 5. Reset Repo Data
+	req = httptest.NewRequest(http.MethodPost, "/api/repos/1/reset", nil)
+	req.AddCookie(cookie)
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("POST /api/repos/1/reset status = %d, body = %s", w.Code, w.Body.String())
+	}
+
+	// 6. Delete Repo Completely
+	req = httptest.NewRequest(http.MethodDelete, "/api/repos/1", nil)
+	req.AddCookie(cookie)
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("DELETE /api/repos/1 status = %d, body = %s", w.Code, w.Body.String())
+	}
 }
 
 func TestAPI_RepoFlow_RejectsOtherTeam(t *testing.T) {

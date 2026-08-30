@@ -30,6 +30,12 @@ func (m *Manager) MirrorPath(repoID int64) string {
 	return filepath.Join(m.mirrorsDir, fmt.Sprintf("%d.git", repoID))
 }
 
+// RemoveMirror deletes the cached bare git mirror directory for the repo.
+func (m *Manager) RemoveMirror(repoID int64) error {
+	p := m.MirrorPath(repoID)
+	return os.RemoveAll(p)
+}
+
 // EnsureMirror creates the bare mirror if it doesn't exist, or fetches updates
 // if it does.  authURL is the authenticated clone URL
 // (https://x-access-token:<token>@github.com/owner/repo.git).
