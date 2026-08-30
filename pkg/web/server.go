@@ -15,6 +15,7 @@ import (
 
 	"github.com/langPeanut/langPeanut/benchmark"
 	"github.com/langPeanut/langPeanut/pkg/agents"
+	"github.com/langPeanut/langPeanut/pkg/chat"
 	"github.com/langPeanut/langPeanut/pkg/llm"
 	"github.com/langPeanut/langPeanut/pkg/logger"
 	"github.com/langPeanut/langPeanut/pkg/memory"
@@ -42,6 +43,7 @@ type StudioServer struct {
 	LastBenchmark []benchmark.BenchmarkResult        `json:"last_benchmark"`
 	LastSEOResult *seo.SEOResult                     `json:"last_seo_result"`
 	RefactorPlans map[string]*types.FileRefactorPlan `json:"refactor_plans"`
+	ChatEngine    *chat.Engine                       `json:"-"`
 }
 
 func findRepoRoot(startDir string) string {
@@ -97,6 +99,9 @@ func NewStudioServer(projectRoot string) *StudioServer {
 		RefactorPlans: make(map[string]*types.FileRefactorPlan),
 		Logs:          []string{fmt.Sprintf("[%s] Attached to project: %s", time.Now().Format("15:04:05"), targetPath)},
 	}
+
+	chatEngine, _ := chat.NewEngine(targetPath, nil)
+	s.ChatEngine = chatEngine
 
 	// Trigger initial scan
 	s.performScan()
@@ -191,6 +196,7 @@ func (s *StudioServer) handleSwitchProject(w http.ResponseWriter, r *http.Reques
 	s.ScannedFiles = 0
 	s.LastResult = nil
 	s.RefactorPlans = make(map[string]*types.FileRefactorPlan)
+	s.ChatEngine, _ = chat.NewEngine(absRoot, nil)
 	s.Logs = append(s.Logs, fmt.Sprintf("[%s] Switched project to: %s (%s)",
 		time.Now().Format("15:04:05"), absRoot, platform.DisplayName()))
 	s.mu.Unlock()
@@ -1501,6 +1507,79 @@ func (s *StudioServer) handleApplySEO(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "applied"})
 }
 
+func (s *StudioServer) handleChatStream(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Message string `json:"message"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Message) == "" {
+		http.Error(w, "Message is required", http.StatusBadRequest)
+		return
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	if s.ChatEngine == nil {
+		s.ChatEngine, _ = chat.NewEngine(s.ProjectRoot, nil)
+	}
+
+	eventChan := make(chan chat.ChatEvent, 100)
+	doneChan := make(chan struct{})
+
+	go func() {
+		defer close(doneChan)
+		_, _ = s.ChatEngine.SendMessage(r.Context(), req.Message, eventChan)
+	}()
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-doneChan:
+			for len(eventChan) > 0 {
+				ev := <-eventChan
+				data, _ := json.Marshal(ev)
+				fmt.Fprintf(w, "data: %s\n\n", data)
+				flusher.Flush()
+			}
+			return
+		case ev := <-eventChan:
+			data, _ := json.Marshal(ev)
+			fmt.Fprintf(w, "data: %s\n\n", data)
+			flusher.Flush()
+		}
+	}
+}
+
+func (s *StudioServer) handleChatHistory(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if s.ChatEngine == nil {
+		s.ChatEngine, _ = chat.NewEngine(s.ProjectRoot, nil)
+	}
+	_ = json.NewEncoder(w).Encode(s.ChatEngine.GetHistory())
+}
+
+func (s *StudioServer) handleChatReset(w http.ResponseWriter, r *http.Request) {
+	if s.ChatEngine != nil {
+		s.ChatEngine.ResetHistory()
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "reset"})
+}
+
 // StartInteractiveWebStudio launches the full interactive project-aware Web Studio
 func StartInteractiveWebStudio(projectRoot string, port int, autoOpen bool) error {
 	addr := fmt.Sprintf(":%d", port)
@@ -1543,6 +1622,9 @@ func StartInteractiveWebStudio(projectRoot string, port int, autoOpen bool) erro
 	mux.HandleFunc("/api/seo", studio.handleGetSEO)
 	mux.HandleFunc("/api/seo/run", studio.handleRunSEO)
 	mux.HandleFunc("/api/seo/apply", studio.handleApplySEO)
+	mux.HandleFunc("/api/chat", studio.handleChatStream)
+	mux.HandleFunc("/api/chat/history", studio.handleChatHistory)
+	mux.HandleFunc("/api/chat/reset", studio.handleChatReset)
 
 	server := &http.Server{
 		Addr:    addr,
@@ -1769,8 +1851,14 @@ const InteractiveAppHTML = `<!DOCTYPE html>
     <!-- Left Navigation Bar -->
     <aside class="w-56 shrink-0 border-r border-[#181b24] bg-[#090b10] flex flex-col">
       <nav class="flex-1 p-2 space-y-0.5 text-xs overflow-y-auto custom-scrollbar">
-        <div class="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Engineering Studio</div>
-        <button onclick="switchScreen('studio')" id="screenBtnStudio" class="nav-btn active w-full text-left px-3 py-2 rounded-md flex items-center gap-2.5 transition-colors">
+        <div class="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Autonomous Core</div>
+        <button onclick="switchScreen('copilot')" id="screenBtnCopilot" class="nav-btn active w-full text-left px-3 py-2 rounded-md flex items-center gap-2.5 transition-colors">
+          <i class="fa-solid fa-terminal w-4 text-center text-xs text-sky-400"></i> Autonomous Copilot
+          <span class="ml-auto text-[9px] px-1.5 py-0.5 rounded bg-sky-500/10 text-sky-400 border border-sky-500/20 font-mono">CORE</span>
+        </button>
+
+        <div class="pt-2 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Engineering Studio</div>
+        <button onclick="switchScreen('studio')" id="screenBtnStudio" class="nav-btn w-full text-left px-3 py-2 rounded-md flex items-center gap-2.5 transition-colors">
           <i class="fa-solid fa-cubes w-4 text-center text-xs"></i> 1. String Studio
           <span id="badgeCandidateCount" class="ml-auto text-[10px] px-1.5 py-0.5 rounded bg-zinc-800/80 text-zinc-400 font-mono">0</span>
         </button>
@@ -1824,8 +1912,60 @@ const InteractiveAppHTML = `<!DOCTYPE html>
     <!-- Main Content Area -->
     <main class="flex-1 flex flex-col min-w-0 bg-[#07080b] overflow-hidden">
 
+      <!-- ================================= SCREEN 0: AUTONOMOUS COPILOT WORKSPACE ================================= -->
+      <div id="screenCopilot" class="flex-1 flex flex-col min-h-0 bg-[#07080b] p-6 overflow-y-auto custom-scrollbar">
+        
+        <div class="max-w-4xl mx-auto w-full panel rounded-2xl flex flex-col overflow-hidden border border-[#181b24] shadow-2xl flex-1 min-h-[720px]">
+          <!-- Console Header -->
+          <div class="p-4 border-b border-[#181b24] bg-[#0b0e14] flex items-center justify-between">
+            <div class="flex items-center gap-2.5">
+              <span class="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
+              <div>
+                <h3 class="text-xs font-bold text-zinc-100 font-mono uppercase tracking-wider">Autonomous Multi-Agent Orchestrator</h3>
+                <p class="text-[11px] text-zinc-400 font-mono">Universal localization & growth engine</p>
+              </div>
+            </div>
+            <div class="flex items-center gap-2">
+              <span id="copilotActiveModelBadge" class="text-[10px] font-mono px-2.5 py-1 rounded-md bg-zinc-800 text-zinc-300 border border-zinc-700">claude-sonnet-5</span>
+              <button onclick="resetCopilotChat()" title="Reset session" class="p-1.5 text-zinc-400 hover:text-zinc-200 rounded-md hover:bg-zinc-800 text-xs transition-colors">
+                <i class="fa-solid fa-arrow-rotate-right"></i>
+              </button>
+            </div>
+          </div>
+
+          <!-- Conversation Message Stream -->
+          <div id="copilotMessages" class="flex-1 overflow-y-auto custom-scrollbar p-6 space-y-4 text-xs font-sans min-h-[460px]"></div>
+
+          <!-- Quick Action Macros (Prompt-Kit PromptSuggestion) -->
+          <div class="px-6 py-2.5 border-t border-[#181b24] bg-[#080a0f] flex flex-wrap items-center gap-2 text-[11px] font-mono">
+            <span class="text-[10px] uppercase text-zinc-500 font-semibold mr-1">Suggestions:</span>
+            <button onclick="sendCopilotPrompt('Scan repository and calculate coverage matrix')" class="px-2.5 py-1 rounded-lg bg-[#0c0f16] hover:bg-[#131926] text-zinc-300 hover:text-white border border-white/10 hover:border-sky-500/40 transition-all cursor-pointer">Scan AST</button>
+            <button onclick="sendCopilotPrompt('Translate missing keys into Spanish, German and Japanese')" class="px-2.5 py-1 rounded-lg bg-[#0c0f16] hover:bg-[#131926] text-zinc-300 hover:text-white border border-white/10 hover:border-sky-500/40 transition-all cursor-pointer">Translate Missing</button>
+            <button onclick="sendCopilotPrompt('Execute 4-tier verification critic')" class="px-2.5 py-1 rounded-lg bg-[#0c0f16] hover:bg-[#131926] text-zinc-300 hover:text-white border border-white/10 hover:border-sky-500/40 transition-all cursor-pointer">4-Tier Critic</button>
+            <button onclick="sendCopilotPrompt('Simulate Japanese Google SERP preview')" class="px-2.5 py-1 rounded-lg bg-[#0c0f16] hover:bg-[#131926] text-zinc-300 hover:text-white border border-white/10 hover:border-sky-500/40 transition-all cursor-pointer">SERP Preview</button>
+            <button onclick="sendCopilotPrompt('List checkpoints or undo last changes')" class="px-2.5 py-1 rounded-lg bg-[#0c0f16] hover:bg-[#131926] text-zinc-300 hover:text-white border border-white/10 hover:border-sky-500/40 transition-all cursor-pointer">Checkpoints</button>
+            <button onclick="sendCopilotPrompt('Diagnose project health and readiness')" class="px-2.5 py-1 rounded-lg bg-[#0c0f16] hover:bg-[#131926] text-zinc-300 hover:text-white border border-white/10 hover:border-sky-500/40 transition-all cursor-pointer">Diagnostics</button>
+          </div>
+
+          <!-- Console Input Bar (Prompt-Kit PromptInput) -->
+          <div class="p-4 border-t border-[#181b24] bg-[#0b0e14]">
+            <form onsubmit="handleCopilotSubmit(event)" class="bg-[#06080d] border border-zinc-800 focus-within:border-sky-500/80 rounded-2xl p-3 shadow-lg transition-all space-y-2">
+              <textarea id="copilotInput" onkeydown="handleCopilotTextareaKey(event)" rows="2" placeholder="Instruct agent or query workspace (e.g. 'Scan AST', 'Translate missing keys to German', 'Run critic')..." class="w-full resize-none border-none bg-transparent shadow-none outline-none focus:outline-none text-xs text-zinc-100 placeholder-zinc-500 font-mono"></textarea>
+              <div class="flex items-center justify-between pt-2 border-t border-white/5 text-[11px] text-zinc-500 font-mono">
+                <span>Enter to send, Shift+Enter for newline</span>
+                <button type="submit" id="copilotSendBtn" class="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-medium text-xs flex items-center gap-1.5 transition-colors cursor-pointer shadow-sm">
+                  <span>Execute</span>
+                  <i class="fa-solid fa-arrow-right text-[10px]"></i>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+
+      </div>
+
       <!-- ================================= SCREEN 1: 3-PANE STRING STUDIO ================================= -->
-      <div id="screenStudio" class="flex-1 flex min-h-0">
+      <div id="screenStudio" class="hidden flex-1 flex min-h-0">
 
         <!-- Pane 1: File Explorer Tree (220px) -->
         <div class="w-60 shrink-0 border-r border-[#181b24] bg-[#090b10] flex flex-col">
@@ -4181,7 +4321,7 @@ const InteractiveAppHTML = `<!DOCTYPE html>
 
     // ---------- Screen Switcher ----------
     function switchScreen(screenId) {
-      const screens = ['studio', 'matrix', 'simulator', 'diff', 'critic', 'seo', 'runner', 'checkpoints', 'benchmark', 'stats', 'settings'];
+      const screens = ['copilot', 'studio', 'matrix', 'simulator', 'diff', 'critic', 'seo', 'runner', 'checkpoints', 'benchmark', 'stats', 'settings'];
       screens.forEach(s => {
         const sec = document.getElementById('screen' + cap(s));
         const btn = document.getElementById('screenBtn' + cap(s));
@@ -4194,6 +4334,7 @@ const InteractiveAppHTML = `<!DOCTYPE html>
         }
       });
 
+      if (screenId === 'copilot') loadCopilotWorkspace();
       if (screenId === 'matrix') loadMatrixData();
       if (screenId === 'simulator') updateSimLocale();
       if (screenId === 'diff') loadTuiDiff();
@@ -4207,7 +4348,7 @@ const InteractiveAppHTML = `<!DOCTYPE html>
 
     function cap(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
 
-    // Keyboard Shortcuts (Cmd+K, Cmd+S, R, 1-6, Esc)
+    // Keyboard Shortcuts (Cmd+K, Cmd+S, R, 0-6, Esc)
     window.addEventListener('keydown', (e) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
         e.preventDefault();
@@ -4220,13 +4361,16 @@ const InteractiveAppHTML = `<!DOCTYPE html>
         return;
       }
       if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
-        e.preventDefault();
-        executeLocalization();
-        return;
+        if (document.activeElement?.id !== 'copilotInput') {
+          e.preventDefault();
+          executeLocalization();
+          return;
+        }
       }
 
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA') return;
 
+      if (e.key === '0') switchScreen('copilot');
       if (e.key === '1') switchScreen('studio');
       if (e.key === '2') switchScreen('matrix');
       if (e.key === '3') switchScreen('simulator');
@@ -4237,6 +4381,422 @@ const InteractiveAppHTML = `<!DOCTYPE html>
       if (e.key.toLowerCase() === 'p') openProjectModal();
       if (e.key === 'Escape') closeCommandPalette();
     });
+
+    // ==================== Autonomous Copilot Studio Engine ====================
+    let copilotThinking = false;
+    let currentCanvasTab = 'matrix';
+    let lastCopilotCards = [];
+
+    async function loadCopilotWorkspace() {
+      await loadCopilotHistory();
+      renderActiveCanvasTab();
+    }
+
+    async function loadCopilotHistory() {
+      try {
+        const res = await fetch('/api/chat/history');
+        if (!res.ok) return;
+        const history = await res.json();
+        const container = document.getElementById('copilotMessages');
+        container.innerHTML = '';
+        if (!history || history.length === 0) {
+          renderCopilotWelcome();
+          return;
+        }
+        history.forEach(msg => appendCopilotMessageToDOM(msg));
+        container.scrollTop = container.scrollHeight;
+      } catch (err) {
+        console.error('Failed loading chat history:', err);
+      }
+    }
+
+    function renderCopilotWelcome() {
+      const container = document.getElementById('copilotMessages');
+      container.innerHTML = '<div class="p-3.5 rounded-lg bg-[#0d1017] border border-[#1e2433] text-zinc-300 space-y-2">' +
+        '<div class="flex items-center gap-2 text-sky-400 font-semibold text-xs">' +
+          '<i class="fa-solid fa-microchip"></i>' +
+          '<span>Autonomous Multi-Agent Orchestrator Ready</span>' +
+        '</div>' +
+        '<p class="text-[11px] leading-relaxed text-zinc-400 font-sans">' +
+          'Direct the underlying supervisor agent to audit hardcoded AST strings, execute model-aware translation batches, verify ICU variable integrity with 4-tier critics, or simulate Google SERP rankings.' +
+        '</p>' +
+      '</div>';
+    }
+
+    function toggleToolCollapsible(id) {
+      const el = document.getElementById(id);
+      const icon = document.getElementById(id + '_icon');
+      if (el) {
+        el.classList.toggle('hidden');
+        if (icon) icon.classList.toggle('rotate-180');
+      }
+    }
+
+    function renderPromptKitToolHTML(tc) {
+      const toolId = 'tool_' + Math.random().toString(36).substr(2, 9);
+      const name = escapeHtml(tc.name || 'tool_call');
+      let inputHtml = '';
+      if (tc.args && Object.keys(tc.args).length > 0) {
+        inputHtml = '<div class="mt-1.5"><div class="text-[10px] uppercase font-bold text-zinc-400 mb-1">Input Parameters</div><pre class="p-2 rounded-lg bg-[#050609] border border-white/5 text-[11px] font-mono text-zinc-300 overflow-x-auto custom-scrollbar">' + escapeHtml(JSON.stringify(tc.args, null, 2)) + '</pre></div>';
+      }
+      let outputHtml = '';
+      if (tc.result && Object.keys(tc.result).length > 0) {
+        outputHtml = '<div class="mt-1.5"><div class="text-[10px] uppercase font-bold text-zinc-400 mb-1">Execution Output</div><pre class="p-2 rounded-lg bg-[#050609] border border-white/5 text-[11px] font-mono text-zinc-300 overflow-x-auto custom-scrollbar">' + escapeHtml(JSON.stringify(tc.result, null, 2)) + '</pre></div>';
+      }
+      return '<div class="rounded-xl border border-white/10 bg-[#090b10] overflow-hidden my-2 text-xs shadow-sm">' +
+        '<button type="button" onclick="toggleToolCollapsible(\'' + toolId + '\')" class="w-full flex items-center justify-between px-3 py-2 bg-[#0c0f16] hover:bg-[#111622] transition-colors cursor-pointer text-left font-mono">' +
+          '<div class="flex items-center gap-2">' +
+            '<i class="fa-solid fa-wrench text-amber-400 text-xs"></i>' +
+            '<span class="font-semibold text-zinc-200 text-xs">' + name + '</span>' +
+            '<span class="px-1.5 py-0.5 rounded text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 uppercase font-semibold">Completed</span>' +
+          '</div>' +
+          '<i class="fa-solid fa-chevron-down text-zinc-400 text-[10px] transition-transform" id="' + toolId + '_icon"></i>' +
+        '</button>' +
+        '<div id="' + toolId + '" class="hidden border-t border-white/10 p-3 space-y-2 bg-[#07080c] font-mono text-[11px]">' +
+          inputHtml +
+          outputHtml +
+        '</div>' +
+      '</div>';
+    }
+
+    function appendCopilotMessageToDOM(msg) {
+      const container = document.getElementById('copilotMessages');
+      const isUser = msg.role === 'user';
+      const div = document.createElement('div');
+      div.className = isUser ? 'flex justify-end' : 'flex justify-start';
+
+      let inner = '';
+      if (isUser) {
+        inner = '<div class="max-w-[85%] bg-[#121622] border border-sky-500/40 text-zinc-100 rounded-2xl px-3.5 py-2 text-xs font-mono shadow-sm">' +
+          '<div class="text-[10px] uppercase text-sky-400 font-bold mb-0.5">User Directive</div>' +
+          escapeHtml(msg.content) +
+        '</div>';
+      } else {
+        let toolsHtml = '';
+        if (msg.tool_calls && msg.tool_calls.length > 0) {
+          toolsHtml = msg.tool_calls.map(function(tc) {
+            return renderPromptKitToolHTML(tc);
+          }).join('');
+        }
+
+        let cardsHtml = '';
+        if (msg.cards && msg.cards.length > 0) {
+          cardsHtml = msg.cards.map(function(c) {
+            if (c && c.rendered_text) {
+              return '<div class="rounded-xl border border-white/10 bg-[#050609] p-3 text-xs font-mono text-zinc-300 my-2 shadow-inner overflow-x-auto custom-scrollbar"><pre class="whitespace-pre">' + escapeHtml(c.rendered_text) + '</pre></div>';
+            }
+            return '';
+          }).join('');
+        }
+
+        inner = '<div class="max-w-[95%] space-y-2 w-full">' +
+          toolsHtml +
+          cardsHtml +
+          '<div class="bg-[#0b0e14] border border-[#1c212e] rounded-2xl p-4 text-xs text-zinc-200 shadow-md space-y-2 font-sans leading-relaxed whitespace-pre-wrap">' +
+            formatMarkdown(msg.content) +
+          '</div>' +
+        '</div>';
+      }
+      div.innerHTML = inner;
+      container.appendChild(div);
+      container.scrollTop = container.scrollHeight;
+    }
+
+    function setCanvasTab(tab) {
+      currentCanvasTab = tab;
+      const tabs = ['matrix', 'diff', 'critic', 'serp', 'cost'];
+      tabs.forEach(t => {
+        const btn = document.getElementById('canvasTab' + cap(t));
+        if (t === tab) {
+          btn?.classList.add('bg-zinc-800', 'text-zinc-100', 'font-semibold');
+          btn?.classList.remove('text-zinc-400', 'font-medium');
+        } else {
+          btn?.classList.remove('bg-zinc-800', 'text-zinc-100', 'font-semibold');
+          btn?.classList.add('text-zinc-400', 'font-medium');
+        }
+      });
+      document.getElementById('canvasActiveViewTitle').textContent = cap(tab) + ' Viewport';
+      renderActiveCanvasTab();
+    }
+
+    function renderActiveCanvasTab() {
+      const container = document.getElementById('copilotCanvasContainer');
+      if (!container) return;
+
+      if (currentCanvasTab === 'matrix') {
+        renderCanvasMatrix(container);
+      } else if (currentCanvasTab === 'diff') {
+        renderCanvasDiff(container);
+      } else if (currentCanvasTab === 'critic') {
+        renderCanvasCritic(container);
+      } else if (currentCanvasTab === 'serp') {
+        renderCanvasSERP(container);
+      } else if (currentCanvasTab === 'cost') {
+        renderCanvasCost(container);
+      }
+    }
+
+    function renderCanvasMatrix(container) {
+      const card = lastCopilotCards.find(c => c.type === 'matrix');
+      if (card && card.rendered_text) {
+        container.innerHTML = '<div class="space-y-4">' +
+          '<div class="flex items-center justify-between border-b border-[#181b24] pb-3">' +
+            '<div>' +
+              '<h3 class="text-xs font-bold text-zinc-100 font-mono">LOCALE COVERAGE MATRIX</h3>' +
+              '<p class="text-[11px] text-zinc-400">Deterministic key parity status across all detected catalog files</p>' +
+            '</div>' +
+            '<button onclick="switchScreen(\'matrix\')" class="px-3 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded text-xs font-mono border border-zinc-700">Open Grid Studio</button>' +
+          '</div>' +
+          '<pre class="p-4 rounded-lg bg-[#050609] border border-[#181b24] text-xs font-mono text-zinc-300 whitespace-pre overflow-x-auto custom-scrollbar">' +
+            escapeHtml(card.rendered_text) +
+          '</pre>' +
+        '</div>';
+        return;
+      }
+
+      // Default Live Matrix Viewport
+      container.innerHTML = '<div class="space-y-4">' +
+        '<div class="flex items-center justify-between border-b border-[#181b24] pb-3">' +
+          '<div>' +
+            '<h3 class="text-xs font-bold text-zinc-100 font-mono">WORKSPACE TRANSLATION MATRIX</h3>' +
+            '<p class="text-[11px] text-zinc-400">Current codebase extraction & translation health</p>' +
+          '</div>' +
+          '<button onclick="sendCopilotPrompt(\'Scan repository and report coverage\')" class="px-3 py-1 bg-sky-600/20 hover:bg-sky-600/30 text-sky-400 rounded text-xs font-mono border border-sky-500/30">Run AST Scout</button>' +
+        '</div>' +
+        '<div class="grid grid-cols-2 md:grid-cols-4 gap-3 font-mono text-xs">' +
+          '<div class="p-3.5 rounded-lg bg-[#0b0e14] border border-[#181b24] space-y-1">' +
+            '<div class="text-[10px] uppercase text-zinc-500">Source Keys</div>' +
+            '<div class="text-lg font-bold text-zinc-100">' + (studioCandidates ? studioCandidates.length : 0) + '</div>' +
+          '</div>' +
+          '<div class="p-3.5 rounded-lg bg-[#0b0e14] border border-[#181b24] space-y-1">' +
+            '<div class="text-[10px] uppercase text-zinc-500">Target Locales</div>' +
+            '<div class="text-lg font-bold text-sky-400">4 Active</div>' +
+          '</div>' +
+          '<div class="p-3.5 rounded-lg bg-[#0b0e14] border border-[#181b24] space-y-1">' +
+            '<div class="text-[10px] uppercase text-zinc-500">AST Safety</div>' +
+            '<div class="text-lg font-bold text-emerald-400">0% Drift</div>' +
+          '</div>' +
+          '<div class="p-3.5 rounded-lg bg-[#0b0e14] border border-[#181b24] space-y-1">' +
+            '<div class="text-[10px] uppercase text-zinc-500">Verification</div>' +
+            '<div class="text-lg font-bold text-purple-400">4-Tier Critic</div>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+    }
+
+    function renderCanvasDiff(container) {
+      const card = lastCopilotCards.find(c => c.type === 'diff');
+      if (card && card.rendered_text) {
+        container.innerHTML = '<div class="space-y-4">' +
+          '<div class="flex items-center justify-between border-b border-[#181b24] pb-3">' +
+            '<div>' +
+              '<h3 class="text-xs font-bold text-zinc-100 font-mono">AST SURGICAL PATCH DIFF</h3>' +
+              '<p class="text-[11px] text-zinc-400">Exact byte-range replacements without full-file hallucination</p>' +
+            '</div>' +
+            '<button onclick="applyDiskChanges()" class="px-3 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-xs font-mono">Apply to Disk</button>' +
+          '</div>' +
+          '<pre class="p-4 rounded-lg bg-[#050609] border border-[#181b24] text-xs font-mono text-zinc-300 whitespace-pre overflow-x-auto custom-scrollbar">' +
+            escapeHtml(card.rendered_text) +
+          '</pre>' +
+        '</div>';
+      } else {
+        container.innerHTML = '<div class="p-8 text-center text-zinc-500 font-mono text-xs border border-dashed border-zinc-800 rounded-lg">' +
+          'No active AST refactoring plan in context. Instruct agent: "Refactor codebase with surgical AST patch".' +
+        '</div>';
+      }
+    }
+
+    function renderCanvasCritic(container) {
+      const card = lastCopilotCards.find(c => c.type === 'critic');
+      if (card && card.rendered_text) {
+        container.innerHTML = '<div class="space-y-4">' +
+          '<div class="flex items-center justify-between border-b border-[#181b24] pb-3">' +
+            '<div>' +
+              '<h3 class="text-xs font-bold text-zinc-100 font-mono">4-TIER CRITIC VERIFICATION</h3>' +
+              '<p class="text-[11px] text-zinc-400">Syntax, ICU variable matching, expansion estimation, and key parity</p>' +
+            '</div>' +
+          '</div>' +
+          '<pre class="p-4 rounded-lg bg-[#050609] border border-[#181b24] text-xs font-mono text-zinc-300 whitespace-pre overflow-x-auto custom-scrollbar">' +
+            escapeHtml(card.rendered_text) +
+          '</pre>' +
+        '</div>';
+      } else {
+        container.innerHTML = '<div class="p-8 text-center text-zinc-500 font-mono text-xs border border-dashed border-zinc-800 rounded-lg">' +
+          'No critic report in context. Instruct agent: "Execute 4-tier verification critic on all locales".' +
+        '</div>';
+      }
+    }
+
+    function renderCanvasSERP(container) {
+      const card = lastCopilotCards.find(c => c.type === 'serp');
+      if (card && card.rendered_text) {
+        container.innerHTML = '<div class="space-y-4">' +
+          '<div class="flex items-center justify-between border-b border-[#181b24] pb-3">' +
+            '<div>' +
+              '<h3 class="text-xs font-bold text-zinc-100 font-mono">SERP SIMULATOR & GROWTH PREVIEW</h3>' +
+              '<p class="text-[11px] text-zinc-400">Pixel-accurate Google search preview with character length limits</p>' +
+            '</div>' +
+            '<button onclick="switchScreen(\'seo\')" class="px-3 py-1 bg-pink-600/20 hover:bg-pink-600/30 text-pink-400 rounded text-xs font-mono border border-pink-500/30">Open SEO Studio</button>' +
+          '</div>' +
+          '<pre class="p-4 rounded-lg bg-[#050609] border border-[#181b24] text-xs font-mono text-zinc-300 whitespace-pre overflow-x-auto custom-scrollbar">' +
+            escapeHtml(card.rendered_text) +
+          '</pre>' +
+        '</div>';
+      } else {
+        container.innerHTML = '<div class="p-8 text-center text-zinc-500 font-mono text-xs border border-dashed border-zinc-800 rounded-lg">' +
+          'No SERP simulation generated. Instruct agent: "Simulate Japanese Google SERP preview".' +
+        '</div>';
+      }
+    }
+
+    function renderCanvasCost(container) {
+      const card = lastCopilotCards.find(c => c.type === 'cost');
+      if (card && card.rendered_text) {
+        container.innerHTML = '<div class="space-y-4">' +
+          '<div class="flex items-center justify-between border-b border-[#181b24] pb-3">' +
+            '<div>' +
+              '<h3 class="text-xs font-bold text-zinc-100 font-mono">TOKEN TELEMETRY & COST ESTIMATE</h3>' +
+              '<p class="text-[11px] text-zinc-400">Exact prompt/completion breakdown and pricing calculation</p>' +
+            '</div>' +
+          '</div>' +
+          '<pre class="p-4 rounded-lg bg-[#050609] border border-[#181b24] text-xs font-mono text-zinc-300 whitespace-pre overflow-x-auto custom-scrollbar">' +
+            escapeHtml(card.rendered_text) +
+          '</pre>' +
+        '</div>';
+      } else {
+        container.innerHTML = '<div class="p-8 text-center text-zinc-500 font-mono text-xs border border-dashed border-zinc-800 rounded-lg">' +
+          'No token telemetry card generated. Instruct agent: "Plan localization and estimate token cost".' +
+        '</div>';
+      }
+    }
+
+    function formatMarkdown(text) {
+      if (!text) return '';
+      return escapeHtml(text)
+        .replace(/\*\*(.*?)\*\*/g, '<strong class="text-zinc-100 font-bold">$1</strong>')
+        .replace(/\*(.*?)\*/g, '<em class="text-zinc-300">$1</em>')
+        .replace(new RegExp('\\u0060([^\\u0060]+)\\u0060', 'g'), '<code class="px-1 py-0.5 rounded bg-zinc-800 font-mono text-[11px] text-sky-300 border border-zinc-700">$1</code>')
+        .replace(/\n/g, '<br>');
+    }
+
+    function escapeHtml(s) {
+      if (!s) return '';
+      return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    }
+
+    function handleCopilotTextareaKey(e) {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        handleCopilotSubmit(e);
+      }
+    }
+
+    async function handleCopilotSubmit(e) {
+      if (e) e.preventDefault();
+      const input = document.getElementById('copilotInput');
+      const text = input.value.trim();
+      if (!text || copilotThinking) return;
+
+      input.value = '';
+      await sendCopilotPrompt(text);
+    }
+
+    async function sendCopilotPrompt(prompt) {
+      if (copilotThinking) return;
+      copilotThinking = true;
+
+      const container = document.getElementById('copilotMessages');
+      appendCopilotMessageToDOM({ role: 'user', content: prompt });
+
+      // Thinking indicator bubble
+      const thinkingDiv = document.createElement('div');
+      thinkingDiv.id = 'copilotThinkingBubble';
+      thinkingDiv.className = 'flex justify-start';
+      thinkingDiv.innerHTML = '<div class="bg-[#0b0e14] border border-[#1c212e] rounded-lg p-3 text-xs text-zinc-400 flex items-center gap-2 font-mono">' +
+        '<i class="fa-solid fa-spinner fa-spin text-sky-400"></i>' +
+        '<span>Routing tools & executing plan...</span>' +
+      '</div>';
+      container.appendChild(thinkingDiv);
+      container.scrollTop = container.scrollHeight;
+
+      try {
+        const response = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: prompt })
+        });
+
+        if (!response.ok) {
+          throw new Error('Chat API returned ' + response.status);
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let assistantMsg = { role: 'assistant', content: '', tool_calls: [], cards: [] };
+
+        while (true) {
+          const res = await reader.read();
+          if (res.done) break;
+
+          buffer += decoder.decode(res.value, { stream: true });
+          const lines = buffer.split('\n\n');
+          buffer = lines.pop() || '';
+
+          for (let i = 0; i < lines.length; i++) {
+            const line = lines[i];
+            if (line.startsWith('data: ')) {
+              try {
+                const ev = JSON.parse(line.slice(6));
+                if (ev.type === 'tool_start' && ev.tool_call) {
+                  assistantMsg.tool_calls.push(ev.tool_call);
+                } else if (ev.type === 'card' && ev.card) {
+                  assistantMsg.cards.push(ev.card);
+                  lastCopilotCards.push(ev.card);
+                  if (ev.card.type === 'matrix') currentCanvasTab = 'matrix';
+                  if (ev.card.type === 'diff') currentCanvasTab = 'diff';
+                  if (ev.card.type === 'critic') currentCanvasTab = 'critic';
+                  if (ev.card.type === 'serp') currentCanvasTab = 'serp';
+                  if (ev.card.type === 'cost') currentCanvasTab = 'cost';
+                  renderActiveCanvasTab();
+                } else if (ev.type === 'chunk' && ev.content) {
+                  assistantMsg.content += ev.content;
+                } else if (ev.type === 'done' && ev.content) {
+                  assistantMsg.content = ev.content;
+                }
+              } catch (e) {}
+            }
+          }
+        }
+
+        const tb = document.getElementById('copilotThinkingBubble');
+        if (tb) tb.remove();
+
+        appendCopilotMessageToDOM(assistantMsg);
+      } catch (err) {
+        const tb = document.getElementById('copilotThinkingBubble');
+        if (tb) tb.remove();
+        appendCopilotMessageToDOM({
+          role: 'assistant',
+          content: 'Error communicating with orchestrator: ' + err.message
+        });
+      } finally {
+        copilotThinking = false;
+        container.scrollTop = container.scrollHeight;
+      }
+    }
+
+    async function resetCopilotChat() {
+      try {
+        await fetch('/api/chat/reset', { method: 'POST' });
+        lastCopilotCards = [];
+        renderCopilotWelcome();
+        renderActiveCanvasTab();
+        showToast('Session reset', 'info');
+      } catch (err) {
+        showToast('Failed to reset session', 'error');
+      }
+    }
 
     loadStudioInit();
   </script>

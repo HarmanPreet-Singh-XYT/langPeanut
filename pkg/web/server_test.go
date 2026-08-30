@@ -98,4 +98,19 @@ func TestWebStudio_APIRoutes(t *testing.T) {
 	if !bytes.Contains(rec.Body.Bytes(), []byte("langPeanut — Localization Engineering Studio")) {
 		t.Errorf("Expected HTML response to contain Studio title")
 	}
+
+	// Test 10: GET /api/chat/history & POST /api/chat/reset
+	req = httptest.NewRequest(http.MethodGet, "/api/chat/history", nil)
+	rec = httptest.NewRecorder()
+	studio.handleChatHistory(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Expected status 200 for /api/chat/history, got %d", rec.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/chat/reset", nil)
+	rec = httptest.NewRecorder()
+	studio.handleChatReset(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Expected status 200 for /api/chat/reset, got %d", rec.Code)
+	}
 }
