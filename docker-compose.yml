@@ -22,6 +22,7 @@ services:
       - DATABASE_PATH=/data/langpeanut.db
       - MIRRORS_DIR=/data/mirrors
       - JOBS_DIR=/data/jobs
+      - HOST_JOBS_DIR=${HOST_JOBS_DIR:-${PWD}/data/jobs}
       - GITHUB_APP_PRIVATE_KEY_PATH=/data/github-app.pem
       - RUNNER_IMAGE=langpeanut-runner:latest
       - LISTEN_ADDR=:8080

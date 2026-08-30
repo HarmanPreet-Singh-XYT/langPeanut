@@ -25,9 +25,9 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className={`dark ${roboto.variable} ${robotoMono.variable}`}>
-      <body className="bg-[#030712] text-slate-100 min-h-screen font-sans antialiased selection:bg-indigo-500/90 selection:text-white bg-grid-pattern relative">
+      <body className="bg-[#030712] text-slate-100 min-h-screen font-sans antialiased selection:bg-sky-500/30 selection:text-sky-100 bg-grid-pattern relative">
         {/* Subtle Ambient Glow */}
-        <div className="fixed top-0 left-1/2 -translate-x-1/2 w-[1100px] h-[400px] bg-gradient-to-b from-indigo-500/10 via-purple-500/5 to-transparent blur-[120px] pointer-events-none -z-10" />
+        <div className="fixed top-0 left-1/2 -translate-x-1/2 w-[1100px] h-[350px] bg-gradient-to-b from-sky-500/8 via-blue-600/5 to-transparent blur-[140px] pointer-events-none -z-10" />
 
         {/* Global Navigation Bar */}
         <Navbar />

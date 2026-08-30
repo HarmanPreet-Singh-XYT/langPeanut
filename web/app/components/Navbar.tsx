@@ -1,10 +1,13 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import useSWR from 'swr'
 
 const fetcher = (url: string) =>
-  fetch(url, { headers: { 'X-Team-ID': '1' } }).then((r) => r.json())
+  fetch(url, { credentials: 'include' }).then((r) => {
+    if (!r.ok) throw new Error(`${r.status}`)
+    return r.json()
+  })
 
 interface UserProfile {
   id: number
@@ -21,36 +24,18 @@ interface Team {
 }
 
 export default function Navbar() {
-  const { data: meData, mutate } = useSWR<{
+  const { data: meData } = useSWR<{
     user: UserProfile
     team: Team
     installations: string[]
     permissions: string[]
-  }>('/api/auth/me', fetcher)
+  }>('/api/auth/me', fetcher, { shouldRetryOnError: false })
 
   const [showProfileModal, setShowProfileModal] = useState(false)
-  const [currentUser, setCurrentUser] = useState<UserProfile | null>(null)
+  const currentUser = meData?.user ?? null
 
-  useEffect(() => {
-    if (meData?.user) {
-      setCurrentUser(meData.user)
-    } else {
-      const stored = localStorage.getItem('langpeanut_user')
-      if (stored) {
-        try {
-          setCurrentUser(JSON.parse(stored))
-        } catch {
-          // ignore
-        }
-      }
-    }
-  }, [meData])
-
-  function handleSignOut() {
-    localStorage.removeItem('langpeanut_user')
-    localStorage.removeItem('langpeanut_team')
-    localStorage.removeItem('langpeanut_token')
-    setCurrentUser(null)
+  async function handleSignOut() {
+    await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' })
     setShowProfileModal(false)
     window.location.href = '/login'
   }
@@ -61,19 +46,25 @@ export default function Navbar() {
         <div className="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between gap-4">
           <div className="flex items-center gap-8">
             <a href="/" className="flex items-center gap-2.5 group">
-              <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-indigo-600 via-indigo-500 to-purple-500 flex items-center justify-center shadow-md shadow-indigo-500/20 text-lg group-hover:scale-105 transition-transform">
-                🥜
+              <div className="w-9 h-9 rounded-xl bg-slate-900 border border-sky-500/30 flex items-center justify-center shadow-md shadow-sky-950/40 text-sky-400 group-hover:border-sky-400 transition-colors">
+                <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="12" r="9" className="stroke-sky-500/40" />
+                  <path d="M3.6 9h16.8" />
+                  <path d="M3.6 15h16.8" />
+                  <path d="M11.5 3a17 17 0 0 0 0 18" />
+                  <path d="M12.5 3a17 17 0 0 1 0 18" />
+                </svg>
               </div>
               <div className="flex items-center gap-2">
                 <span className="text-base font-bold tracking-tight text-white">langPeanut</span>
-                <span className="text-[10px] font-mono font-medium px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 uppercase tracking-wider">
+                <span className="text-[10px] font-mono font-medium px-2 py-0.5 rounded-full bg-sky-500/10 text-sky-400 border border-sky-500/20 uppercase tracking-wider">
                   Cloud
                 </span>
               </div>
             </a>
 
               <nav className="hidden md:flex items-center gap-1 text-xs font-medium text-slate-400">
-                <a href="/#dashboard" className="px-3 py-1.5 rounded-lg hover:text-white hover:bg-white/[0.04] transition-colors">
+                <a href="/dashboard" className="px-3 py-1.5 rounded-lg hover:text-white hover:bg-white/[0.04] transition-colors">
                   Console
                 </a>
                 <a href="/#workflows" className="px-3 py-1.5 rounded-lg hover:text-white hover:bg-white/[0.04] transition-colors">
@@ -109,7 +100,7 @@ export default function Navbar() {
                 onClick={() => setShowProfileModal(true)}
                 className="flex items-center gap-2.5 rounded-xl border border-white/10 bg-white/[0.03] hover:bg-white/[0.08] px-3 py-1.5 transition-all cursor-pointer"
               >
-                <div className="w-6 h-6 rounded-full bg-indigo-600 flex items-center justify-center text-xs font-bold text-white overflow-hidden border border-white/20">
+                <div className="w-6 h-6 rounded-full bg-blue-600 flex items-center justify-center text-xs font-bold text-white overflow-hidden border border-white/20">
                   {currentUser.avatar_url ? (
                     // eslint-disable-next-line @next/next/no-img-element
                     <img src={currentUser.avatar_url} alt={currentUser.name} className="w-full h-full object-cover" />
@@ -129,9 +120,11 @@ export default function Navbar() {
             ) : (
               <a
                 href="/login"
-                className="rounded-lg bg-gradient-to-r from-indigo-600 to-indigo-500 hover:from-indigo-500 hover:to-indigo-400 text-white text-xs font-semibold px-4 py-2 shadow-lg shadow-indigo-600/25 transition-all cursor-pointer flex items-center gap-1.5"
+                className="rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold px-4 py-2 shadow-lg shadow-blue-600/25 transition-all cursor-pointer flex items-center gap-2"
               >
-                <span>🐙</span>
+                <svg className="w-3.5 h-3.5 fill-current" viewBox="0 0 24 24">
+                  <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z" />
+                </svg>
                 <span>Sign In</span>
               </a>
             )}
@@ -145,7 +138,7 @@ export default function Navbar() {
           <div className="glass-panel bg-[#090d16] border border-white/10 rounded-2xl w-full max-w-lg shadow-2xl p-6 space-y-5">
             <div className="flex items-center justify-between border-b border-white/[0.08] pb-4">
               <div className="flex items-center gap-3">
-                <div className="w-11 h-11 rounded-full bg-indigo-600 flex items-center justify-center text-sm font-bold text-white overflow-hidden border-2 border-indigo-400/50 shadow-md">
+                <div className="w-11 h-11 rounded-full bg-blue-600 flex items-center justify-center text-sm font-bold text-white overflow-hidden border-2 border-sky-400/50 shadow-md">
                   {currentUser.avatar_url ? (
                     // eslint-disable-next-line @next/next/no-img-element
                     <img src={currentUser.avatar_url} alt={currentUser.name} className="w-full h-full object-cover" />
@@ -155,7 +148,7 @@ export default function Navbar() {
                 </div>
                 <div>
                   <h3 className="font-bold text-base text-white">{currentUser.name}</h3>
-                  <p className="text-xs font-mono text-indigo-400">@{currentUser.github_login}</p>
+                  <p className="text-xs font-mono text-sky-400">@{currentUser.github_login}</p>
                 </div>
               </div>
               <button
@@ -220,7 +213,7 @@ export default function Navbar() {
                     meData.installations.map((acc, idx) => (
                       <span
                         key={idx}
-                        className="font-mono text-[11px] px-2 py-0.5 rounded bg-indigo-500/10 border border-indigo-500/20 text-indigo-300 font-medium"
+                        className="font-mono text-[11px] px-2 py-0.5 rounded bg-sky-500/10 border border-sky-500/20 text-sky-300 font-medium"
                       >
                         @{acc}
                       </span>
@@ -239,7 +232,11 @@ export default function Navbar() {
                 onClick={handleSignOut}
                 className="text-xs text-rose-400 hover:text-rose-300 font-semibold cursor-pointer transition-colors flex items-center gap-1.5"
               >
-                <span>🚪</span>
+                <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+                  <polyline points="16 17 21 12 16 7" />
+                  <line x1="21" y1="12" x2="9" y2="12" />
+                </svg>
                 <span>Sign Out</span>
               </button>
               <button

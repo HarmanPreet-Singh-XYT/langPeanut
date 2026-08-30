@@ -72,21 +72,21 @@ func (m *Manager) CloneFromMirror(mirrorPath, destDir, authURL string) error {
 		return err
 	}
 	// Clone from local mirror (fast, no network).
-	cmd := exec.Command("git", "clone", mirrorPath, destDir)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("git clone from mirror: %s", string(out))
+	if err := gitRun("", "clone", mirrorPath, destDir); err != nil {
+		return fmt.Errorf("git clone from mirror: %w", err)
 	}
 	// Point origin at GitHub with the authenticated URL for push.
-	cmd = exec.Command("git", "-C", destDir, "remote", "set-url", "origin", authURL)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("git remote set-url: %s", redactOutput(string(out), authURL))
+	if err := gitRun(destDir, "remote", "set-url", "origin", authURL); err != nil {
+		return fmt.Errorf("git remote set-url: %s", redactOutput(err.Error(), authURL))
 	}
 	return nil
 }
 
 // HeadCommitSHA returns the current HEAD commit SHA of the given branch in the mirror.
 func (m *Manager) HeadCommitSHA(mirrorPath, branch string) (string, error) {
-	cmd := exec.Command("git", "-C", mirrorPath, "rev-parse", "refs/heads/"+branch)
+	fullArgs := []string{"-c", "safe.directory=*", "-C", mirrorPath, "rev-parse", "refs/heads/" + branch}
+	cmd := exec.Command("git", fullArgs...)
+	cmd.Env = append(os.Environ(), "HOME=/tmp", "GIT_CONFIG_GLOBAL=/tmp/.gitconfig")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("rev-parse %s: %s", branch, strings.TrimSpace(string(out)))
@@ -97,13 +97,15 @@ func (m *Manager) HeadCommitSHA(mirrorPath, branch string) (string, error) {
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
 func gitRun(dir string, args ...string) error {
-	cmd := exec.Command("git", args...)
+	fullArgs := append([]string{"-c", "safe.directory=*"}, args...)
+	cmd := exec.Command("git", fullArgs...)
 	if dir != "" {
 		cmd.Dir = dir
 	}
+	cmd.Env = append(os.Environ(), "HOME=/tmp", "GIT_CONFIG_GLOBAL=/tmp/.gitconfig")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("%s: %s", strings.Join(args, " "), string(out))
+		return fmt.Errorf("%s: %s", strings.Join(args, " "), strings.TrimSpace(string(out)))
 	}
 	return nil
 }

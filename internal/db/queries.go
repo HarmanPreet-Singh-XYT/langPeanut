@@ -48,7 +48,26 @@ type RepoSettings struct {
 	CustomBuildCmd           string
 	RootDir                  string // Relative subdirectory inside repository (e.g. "apps/web", "frontend", "mobile")
 	ExistingTranslationsMode string // "skip" (default), "replace" (regenerate all), "prompt"
+	EncryptedAPIKeyOverride  []byte // Optional per-repo API key override (AES-256-GCM encrypted); falls back to global team credential if empty
+	UserDirective            string // UI Integration Directive / Custom instruction
 	UpdatedAt                time.Time
+}
+
+type Job struct {
+	ID                     int64
+	RepoID                 int64
+	TriggerType            string
+	Status                 string
+	Branch                 string
+	HeadCommitSHA          string
+	RepoSettingsHash       string
+	PRURL                  string
+	ErrorMessage           string
+	ExecutionLogsJSON      string
+	TranslationsMatrixJSON string
+	CreatedAt              time.Time
+	StartedAt              *time.Time
+	FinishedAt             *time.Time
 }
 
 type APICredential struct {
@@ -59,27 +78,13 @@ type APICredential struct {
 	CreatedAt    time.Time
 }
 
-type Job struct {
-	ID               int64
-	RepoID           int64
-	TriggerType      string // manual | webhook
-	Status           string // pending | running | succeeded | needs_review | failed | skipped_no_changes
-	Branch           string
-	HeadCommitSHA    string
-	RepoSettingsHash string
-	PRURL            string
-	ErrorMessage     string
-	CreatedAt        time.Time
-	StartedAt        *time.Time
-	FinishedAt       *time.Time
-}
-
 type User struct {
 	ID          int64     `json:"id"`
 	TeamID      int64     `json:"team_id"`
 	Email       string    `json:"email"`
 	Name        string    `json:"name"`
 	GithubLogin string    `json:"github_login"`
+	GithubID    int64     `json:"github_id"`
 	AvatarURL   string    `json:"avatar_url"`
 	CreatedAt   time.Time `json:"created_at"`
 }
@@ -117,26 +122,42 @@ func (db *DB) GetTeamByID(id int64) (*Team, error) {
 
 // ─── Users ───────────────────────────────────────────────────────────────────
 
-func (db *DB) UpsertUser(teamID int64, email, name, githubLogin, avatarURL string) (*User, error) {
+// UpsertUserByGithubID is the identity path for real OAuth logins: GitHub's
+// numeric account ID is the stable key (logins can be renamed, emails can be
+// private/empty). Creates the user's row on first login, refreshes profile
+// fields on every subsequent one.
+func (db *DB) UpsertUserByGithubID(teamID, githubID int64, email, name, githubLogin, avatarURL string) (*User, error) {
 	_, err := db.Exec(`
-		INSERT INTO users(team_id, email, name, github_login, avatar_url)
-		VALUES(?,?,?,?,?)
-		ON CONFLICT(email) DO UPDATE SET
+		INSERT INTO users(team_id, email, name, github_login, github_id, avatar_url)
+		VALUES(?,?,?,?,?,?)
+		ON CONFLICT(github_id) WHERE github_id != 0 DO UPDATE SET
+			email=excluded.email,
 			name=excluded.name,
 			github_login=excluded.github_login,
 			avatar_url=excluded.avatar_url`,
-		teamID, email, name, githubLogin, avatarURL)
+		teamID, email, name, githubLogin, githubID, avatarURL)
 	if err != nil {
 		return nil, fmt.Errorf("upsert user: %w", err)
 	}
-	return db.GetUserByEmail(email)
+	return db.GetUserByGithubID(githubID)
+}
+
+func (db *DB) GetUserByGithubID(githubID int64) (*User, error) {
+	u := &User{}
+	err := db.QueryRow(`SELECT id, team_id, email, name, github_login, github_id, avatar_url, created_at
+		FROM users WHERE github_id=?`, githubID).
+		Scan(&u.ID, &u.TeamID, &u.Email, &u.Name, &u.GithubLogin, &u.GithubID, &u.AvatarURL, &u.CreatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return u, err
 }
 
 func (db *DB) GetUserByEmail(email string) (*User, error) {
 	u := &User{}
-	err := db.QueryRow(`SELECT id, team_id, email, name, github_login, avatar_url, created_at
+	err := db.QueryRow(`SELECT id, team_id, email, name, github_login, github_id, avatar_url, created_at
 		FROM users WHERE email=?`, email).
-		Scan(&u.ID, &u.TeamID, &u.Email, &u.Name, &u.GithubLogin, &u.AvatarURL, &u.CreatedAt)
+		Scan(&u.ID, &u.TeamID, &u.Email, &u.Name, &u.GithubLogin, &u.GithubID, &u.AvatarURL, &u.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -145,31 +166,9 @@ func (db *DB) GetUserByEmail(email string) (*User, error) {
 
 func (db *DB) GetUserByID(id int64) (*User, error) {
 	u := &User{}
-	err := db.QueryRow(`SELECT id, team_id, email, name, github_login, avatar_url, created_at
+	err := db.QueryRow(`SELECT id, team_id, email, name, github_login, github_id, avatar_url, created_at
 		FROM users WHERE id=?`, id).
-		Scan(&u.ID, &u.TeamID, &u.Email, &u.Name, &u.GithubLogin, &u.AvatarURL, &u.CreatedAt)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	return u, err
-}
-
-func (db *DB) GetUserByGithubLogin(login string) (*User, error) {
-	u := &User{}
-	err := db.QueryRow(`SELECT id, team_id, email, name, github_login, avatar_url, created_at
-		FROM users WHERE github_login=? ORDER BY id DESC LIMIT 1`, login).
-		Scan(&u.ID, &u.TeamID, &u.Email, &u.Name, &u.GithubLogin, &u.AvatarURL, &u.CreatedAt)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	return u, err
-}
-
-func (db *DB) GetLatestUserByTeam(teamID int64) (*User, error) {
-	u := &User{}
-	err := db.QueryRow(`SELECT id, team_id, email, name, github_login, avatar_url, created_at
-		FROM users WHERE team_id=? ORDER BY id DESC LIMIT 1`, teamID).
-		Scan(&u.ID, &u.TeamID, &u.Email, &u.Name, &u.GithubLogin, &u.AvatarURL, &u.CreatedAt)
+		Scan(&u.ID, &u.TeamID, &u.Email, &u.Name, &u.GithubLogin, &u.GithubID, &u.AvatarURL, &u.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -299,8 +298,8 @@ func (db *DB) UpsertRepoSettings(s *RepoSettings) error {
 		existingMode = "skip"
 	}
 	_, err = db.Exec(`
-		INSERT INTO repo_settings(repo_id, locales_json, tone_preset, provider, model, safety_mode, chunk_word_budget, chunk_key_ceiling, custom_install_cmd, custom_build_cmd, root_dir, existing_translations_mode, updated_at)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?, strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+		INSERT INTO repo_settings(repo_id, locales_json, tone_preset, provider, model, safety_mode, chunk_word_budget, chunk_key_ceiling, custom_install_cmd, custom_build_cmd, root_dir, existing_translations_mode, encrypted_api_key_override, user_directive, updated_at)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?, strftime('%Y-%m-%dT%H:%M:%SZ','now'))
 		ON CONFLICT(repo_id) DO UPDATE SET
 			locales_json=excluded.locales_json,
 			tone_preset=excluded.tone_preset,
@@ -313,19 +312,22 @@ func (db *DB) UpsertRepoSettings(s *RepoSettings) error {
 			custom_build_cmd=excluded.custom_build_cmd,
 			root_dir=excluded.root_dir,
 			existing_translations_mode=excluded.existing_translations_mode,
+			encrypted_api_key_override=excluded.encrypted_api_key_override,
+			user_directive=excluded.user_directive,
 			updated_at=excluded.updated_at`,
 		s.RepoID, string(localesJSON), s.TonePreset, s.Provider, s.Model,
-		safetyInt, s.ChunkWordBudget, s.ChunkKeyCeiling, s.CustomInstallCmd, s.CustomBuildCmd, s.RootDir, existingMode)
+		safetyInt, s.ChunkWordBudget, s.ChunkKeyCeiling, s.CustomInstallCmd, s.CustomBuildCmd, s.RootDir, existingMode, s.EncryptedAPIKeyOverride, s.UserDirective)
 	return err
 }
 
 func (db *DB) GetRepoSettings(repoID int64) (*RepoSettings, error) {
 	var localesJSON string
 	var safetyInt int
+	var overrideBlob []byte
 	s := &RepoSettings{RepoID: repoID}
-	err := db.QueryRow(`SELECT locales_json, tone_preset, provider, model, safety_mode, chunk_word_budget, chunk_key_ceiling, COALESCE(custom_install_cmd, ''), COALESCE(custom_build_cmd, ''), COALESCE(root_dir, ''), COALESCE(existing_translations_mode, 'skip'), updated_at
+	err := db.QueryRow(`SELECT locales_json, tone_preset, provider, model, safety_mode, chunk_word_budget, chunk_key_ceiling, COALESCE(custom_install_cmd, ''), COALESCE(custom_build_cmd, ''), COALESCE(root_dir, ''), COALESCE(existing_translations_mode, 'skip'), COALESCE(encrypted_api_key_override, X''), COALESCE(user_directive, ''), updated_at
 		FROM repo_settings WHERE repo_id=?`, repoID).
-		Scan(&localesJSON, &s.TonePreset, &s.Provider, &s.Model, &safetyInt, &s.ChunkWordBudget, &s.ChunkKeyCeiling, &s.CustomInstallCmd, &s.CustomBuildCmd, &s.RootDir, &s.ExistingTranslationsMode, &s.UpdatedAt)
+		Scan(&localesJSON, &s.TonePreset, &s.Provider, &s.Model, &safetyInt, &s.ChunkWordBudget, &s.ChunkKeyCeiling, &s.CustomInstallCmd, &s.CustomBuildCmd, &s.RootDir, &s.ExistingTranslationsMode, &overrideBlob, &s.UserDirective, &s.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -333,6 +335,9 @@ func (db *DB) GetRepoSettings(repoID int64) (*RepoSettings, error) {
 		return nil, err
 	}
 	s.SafetyMode = safetyInt == 1
+	if len(overrideBlob) > 0 {
+		s.EncryptedAPIKeyOverride = overrideBlob
+	}
 	if err := json.Unmarshal([]byte(localesJSON), &s.Locales); err != nil {
 		return nil, fmt.Errorf("parse locales_json: %w", err)
 	}
@@ -478,6 +483,93 @@ func (db *DB) ListTokenUsageByJob(jobID int64) ([]*JobTokenUsage, error) {
 		out = append(out, u)
 	}
 	return out, rows.Err()
+}
+
+// UpdateJobStatusWithDetails updates mutable fields and attaches real execution logs and matrix JSON.
+func (db *DB) UpdateJobStatusWithDetails(id int64, status, branch, headSHA, settingsHash, prURL, errMsg, execLogsJSON, matrixJSON string) error {
+	_, err := db.Exec(`
+		UPDATE jobs SET
+			status=?, branch=?, head_commit_sha=?, repo_settings_hash=?,
+			pr_url=?, error_message=?,
+			execution_logs_json=?, translations_matrix_json=?,
+			finished_at=strftime('%Y-%m-%dT%H:%M:%SZ','now')
+		WHERE id=?`,
+		status, branch, headSHA, settingsHash, prURL, errMsg, execLogsJSON, matrixJSON, id)
+	return err
+}
+
+func (db *DB) GetJobLogs(jobID int64) (string, error) {
+	var logsJSON string
+	err := db.QueryRow(`SELECT COALESCE(execution_logs_json, '[]') FROM jobs WHERE id=?`, jobID).Scan(&logsJSON)
+	if err == sql.ErrNoRows {
+		return "[]", nil
+	}
+	return logsJSON, err
+}
+
+// ─── Translation Matrix ──────────────────────────────────────────────────────
+
+func (db *DB) UpsertTranslationMatrix(repoID int64, translations map[string]map[string]string) error {
+	if len(translations) == 0 {
+		return nil
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	stmt, err := tx.Prepare(`
+		INSERT INTO repo_translation_matrix(repo_id, locale, translation_key, translation_value, updated_at)
+		VALUES(?,?,?,?, strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+		ON CONFLICT(repo_id, locale, translation_key) DO UPDATE SET
+			translation_value=excluded.translation_value,
+			updated_at=excluded.updated_at`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	for loc, keys := range translations {
+		for k, v := range keys {
+			if _, err := stmt.Exec(repoID, loc, k, v); err != nil {
+				return err
+			}
+		}
+	}
+	return tx.Commit()
+}
+
+func (db *DB) UpdateTranslationCell(repoID int64, locale, key, value string) error {
+	_, err := db.Exec(`
+		INSERT INTO repo_translation_matrix(repo_id, locale, translation_key, translation_value, updated_at)
+		VALUES(?,?,?,?, strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+		ON CONFLICT(repo_id, locale, translation_key) DO UPDATE SET
+			translation_value=excluded.translation_value,
+			updated_at=excluded.updated_at`,
+		repoID, locale, key, value)
+	return err
+}
+
+func (db *DB) GetTranslationMatrix(repoID int64) (map[string]map[string]string, error) {
+	rows, err := db.Query(`SELECT locale, translation_key, translation_value FROM repo_translation_matrix WHERE repo_id=? ORDER BY translation_key ASC`, repoID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	matrix := make(map[string]map[string]string)
+	for rows.Next() {
+		var loc, key, val string
+		if err := rows.Scan(&loc, &key, &val); err != nil {
+			return nil, err
+		}
+		if matrix[loc] == nil {
+			matrix[loc] = make(map[string]string)
+		}
+		matrix[loc][key] = val
+	}
+	return matrix, rows.Err()
 }
 
 // ─── scanner helpers ──────────────────────────────────────────────────────────

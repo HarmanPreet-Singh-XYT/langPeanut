@@ -7,6 +7,9 @@
 package api
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -25,8 +28,16 @@ import (
 type Handler struct {
 	DB            *db.DB
 	MasterKey     string // hex AES-256 key for encrypting/decrypting api_credentials
+	SessionSecret string // hex key for signing session cookies (falls back to MasterKey)
 	AppID         string // GitHub App ID (numeric string)
 	PrivateKeyPEM []byte // raw PEM bytes of the GitHub App's RSA private key
+
+	// OAuth (user login) — the GitHub App's "user-to-server" OAuth credentials,
+	// distinct from AppID/PrivateKeyPEM above.
+	OAuthClientID     string
+	OAuthClientSecret string
+	WebhookSecret     string // GITHUB_WEBHOOK_SECRET; verifies X-Hub-Signature-256
+	PublicBaseURL     string // e.g. https://app.langpeanut.ai — used to build the OAuth callback URL
 }
 
 // RegisterRoutes wires all API routes onto mux.
@@ -36,34 +47,39 @@ func RegisterRoutes(mux *http.ServeMux, h *Handler) {
 
 	// ── GitHub App Discovery & Repos ──────────────────────────────────────────
 	// List available repos across GitHub App installations that can be imported.
-	mux.HandleFunc("GET /api/github/available-repos", h.requireTeam(h.handleListAvailableGitHubRepos))
+	mux.HandleFunc("GET /api/github/available-repos", h.requireSession(h.handleListAvailableGitHubRepos))
 
 	// ── Repos ─────────────────────────────────────────────────────────────────
 	// List repos the team has enabled.
-	mux.HandleFunc("GET /api/repos", h.requireTeam(h.handleListRepos))
+	mux.HandleFunc("GET /api/repos", h.requireSession(h.handleListRepos))
 	// Enable (upsert) a repo for localization.
-	mux.HandleFunc("POST /api/repos", h.requireTeam(h.handleUpsertRepo))
+	mux.HandleFunc("POST /api/repos", h.requireSession(h.handleUpsertRepo))
 
 	// ── Repo Settings & Translation Matrix ───────────────────────────────────
-	mux.HandleFunc("GET /api/repos/{repoID}/settings", h.requireTeam(h.handleGetSettings))
-	mux.HandleFunc("PUT /api/repos/{repoID}/settings", h.requireTeam(h.handleUpsertSettings))
-	mux.HandleFunc("PUT /api/repos/{repoID}/matrix", h.requireTeam(h.handleUpdateMatrixCell))
+	mux.HandleFunc("GET /api/repos/{repoID}/settings", h.requireSession(h.handleGetSettings))
+	mux.HandleFunc("PUT /api/repos/{repoID}/settings", h.requireSession(h.handleUpsertSettings))
+	mux.HandleFunc("GET /api/repos/{repoID}/matrix", h.requireSession(h.handleGetMatrix))
+	mux.HandleFunc("PUT /api/repos/{repoID}/matrix", h.requireSession(h.handleUpdateMatrixCell))
 
 	// ── Jobs ──────────────────────────────────────────────────────────────────
 	// List recent jobs for a repo.
-	mux.HandleFunc("GET /api/repos/{repoID}/jobs", h.requireTeam(h.handleListJobs))
+	mux.HandleFunc("GET /api/repos/{repoID}/jobs", h.requireSession(h.handleListJobs))
 	// Manually trigger a new localization job.
-	mux.HandleFunc("POST /api/repos/{repoID}/jobs", h.requireTeam(h.handleTriggerJob))
+	mux.HandleFunc("POST /api/repos/{repoID}/jobs", h.requireSession(h.handleTriggerJob))
+	// Get execution logs for a job.
+	mux.HandleFunc("GET /api/repos/{repoID}/jobs/{jobID}/logs", h.requireSession(h.handleGetJobLogs))
 	// Get a specific job's status.
-	mux.HandleFunc("GET /api/jobs/{jobID}", h.requireTeam(h.handleGetJob))
+	mux.HandleFunc("GET /api/jobs/{jobID}", h.requireSession(h.handleGetJob))
 
 	// ── API Credentials (BYO LLM key) ─────────────────────────────────────────
-	mux.HandleFunc("GET /api/credentials", h.requireTeam(h.handleListCredentials))
-	mux.HandleFunc("PUT /api/credentials/{provider}", h.requireTeam(h.handleUpsertCredential))
+	mux.HandleFunc("GET /api/credentials", h.requireSession(h.handleListCredentials))
+	mux.HandleFunc("PUT /api/credentials/{provider}", h.requireSession(h.handleUpsertCredential))
 
 	// ── Auth & User Profile ───────────────────────────────────────────────────
-	mux.HandleFunc("POST /api/auth/login", h.handleLogin)
-	mux.HandleFunc("GET /api/auth/me", h.requireTeam(h.handleGetMe))
+	// GitHub OAuth login: browser is redirected through these two, not called via fetch().
+	mux.HandleFunc("GET /api/auth/github/start", h.handleGitHubOAuthStart)
+	mux.HandleFunc("GET /api/auth/github/callback", h.handleGitHubOAuthCallback)
+	mux.HandleFunc("GET /api/auth/me", h.requireSession(h.handleGetMe))
 	mux.HandleFunc("POST /api/auth/logout", h.handleLogout)
 
 	// ── GitHub Webhook ────────────────────────────────────────────────────────
@@ -97,7 +113,7 @@ func (h *Handler) handleListAvailableGitHubRepos(w http.ResponseWriter, r *http.
 		return
 	}
 
-	teamID := teamIDFromCtx(r)
+	teamID := sessionFromCtx(r).TeamID
 
 	type availableRepo struct {
 		InstallationID int64  `json:"installation_id"`
@@ -156,7 +172,7 @@ func (h *Handler) handleListAvailableGitHubRepos(w http.ResponseWriter, r *http.
 // ─── Repos ───────────────────────────────────────────────────────────────────
 
 func (h *Handler) handleListRepos(w http.ResponseWriter, r *http.Request) {
-	teamID := teamIDFromCtx(r)
+	teamID := sessionFromCtx(r).TeamID
 	installs, err := h.DB.ListInstallationsByTeam(teamID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "list installations: "+err.Error())
@@ -194,6 +210,7 @@ type upsertRepoReq struct {
 }
 
 func (h *Handler) handleUpsertRepo(w http.ResponseWriter, r *http.Request) {
+	teamID := sessionFromCtx(r).TeamID
 	var req upsertRepoReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "decode body: "+err.Error())
@@ -206,6 +223,11 @@ func (h *Handler) handleUpsertRepo(w http.ResponseWriter, r *http.Request) {
 	if req.DefaultBranch == "" {
 		req.DefaultBranch = "main"
 	}
+	inst, err := h.DB.GetInstallationByID(req.InstallationID)
+	if err != nil || inst == nil || inst.TeamID != teamID {
+		writeError(w, http.StatusForbidden, "installation not found for your team")
+		return
+	}
 	repo, err := h.DB.UpsertRepo(req.InstallationID, req.Owner, req.Name, req.DefaultBranch)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "upsert repo: "+err.Error())
@@ -214,14 +236,37 @@ func (h *Handler) handleUpsertRepo(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, repo)
 }
 
+// authorizeRepo loads a repo by path-parameter ID and verifies it belongs to
+// the caller's team (via its installation), writing a 403/404 response and
+// returning ok=false if not. Every {repoID}-scoped handler must call this
+// before touching the repo — sessions authenticate *who* you are, this
+// authorizes *which repos* you're allowed to act on.
+func (h *Handler) authorizeRepo(w http.ResponseWriter, r *http.Request) (*db.Repo, bool) {
+	repoID, ok := parseRepoID(w, r)
+	if !ok {
+		return nil, false
+	}
+	repo, err := h.DB.GetRepoByID(repoID)
+	if err != nil || repo == nil {
+		writeError(w, http.StatusNotFound, "repo not found")
+		return nil, false
+	}
+	inst, err := h.DB.GetInstallationByID(repo.InstallationID)
+	if err != nil || inst == nil || inst.TeamID != sessionFromCtx(r).TeamID {
+		writeError(w, http.StatusForbidden, "repo not found")
+		return nil, false
+	}
+	return repo, true
+}
+
 // ─── Settings ────────────────────────────────────────────────────────────────
 
 func (h *Handler) handleGetSettings(w http.ResponseWriter, r *http.Request) {
-	repoID, ok := parseRepoID(w, r)
+	repo, ok := h.authorizeRepo(w, r)
 	if !ok {
 		return
 	}
-	s, err := h.DB.GetRepoSettings(repoID)
+	s, err := h.DB.GetRepoSettings(repo.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -230,7 +275,24 @@ func (h *Handler) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "no settings configured for this repo")
 		return
 	}
-	writeJSON(w, http.StatusOK, s)
+	resp := map[string]any{
+		"repo_id":                    s.RepoID,
+		"locales":                    s.Locales,
+		"tone_preset":                s.TonePreset,
+		"provider":                   s.Provider,
+		"model":                      s.Model,
+		"safety_mode":                s.SafetyMode,
+		"chunk_word_budget":          s.ChunkWordBudget,
+		"chunk_key_ceiling":          s.ChunkKeyCeiling,
+		"custom_install_cmd":         s.CustomInstallCmd,
+		"custom_build_cmd":           s.CustomBuildCmd,
+		"root_dir":                   s.RootDir,
+		"existing_translations_mode": s.ExistingTranslationsMode,
+		"user_directive":            s.UserDirective,
+		"has_api_key_override":       len(s.EncryptedAPIKeyOverride) > 0,
+		"updated_at":                 s.UpdatedAt,
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 type upsertSettingsReq struct {
@@ -245,10 +307,12 @@ type upsertSettingsReq struct {
 	CustomBuildCmd           string   `json:"custom_build_cmd"`
 	RootDir                  string   `json:"root_dir"`
 	ExistingTranslationsMode string   `json:"existing_translations_mode"`
+	UserDirective            string   `json:"user_directive,omitempty"`
+	APIKeyOverride           string   `json:"api_key_override,omitempty"`
 }
 
 func (h *Handler) handleUpsertSettings(w http.ResponseWriter, r *http.Request) {
-	repoID, ok := parseRepoID(w, r)
+	repo, ok := h.authorizeRepo(w, r)
 	if !ok {
 		return
 	}
@@ -293,8 +357,26 @@ func (h *Handler) handleUpsertSettings(w http.ResponseWriter, r *http.Request) {
 	if req.ExistingTranslationsMode == "" {
 		req.ExistingTranslationsMode = "skip"
 	}
+
+	existingSettings, _ := h.DB.GetRepoSettings(repo.ID)
+	var encryptedOverride []byte
+	if existingSettings != nil {
+		encryptedOverride = existingSettings.EncryptedAPIKeyOverride
+	}
+
+	if req.APIKeyOverride == "__CLEAR__" {
+		encryptedOverride = nil
+	} else if req.APIKeyOverride != "" {
+		enc, err := auth.Encrypt(h.MasterKey, req.APIKeyOverride)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "encrypt api key override: "+err.Error())
+			return
+		}
+		encryptedOverride = enc
+	}
+
 	s := &db.RepoSettings{
-		RepoID:                   repoID,
+		RepoID:                   repo.ID,
 		Locales:                  req.Locales,
 		TonePreset:               req.TonePreset,
 		Provider:                 req.Provider,
@@ -306,12 +388,27 @@ func (h *Handler) handleUpsertSettings(w http.ResponseWriter, r *http.Request) {
 		CustomBuildCmd:           req.CustomBuildCmd,
 		RootDir:                  req.RootDir,
 		ExistingTranslationsMode: req.ExistingTranslationsMode,
+		EncryptedAPIKeyOverride:  encryptedOverride,
+		UserDirective:            req.UserDirective,
 	}
 	if err := h.DB.UpsertRepoSettings(s); err != nil {
 		writeError(w, http.StatusInternalServerError, "upsert settings: "+err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (h *Handler) handleGetMatrix(w http.ResponseWriter, r *http.Request) {
+	repo, ok := h.authorizeRepo(w, r)
+	if !ok {
+		return
+	}
+	matrix, err := h.DB.GetTranslationMatrix(repo.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "get matrix: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, matrix)
 }
 
 type updateMatrixCellReq struct {
@@ -321,7 +418,7 @@ type updateMatrixCellReq struct {
 }
 
 func (h *Handler) handleUpdateMatrixCell(w http.ResponseWriter, r *http.Request) {
-	repoID, ok := parseRepoID(w, r)
+	repo, ok := h.authorizeRepo(w, r)
 	if !ok {
 		return
 	}
@@ -331,9 +428,8 @@ func (h *Handler) handleUpdateMatrixCell(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	repo, err := h.DB.GetRepoByID(repoID)
-	if err != nil || repo == nil {
-		writeError(w, http.StatusNotFound, "repo not found")
+	if err := h.DB.UpdateTranslationCell(repo.ID, req.Locale, req.Key, req.Value); err != nil {
+		writeError(w, http.StatusInternalServerError, "update cell: "+err.Error())
 		return
 	}
 
@@ -349,11 +445,11 @@ func (h *Handler) handleUpdateMatrixCell(w http.ResponseWriter, r *http.Request)
 // ─── Jobs ─────────────────────────────────────────────────────────────────────
 
 func (h *Handler) handleListJobs(w http.ResponseWriter, r *http.Request) {
-	repoID, ok := parseRepoID(w, r)
+	repo, ok := h.authorizeRepo(w, r)
 	if !ok {
 		return
 	}
-	jobs, err := h.DB.ListJobsByRepo(repoID, 50)
+	jobs, err := h.DB.ListJobsByRepo(repo.ID, 50)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -361,41 +457,68 @@ func (h *Handler) handleListJobs(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, jobs)
 }
 
+type triggerJobReq struct {
+	UserDirective string `json:"user_directive,omitempty"`
+}
+
 func (h *Handler) handleTriggerJob(w http.ResponseWriter, r *http.Request) {
-	repoID, ok := parseRepoID(w, r)
+	repo, ok := h.authorizeRepo(w, r)
 	if !ok {
 		return
 	}
 	// Ensure settings exist before queueing.
-	s, err := h.DB.GetRepoSettings(repoID)
+	s, err := h.DB.GetRepoSettings(repo.ID)
 	if err != nil || s == nil {
 		writeError(w, http.StatusBadRequest, "configure repo settings before triggering a job")
 		return
 	}
 
-	repo, err := h.DB.GetRepoByID(repoID)
-	if err != nil || repo == nil {
-		writeError(w, http.StatusNotFound, "repo not found")
-		return
+	var req triggerJobReq
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	if req.UserDirective != "" && req.UserDirective != s.UserDirective {
+		s.UserDirective = req.UserDirective
+		_ = h.DB.UpsertRepoSettings(s)
 	}
 
-	// Ensure API key credential exists for the selected provider
-	inst, err := h.DB.GetInstallationByID(repo.InstallationID)
-	if err == nil && inst != nil {
-		cred, _ := h.DB.GetAPICredential(inst.TeamID, s.Provider)
-		if cred == nil {
-			writeError(w, http.StatusBadRequest, fmt.Sprintf("no API key configured for provider '%s'. Please add your API key in Settings.", s.Provider))
-			return
+	// Ensure API key credential exists (check repo-specific override first, then global team key)
+	if len(s.EncryptedAPIKeyOverride) == 0 {
+		inst, err := h.DB.GetInstallationByID(repo.InstallationID)
+		if err == nil && inst != nil {
+			cred, _ := h.DB.GetAPICredential(inst.TeamID, s.Provider)
+			if cred == nil {
+				writeError(w, http.StatusBadRequest, fmt.Sprintf("no API key configured for provider '%s'. Please add your API key in Global AI Keys Vault or Repo Settings.", s.Provider))
+				return
+			}
 		}
 	}
 
-	job, err := h.DB.CreateJob(repoID, "manual")
+	job, err := h.DB.CreateJob(repo.ID, "manual")
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "create job: "+err.Error())
 		return
 	}
-	slog.Info("api: job queued", "job_id", job.ID, "repo_id", repoID)
+	slog.Info("api: job queued", "job_id", job.ID, "repo_id", repo.ID)
 	writeJSON(w, http.StatusAccepted, job)
+}
+
+func (h *Handler) handleGetJobLogs(w http.ResponseWriter, r *http.Request) {
+	_, ok := h.authorizeRepo(w, r)
+	if !ok {
+		return
+	}
+	jobID, err := strconv.ParseInt(r.PathValue("jobID"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid job id")
+		return
+	}
+	logsJSON, err := h.DB.GetJobLogs(jobID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "get logs: "+err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(logsJSON))
 }
 
 func (h *Handler) handleGetJob(w http.ResponseWriter, r *http.Request) {
@@ -409,6 +532,16 @@ func (h *Handler) handleGetJob(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "job not found")
 		return
 	}
+	repo, err := h.DB.GetRepoByID(job.RepoID)
+	if err != nil || repo == nil {
+		writeError(w, http.StatusNotFound, "job not found")
+		return
+	}
+	inst, err := h.DB.GetInstallationByID(repo.InstallationID)
+	if err != nil || inst == nil || inst.TeamID != sessionFromCtx(r).TeamID {
+		writeError(w, http.StatusNotFound, "job not found")
+		return
+	}
 	usage, _ := h.DB.ListTokenUsageByJob(jobID)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"job":         job,
@@ -419,7 +552,7 @@ func (h *Handler) handleGetJob(w http.ResponseWriter, r *http.Request) {
 // ─── Credentials (BYO LLM Key) ───────────────────────────────────────────────
 
 func (h *Handler) handleListCredentials(w http.ResponseWriter, r *http.Request) {
-	teamID := teamIDFromCtx(r)
+	teamID := sessionFromCtx(r).TeamID
 	providers := []string{"openai", "claude", "gemini", "deepl", "custom"}
 	type providerStatus struct {
 		Provider   string `json:"provider"`
@@ -438,7 +571,7 @@ type upsertCredentialReq struct {
 }
 
 func (h *Handler) handleUpsertCredential(w http.ResponseWriter, r *http.Request) {
-	teamID := teamIDFromCtx(r)
+	teamID := sessionFromCtx(r).TeamID
 	provider := r.PathValue("provider")
 	if provider == "" {
 		writeError(w, http.StatusBadRequest, "provider is required")
@@ -465,77 +598,130 @@ func (h *Handler) handleUpsertCredential(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "provider": provider})
 }
 
-// ─── Auth & User Profiles ───────────────────────────────────────────────────
+// ─── Auth & User Profiles (GitHub OAuth) ─────────────────────────────────────
+//
+// Login is a full-page redirect flow, not a fetch() call: the browser is sent
+// to GitHub, GitHub redirects back to our callback with a `code`, we exchange
+// it server-side (client secret never touches the browser), then set a signed
+// httpOnly session cookie and redirect into the app.
 
-type loginReq struct {
-	Email       string `json:"email"`
-	Name        string `json:"name"`
-	GithubLogin string `json:"github_login"`
-	AvatarURL   string `json:"avatar_url"`
+const oauthStateCookie = "langpeanut_oauth_state"
+
+func (h *Handler) oauthRedirectURI() string {
+	return strings.TrimRight(h.PublicBaseURL, "/") + "/api/auth/github/callback"
 }
 
-func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
-	var req loginReq
-	_ = json.NewDecoder(r.Body).Decode(&req)
+func (h *Handler) handleGitHubOAuthStart(w http.ResponseWriter, r *http.Request) {
+	if h.OAuthClientID == "" {
+		writeError(w, http.StatusServiceUnavailable, "GitHub OAuth not configured on server")
+		return
+	}
+	state, err := auth.GenerateState(h.SessionSecret)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "generate state: "+err.Error())
+		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     oauthStateCookie,
+		Value:    state,
+		Path:     "/",
+		MaxAge:   600, // 10 minutes to complete the OAuth round trip
+		HttpOnly: true,
+		Secure:   isSecureRequest(r),
+		SameSite: http.SameSiteLaxMode,
+	})
+	http.Redirect(w, r, auth.AuthorizeURL(h.OAuthClientID, h.oauthRedirectURI(), state), http.StatusFound)
+}
 
-	if req.Email == "" {
-		req.Email = "developer@langpeanut.ai"
-	}
-	if req.GithubLogin == "" {
-		req.GithubLogin = "langpeanut-dev"
-	}
-	if req.Name == "" {
-		req.Name = req.GithubLogin
-	}
-	if req.AvatarURL == "" {
-		req.AvatarURL = fmt.Sprintf("https://github.com/%s.png", req.GithubLogin)
+func (h *Handler) handleGitHubOAuthCallback(w http.ResponseWriter, r *http.Request) {
+	if h.OAuthClientID == "" || h.OAuthClientSecret == "" {
+		writeError(w, http.StatusServiceUnavailable, "GitHub OAuth not configured on server")
+		return
 	}
 
-	// Find or create default team
-	team, err := h.DB.GetTeamByID(1)
-	if err != nil || team == nil {
-		team, err = h.DB.CreateTeam("Engineering Core")
+	stateParam := r.URL.Query().Get("state")
+	stateCookie, err := r.Cookie(oauthStateCookie)
+	if err != nil || stateParam == "" || stateCookie.Value != stateParam || !auth.VerifyState(h.SessionSecret, stateParam) {
+		writeError(w, http.StatusBadRequest, "invalid or expired oauth state")
+		return
+	}
+	// One-time use: clear the state cookie now that it's been consumed.
+	http.SetCookie(w, &http.Cookie{Name: oauthStateCookie, Value: "", Path: "/", MaxAge: -1})
+
+	code := r.URL.Query().Get("code")
+	if code == "" {
+		writeError(w, http.StatusBadRequest, "missing code")
+		return
+	}
+
+	userToken, err := auth.ExchangeCode(r.Context(), h.OAuthClientID, h.OAuthClientSecret, code, h.oauthRedirectURI())
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "github oauth exchange: "+err.Error())
+		return
+	}
+	ghUser, err := auth.FetchGitHubUser(r.Context(), userToken)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "github oauth profile: "+err.Error())
+		return
+	}
+
+	// Each GitHub account gets its own team on first login — repos and
+	// credentials are scoped per-team, not shared across unrelated users.
+	existing, err := h.DB.GetUserByGithubID(ghUser.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "lookup user: "+err.Error())
+		return
+	}
+	var teamID int64
+	if existing != nil {
+		teamID = existing.TeamID
+	} else {
+		team, err := h.DB.CreateTeam(ghUser.Login)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "create team: "+err.Error())
 			return
 		}
+		teamID = team.ID
 	}
 
-	user, err := h.DB.UpsertUser(team.ID, req.Email, req.Name, req.GithubLogin, req.AvatarURL)
+	user, err := h.DB.UpsertUserByGithubID(teamID, ghUser.ID, ghUser.Email, ghUser.Name, ghUser.Login, ghUser.AvatarURL)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "upsert user: "+err.Error())
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
-		"user":        user,
-		"team":        team,
-		"token":       fmt.Sprintf("team_%d_user_%d", team.ID, user.ID),
-		"permissions": []string{"repo:read", "repo:write", "pull_request:write"},
+	sessionToken, err := auth.NewSessionToken(h.SessionSecret, user.ID, user.TeamID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "create session: "+err.Error())
+		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     auth.SessionCookieName,
+		Value:    sessionToken,
+		Path:     "/",
+		MaxAge:   int(auth.SessionTTL.Seconds()),
+		HttpOnly: true,
+		Secure:   isSecureRequest(r),
+		SameSite: http.SameSiteLaxMode,
 	})
+
+	http.Redirect(w, r, "/dashboard", http.StatusFound)
 }
 
 func (h *Handler) handleGetMe(w http.ResponseWriter, r *http.Request) {
-	teamID := teamIDFromCtx(r)
-	team, err := h.DB.GetTeamByID(teamID)
+	sess := sessionFromCtx(r)
+	user, err := h.DB.GetUserByID(sess.UserID)
+	if err != nil || user == nil {
+		writeError(w, http.StatusUnauthorized, "session user not found")
+		return
+	}
+	team, err := h.DB.GetTeamByID(sess.TeamID)
 	if err != nil || team == nil {
-		team = &db.Team{ID: teamID, Name: "Engineering Core"}
+		writeError(w, http.StatusInternalServerError, "team not found")
+		return
 	}
 
-	var user *db.User
-	if userEmail := r.Header.Get("X-User-Email"); userEmail != "" {
-		user, _ = h.DB.GetUserByEmail(userEmail)
-	}
-	if user == nil {
-		if userLogin := r.Header.Get("X-User-Login"); userLogin != "" {
-			user, _ = h.DB.GetUserByGithubLogin(userLogin)
-		}
-	}
-	if user == nil {
-		user, _ = h.DB.GetLatestUserByTeam(teamID)
-	}
-
-	installs, _ := h.DB.ListInstallationsByTeam(teamID)
+	installs, _ := h.DB.ListInstallationsByTeam(sess.TeamID)
 	var installLogins []string
 	for _, inst := range installs {
 		installLogins = append(installLogins, inst.AccountLogin)
@@ -555,10 +741,49 @@ func (h *Handler) handleGetMe(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleLogout(w http.ResponseWriter, r *http.Request) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     auth.SessionCookieName,
+		Value:    "",
+		Path:     "/",
+		MaxAge:   -1,
+		HttpOnly: true,
+		Secure:   isSecureRequest(r),
+		SameSite: http.SameSiteLaxMode,
+	})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "logged_out"})
 }
 
+func isSecureRequest(r *http.Request) bool {
+	return r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
+}
+
 // ─── Webhook (GitHub → langpeanut-cloud) ─────────────────────────────────────
+
+// verifyWebhookSignature checks the X-Hub-Signature-256 header GitHub sends
+// with every webhook delivery: HMAC-SHA256 of the raw request body, keyed by
+// GITHUB_WEBHOOK_SECRET. Without this, anyone who discovers the webhook URL
+// can forge push/PR-comment events and trigger jobs against any repo we
+// track. Uses hmac.Equal for a constant-time comparison to avoid leaking the
+// correct signature one byte at a time via response-time side channels.
+func (h *Handler) verifyWebhookSignature(r *http.Request, body []byte) bool {
+	if h.WebhookSecret == "" {
+		// Refuse to run wide open if the operator forgot to configure a secret.
+		return false
+	}
+	sigHeader := r.Header.Get("X-Hub-Signature-256")
+	const prefix = "sha256="
+	if !strings.HasPrefix(sigHeader, prefix) {
+		return false
+	}
+	sig, err := hex.DecodeString(strings.TrimPrefix(sigHeader, prefix))
+	if err != nil {
+		return false
+	}
+	mac := hmac.New(sha256.New, []byte(h.WebhookSecret))
+	mac.Write(body)
+	expected := mac.Sum(nil)
+	return hmac.Equal(sig, expected)
+}
 
 func (h *Handler) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	event := r.Header.Get("X-GitHub-Event")
@@ -567,6 +792,12 @@ func (h *Handler) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "read body: "+err.Error())
+		return
+	}
+
+	if !h.verifyWebhookSignature(r, body) {
+		slog.Warn("webhook: signature verification failed", "event", event)
+		writeError(w, http.StatusUnauthorized, "invalid webhook signature")
 		return
 	}
 
@@ -658,21 +889,23 @@ func (h *Handler) handleWebhook(w http.ResponseWriter, r *http.Request) {
 
 // ─── Middleware ───────────────────────────────────────────────────────────────
 
-func (h *Handler) requireTeam(next http.HandlerFunc) http.HandlerFunc {
+// requireSession verifies the signed session cookie and injects the
+// authenticated identity into the request context. Unlike the old
+// X-Team-ID header (which any client could set to any value), this
+// identity is derived from a token only the server could have issued.
+func (h *Handler) requireSession(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		raw := r.Header.Get("X-Team-ID")
-		if raw == "" {
-			// Default to team 1 for single-tenant / local development
-			r = r.WithContext(contextWithTeamID(r.Context(), 1))
-			next(w, r)
-			return
-		}
-		id, err := strconv.ParseInt(raw, 10, 64)
+		cookie, err := r.Cookie(auth.SessionCookieName)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid X-Team-ID")
+			writeError(w, http.StatusUnauthorized, "not signed in")
 			return
 		}
-		r = r.WithContext(contextWithTeamID(r.Context(), id))
+		sess, err := auth.ParseSessionToken(h.SessionSecret, cookie.Value)
+		if err != nil {
+			writeError(w, http.StatusUnauthorized, "invalid session: "+err.Error())
+			return
+		}
+		r = r.WithContext(contextWithSession(r.Context(), sess))
 		next(w, r)
 	}
 }

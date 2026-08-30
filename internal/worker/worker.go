@@ -140,14 +140,25 @@ func runJob(ctx context.Context, cfg Config, job *db.Job) error {
 	}
 	installToken := tok.Token
 
-	// Decrypt the team's LLM API key.
-	cred, err := cfg.DB.GetAPICredential(installation.TeamID, settings.Provider)
-	if err != nil || cred == nil {
-		return fmt.Errorf("no api credential for team %d provider %s. Please configure %s API key in Team Settings", installation.TeamID, settings.Provider, settings.Provider)
+	// Decrypt the LLM API key (check optional repo override first, then fall back to global team credential).
+	var apiKey string
+	if len(settings.EncryptedAPIKeyOverride) > 0 {
+		key, err := auth.Decrypt(cfg.MasterKey, settings.EncryptedAPIKeyOverride)
+		if err == nil && key != "" {
+			apiKey = key
+			slog.Info("worker: using repo-specific API key override", "job_id", job.ID, "provider", settings.Provider)
+		}
 	}
-	apiKey, err := auth.Decrypt(cfg.MasterKey, cred.EncryptedKey)
-	if err != nil {
-		return fmt.Errorf("decrypt api key: %w", err)
+	if apiKey == "" {
+		cred, err := cfg.DB.GetAPICredential(installation.TeamID, settings.Provider)
+		if err != nil || cred == nil {
+			return fmt.Errorf("no API key configured for provider '%s'. Please add your API key in Global AI Keys Vault or Repo Settings.", settings.Provider)
+		}
+		key, err := auth.Decrypt(cfg.MasterKey, cred.EncryptedKey)
+		if err != nil {
+			return fmt.Errorf("decrypt api key: %w", err)
+		}
+		apiKey = key
 	}
 
 	// ── Step 4–5: mirror + dedupe ────────────────────────────────────────────
@@ -179,7 +190,7 @@ func runJob(ctx context.Context, cfg Config, job *db.Job) error {
 	scratchDir := filepath.Join(cfg.JobsDir, strconv.FormatInt(job.ID, 10))
 	defer os.RemoveAll(scratchDir) // unconditional cleanup per §6.3
 
-	workDir := filepath.Join(scratchDir, "work")
+	workDir := filepath.Join(scratchDir, "repo")
 	if err := cfg.Mirror.CloneFromMirror(mirrorPath, workDir, authURL); err != nil {
 		return fmt.Errorf("clone from mirror: %w", err)
 	}
@@ -195,12 +206,7 @@ func runJob(ctx context.Context, cfg Config, job *db.Job) error {
 	if parseErr != nil || result == nil {
 		errMsg := "sandbox produced no result"
 		if sandboxErr != nil {
-			advice := logger.ExplainError(sandboxErr)
-			if advice != nil {
-				errMsg = fmt.Sprintf("[%s] %s — %s", advice.Subsystem, advice.Title, advice.RootCause)
-			} else {
-				errMsg = sandboxErr.Error()
-			}
+			errMsg = sandboxErr.Error()
 		}
 		return cfg.DB.UpdateJobStatus(job.ID, "failed", branch, headSHA, settingsHash, "", errMsg)
 	}
@@ -263,47 +269,117 @@ func runJob(ctx context.Context, cfg Config, job *db.Job) error {
 	} else if result.PipelineError != "" {
 		errMsg = result.PipelineError
 	}
-	return cfg.DB.UpdateJobStatus(job.ID, finalStatus, branch, headSHA, settingsHash, prURL, errMsg)
+
+	logsBytes, _ := json.Marshal(result.ExecutionLogs)
+	matrixBytes, _ := json.Marshal(result.Translations)
+	if len(result.Translations) > 0 {
+		_ = cfg.DB.UpsertTranslationMatrix(repo.ID, result.Translations)
+	}
+
+	return cfg.DB.UpdateJobStatusWithDetails(job.ID, finalStatus, branch, headSHA, settingsHash, prURL, errMsg, string(logsBytes), string(matrixBytes))
 }
 
-// launchSandbox spawns a langpeanut-runner container per §6.3 and waits for it.
+// launchSandbox spawns a langpeanut-runner container per §6.3 or falls back to runner binary.
 func launchSandbox(ctx context.Context, cfg Config, job *db.Job,
 	scratchDir, resultPath, apiKey string,
 	settings *db.RepoSettings, branch, authURL string,
 ) error {
 	localesJSON, _ := json.Marshal(settings.Locales)
-
-	args := []string{
-		"run", "--rm",
-		"--memory", cfg.RunnerMemoryLimit,
-		"--cpus", cfg.RunnerCPULimit,
-		// Scratch volume: only this job's directory.
-		"-v", scratchDir + ":/work",
-		// LLM API key — passed as env var, never written to disk inside sandbox.
-		"-e", "LLM_API_KEY=" + apiKey,
-		"-e", "LLM_PROVIDER=" + settings.Provider,
-		"-e", "LLM_MODEL=" + settings.Model,
-		"-e", "TARGET_LOCALES=" + string(localesJSON),
-		"-e", "TONE_PRESET=" + settings.TonePreset,
-		"-e", "USER_DIRECTIVE=" + os.Getenv("USER_DIRECTIVE"),
-		"-e", "BRANCH=" + branch,
-		"-e", "GIT_AUTH_URL=" + authURL,
-		"-e", "CUSTOM_INSTALL_CMD=" + settings.CustomInstallCmd,
-		"-e", "CUSTOM_BUILD_CMD=" + settings.CustomBuildCmd,
-		"-e", "ROOT_DIR=" + settings.RootDir,
-		"-e", "EXISTING_TRANSLATIONS_MODE=" + settings.ExistingTranslationsMode,
-		"-e", "RESULT_PATH=/work/result.json",
-		"-e", "WORK_DIR=/work/repo",
-		// NO: docker socket, SQLite, App private key.
-		cfg.RunnerImage,
+	hostJobsDir := os.Getenv("HOST_JOBS_DIR")
+	hostScratchDir := scratchDir
+	if hostJobsDir != "" {
+		hostScratchDir = filepath.Join(hostJobsDir, strconv.FormatInt(job.ID, 10))
 	}
 
-	cmd := exec.CommandContext(ctx, "docker", args...)
+	directive := settings.UserDirective
+	if directive == "" {
+		directive = os.Getenv("USER_DIRECTIVE")
+	}
+
+	// 1. Try Docker sandbox execution if docker CLI is present
+	dockerPath, dockerErr := exec.LookPath("docker")
+	if dockerErr == nil {
+		args := []string{
+			"run", "--rm",
+			"--memory", cfg.RunnerMemoryLimit,
+			"--cpus", cfg.RunnerCPULimit,
+			// Scratch volume: only this job's directory.
+			"-v", hostScratchDir + ":/work",
+			// LLM API key — passed as env var, never written to disk inside sandbox.
+			"-e", "LLM_API_KEY=" + apiKey,
+			"-e", "LLM_PROVIDER=" + settings.Provider,
+			"-e", "LLM_MODEL=" + settings.Model,
+			"-e", "TARGET_LOCALES=" + string(localesJSON),
+			"-e", "TONE_PRESET=" + settings.TonePreset,
+			"-e", "USER_DIRECTIVE=" + directive,
+			"-e", "BRANCH=" + branch,
+			"-e", "GIT_AUTH_URL=" + authURL,
+			"-e", "CUSTOM_INSTALL_CMD=" + settings.CustomInstallCmd,
+			"-e", "CUSTOM_BUILD_CMD=" + settings.CustomBuildCmd,
+			"-e", "ROOT_DIR=" + settings.RootDir,
+			"-e", "EXISTING_TRANSLATIONS_MODE=" + settings.ExistingTranslationsMode,
+			"-e", "RESULT_PATH=/work/result.json",
+			"-e", "WORK_DIR=/work/repo",
+			cfg.RunnerImage,
+		}
+
+		cmd := exec.CommandContext(ctx, dockerPath, args...)
+		out, err := cmd.CombinedOutput()
+		if err == nil {
+			slog.Info("worker: sandbox completed via docker", "job_id", job.ID)
+			return nil
+		}
+		slog.Warn("worker: docker run failed, attempting runner binary fallback", "job_id", job.ID, "err", err, "out", strings.TrimSpace(string(out)))
+	}
+
+	// 2. Direct runner binary execution fallback
+	runnerPath, err := exec.LookPath("langpeanut-runner")
+	if err != nil {
+		candidates := []string{
+			"./runner",
+			"./langpeanut-runner",
+			"/usr/local/bin/langpeanut-runner",
+			"/app/langpeanut-runner",
+			filepath.Join(filepath.Dir(os.Args[0]), "runner"),
+			filepath.Join(filepath.Dir(os.Args[0]), "langpeanut-runner"),
+		}
+		for _, c := range candidates {
+			if _, statErr := os.Stat(c); statErr == nil {
+				runnerPath = c
+				err = nil
+				break
+			}
+		}
+	}
+	if err != nil || runnerPath == "" {
+		if dockerErr == nil {
+			return fmt.Errorf("docker sandbox failed and langpeanut-runner binary not found")
+		}
+		return fmt.Errorf("neither docker nor langpeanut-runner binary found on system")
+	}
+
+	cmd := exec.CommandContext(ctx, runnerPath)
+	cmd.Env = append(os.Environ(),
+		"WORK_DIR="+filepath.Join(scratchDir, "repo"),
+		"RESULT_PATH="+resultPath,
+		"LLM_API_KEY="+apiKey,
+		"LLM_PROVIDER="+settings.Provider,
+		"LLM_MODEL="+settings.Model,
+		"TARGET_LOCALES="+string(localesJSON),
+		"TONE_PRESET="+settings.TonePreset,
+		"USER_DIRECTIVE="+directive,
+		"BRANCH="+branch,
+		"GIT_AUTH_URL="+authURL,
+		"CUSTOM_INSTALL_CMD="+settings.CustomInstallCmd,
+		"CUSTOM_BUILD_CMD="+settings.CustomBuildCmd,
+		"ROOT_DIR="+settings.RootDir,
+		"EXISTING_TRANSLATIONS_MODE="+settings.ExistingTranslationsMode,
+	)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("sandbox (job %d) exited non-zero: %s", job.ID, strings.TrimSpace(string(out)))
+		return fmt.Errorf("runner binary (job %d) failed: %s", job.ID, strings.TrimSpace(string(out)))
 	}
-	slog.Info("worker: sandbox completed", "job_id", job.ID)
+	slog.Info("worker: sandbox completed via runner binary", "job_id", job.ID)
 	return nil
 }
 
@@ -323,35 +399,47 @@ func readSandboxResult(resultPath string) (*sandboxResult, error) {
 // sandboxResultToPipelineResult converts the compact sandbox JSON into the
 // agents.PipelineResult shape that pkg/github's BuildPullRequest / OpenLocalizationPR need.
 func sandboxResultToPipelineResult(r *sandboxResult) *agents.PipelineResult {
-	pr := &agents.PipelineResult{}
-	for _, e := range r.UnresolvedErrors {
-		pr.UnresolvedErrors = append(pr.UnresolvedErrors, types.CompilerDiagnostic{
-			FilePath: e.File,
-			Line:     e.Line,
-			Message:  e.Message,
-			Source:   e.Source,
-		})
+	if r == nil {
+		return &agents.PipelineResult{}
+	}
+	pr := &agents.PipelineResult{
+		ScannedFilesCount:   r.ScannedFilesCount,
+		ExtractedCandidates: r.ExtractedCandidates,
+		UniqueKeysCount:     r.UniqueKeysCount,
+		RefactoredFiles:     r.RefactoredFiles,
+		GeneratedLocales:    r.GeneratedLocales,
+		SourceLocaleFile:    r.SourceLocaleFile,
+		TargetLocaleFiles:   r.TargetLocaleFiles,
+		VerificationReport:  r.VerificationReport,
+		DirectiveResult:     r.DirectiveResult,
+		Translations:        r.Translations,
+		UnresolvedErrors:    r.UnresolvedErrors,
+		DiagnosticAdvice:    r.DiagnosticAdvice,
+		ExecutionLogs:       r.ExecutionLogs,
 	}
 	return pr
 }
 
 // sandboxResult is the JSON contract the runner writes to /work/result.json.
 type sandboxResult struct {
-	TotalInputTokens  int64                   `json:"total_input_tokens"`
-	TotalOutputTokens int64                   `json:"total_output_tokens"`
-	EstimatedCostUSD  float64                 `json:"estimated_cost_usd"`
-	UnresolvedErrors  []unresolvedError       `json:"unresolved_errors"`
-	TokenUsage        []tokenUsageRecord      `json:"token_usage"`
-	PipelineError     string                  `json:"pipeline_error,omitempty"`
-	DiagnosticAdvice  *logger.DiagnosticAdvice `json:"diagnostic_advice,omitempty"`
-	ExecutionLogs     []logger.LogEvent       `json:"execution_logs,omitempty"`
-}
-
-type unresolvedError struct {
-	File    string `json:"file"`
-	Line    int    `json:"line"`
-	Message string `json:"message"`
-	Source  string `json:"source"`
+	TotalInputTokens    int64                        `json:"total_input_tokens"`
+	TotalOutputTokens   int64                        `json:"total_output_tokens"`
+	EstimatedCostUSD    float64                      `json:"estimated_cost_usd"`
+	ScannedFilesCount   int                          `json:"scanned_files_count"`
+	ExtractedCandidates int                          `json:"extracted_candidates"`
+	UniqueKeysCount     int                          `json:"unique_keys_count"`
+	RefactoredFiles     []string                     `json:"refactored_files"`
+	GeneratedLocales    []string                     `json:"generated_locales"`
+	SourceLocaleFile    string                       `json:"source_locale_file"`
+	TargetLocaleFiles   map[string]string            `json:"target_locale_files"`
+	VerificationReport  *types.VerificationReport    `json:"verification_report,omitempty"`
+	DirectiveResult     *types.DirectiveResult       `json:"directive_result,omitempty"`
+	Translations        map[string]map[string]string `json:"translations,omitempty"`
+	UnresolvedErrors    []types.CompilerDiagnostic   `json:"unresolved_errors,omitempty"`
+	DiagnosticAdvice    *logger.DiagnosticAdvice     `json:"diagnostic_advice,omitempty"`
+	ExecutionLogs       []logger.LogEvent            `json:"execution_logs,omitempty"`
+	PipelineError       string                       `json:"pipeline_error,omitempty"`
+	TokenUsage          []tokenUsageRecord           `json:"token_usage"`
 }
 
 type tokenUsageRecord struct {
