@@ -3,6 +3,15 @@
 import useSWR from 'swr'
 import { useState, useEffect, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
+import {
+  Tool,
+  PromptInput,
+  PromptInputTextarea,
+  PromptInputActions,
+  PromptInputAction,
+  PromptSuggestion,
+  Reasoning,
+} from '@/app/components/prompt-kit'
 
 const fetcher = (url: string) =>
   fetch(url, { credentials: 'include' }).then((r) => {
@@ -227,9 +236,9 @@ function RepoDetailsContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const repoIdParam = searchParams.get('id')
-  const initialTab = (searchParams.get('tab') as 'overview' | 'settings' | 'matrix' | 'seo' | 'runs' | 'bot') || 'overview'
+  const initialTab = (searchParams.get('tab') as 'copilot' | 'overview' | 'settings' | 'matrix' | 'seo' | 'runs' | 'bot') || 'copilot'
 
-  const [activeTab, setActiveTab] = useState<'overview' | 'settings' | 'matrix' | 'seo' | 'runs' | 'bot'>(initialTab)
+  const [activeTab, setActiveTab] = useState<'copilot' | 'overview' | 'settings' | 'matrix' | 'seo' | 'runs' | 'bot'>(initialTab)
   const [authed, setAuthed] = useState(false)
   const [authChecked, setAuthChecked] = useState(false)
 
@@ -255,7 +264,7 @@ function RepoDetailsContent() {
   }, [router])
 
   // Sync tab with URL
-  const setTab = (t: 'overview' | 'settings' | 'matrix' | 'seo' | 'runs' | 'bot') => {
+  const setTab = (t: 'copilot' | 'overview' | 'settings' | 'matrix' | 'seo' | 'runs' | 'bot') => {
     setActiveTab(t)
     const newUrl = `/repo?id=${repoIdParam}&tab=${t}`
     window.history.replaceState(null, '', newUrl)
@@ -376,6 +385,92 @@ function RepoDetailsContent() {
   const [runningDoctor, setRunningDoctor] = useState(false)
   const [doctorReport, setDoctorReport] = useState<any>(null)
   const [pruningKeys, setPruningKeys] = useState(false)
+
+  // Central Agent Copilot State
+  const [centralCanvasTab, setCentralCanvasTab] = useState<'matrix' | 'diff' | 'critic' | 'serp' | 'cost'>('matrix')
+  const [lastCopilotCards, setLastCopilotCards] = useState<any[]>([])
+  const [centralCopilotMessages, setCentralCopilotMessages] = useState<
+    Array<{ role: 'user' | 'assistant'; content: string; tool_calls?: any[]; cards?: any[] }>
+  >([
+    {
+      role: 'assistant',
+      content: 'Autonomous Multi-Agent Orchestrator initialized. Instruct the underlying supervisor to audit AST strings, execute translation batches, verify ICU variable integrity with 4-tier critics, or simulate Google SERP rankings.',
+    },
+  ])
+  const [centralCopilotInput, setCentralCopilotInput] = useState('')
+  const [centralCopilotThinking, setCentralCopilotThinking] = useState(false)
+
+  const sendCentralCopilotMessage = async (promptText: string) => {
+    if (!promptText.trim() || !repo || centralCopilotThinking) return
+    const text = promptText.trim()
+    setCentralCopilotInput('')
+    setCentralCopilotThinking(true)
+
+    setCentralCopilotMessages((prev) => [...prev, { role: 'user', content: text }])
+
+    try {
+      const res = await fetch(`/api/repos/${repo.ID}/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: text }),
+      })
+
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+
+      const reader = res.body?.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      let assistantMsg: { role: 'assistant'; content: string; tool_calls: any[]; cards: any[] } = {
+        role: 'assistant',
+        content: '',
+        tool_calls: [],
+        cards: [],
+      }
+
+      while (reader) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n\n')
+        buffer = lines.pop() || ''
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const ev = JSON.parse(line.slice(6))
+              if (ev.type === 'tool_start' && ev.tool_call) {
+                assistantMsg.tool_calls.push(ev.tool_call)
+              } else if (ev.type === 'card' && ev.card) {
+                assistantMsg.cards.push(ev.card)
+                setLastCopilotCards((prev) => [...prev, ev.card])
+                if (ev.card.type === 'matrix') setCentralCanvasTab('matrix')
+                if (ev.card.type === 'diff') setCentralCanvasTab('diff')
+                if (ev.card.type === 'critic') setCentralCanvasTab('critic')
+                if (ev.card.type === 'serp') setCentralCanvasTab('serp')
+                if (ev.card.type === 'cost') setCentralCanvasTab('cost')
+              } else if (ev.type === 'chunk' && ev.content) {
+                assistantMsg.content += ev.content
+              } else if (ev.type === 'done' && ev.content) {
+                assistantMsg.content = ev.content
+              }
+            } catch (e) {}
+          }
+        }
+      }
+
+      setCentralCopilotMessages((prev) => [...prev, assistantMsg])
+    } catch (err: any) {
+      setCentralCopilotMessages((prev) => [
+        ...prev,
+        {
+          role: 'assistant',
+          content: `Error communicating with orchestrator: ${err.message}`,
+        },
+      ])
+    } finally {
+      setCentralCopilotThinking(false)
+    }
+  }
 
   // Target Branch Selector State & Remote Branches SWR
   const [selectedBranch, setSelectedBranch] = useState<string>('')
@@ -1183,6 +1278,7 @@ jobs:
         {/* Tab Navigation */}
         <div className="flex items-center gap-1.5 pt-2 border-t border-white/[0.05]">
           {[
+            { id: 'copilot', label: 'Autonomous Copilot', badge: 'CORE' },
             { id: 'overview', label: 'Overview' },
             { id: 'settings', label: 'Settings & Strategy' },
             { id: 'matrix', label: 'Translation Matrix' },
@@ -1200,10 +1296,165 @@ jobs:
               }`}
             >
               <span>{t.label}</span>
+              {t.badge && (
+                <span className="text-[9px] px-1.5 py-0.2 rounded bg-sky-500/10 text-sky-400 border border-sky-500/20 font-mono">
+                  {t.badge}
+                </span>
+              )}
             </button>
           ))}
         </div>
       </div>
+
+      {/* ─── TAB 0: AUTONOMOUS COPILOT WORKSPACE (DEDICATED CHAT PAGE) ───────────────────────────── */}
+      {activeTab === 'copilot' && (
+        <div className="max-w-4xl mx-auto w-full glass-panel rounded-2xl flex flex-col overflow-hidden border border-white/10 bg-[#080a0f] shadow-2xl min-h-[720px]">
+          {/* Header */}
+          <div className="p-4 border-b border-white/10 bg-[#0b0e14] flex items-center justify-between">
+            <div className="flex items-center gap-2.5">
+              <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
+              <div>
+                <h3 className="text-xs font-bold text-white font-mono uppercase tracking-wider">
+                  AUTONOMOUS MULTI-AGENT ORCHESTRATOR
+                </h3>
+                <p className="text-[11px] text-zinc-400 font-mono">
+                  Universal localization & growth engine for {repo.Owner}/{repo.Name}
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-mono px-2.5 py-1 rounded-md bg-zinc-800 text-zinc-300 border border-zinc-700">
+                {repo.settings?.Model || selectedModel || 'claude-sonnet-5'}
+              </span>
+              <button
+                onClick={() =>
+                  setCentralCopilotMessages([
+                    {
+                      role: 'assistant',
+                      content: 'Autonomous Multi-Agent Orchestrator initialized. Instruct the underlying supervisor to audit AST strings, execute translation batches, verify ICU variable integrity with 4-tier critics, or simulate Google SERP rankings.',
+                    },
+                  ])
+                }
+                title="Reset conversation"
+                className="p-1.5 rounded-md text-slate-400 hover:text-white hover:bg-zinc-800 transition-colors text-xs"
+              >
+                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" /><path d="M3 3v5h5" /></svg>
+              </button>
+            </div>
+          </div>
+
+          {/* Conversation Messages with Prompt-Kit Tool & Card UI */}
+          <div className="flex-1 p-6 overflow-y-auto space-y-4 text-xs custom-scrollbar min-h-[460px] max-h-[620px]">
+            {centralCopilotMessages.map((msg, idx) => (
+              <div
+                key={idx}
+                className={msg.role === 'user' ? 'flex justify-end' : 'flex justify-start'}
+              >
+                {msg.role === 'user' ? (
+                  <div className="max-w-[80%] bg-[#121622] border border-sky-500/40 text-zinc-100 rounded-2xl px-4 py-2.5 text-xs font-mono shadow-sm">
+                    <div className="text-[10px] uppercase text-sky-400 font-bold mb-1">User Directive</div>
+                    {msg.content}
+                  </div>
+                ) : (
+                  <div className="max-w-[95%] space-y-2.5 w-full">
+                    {msg.tool_calls && msg.tool_calls.length > 0 && (
+                      <div className="space-y-1.5">
+                        {msg.tool_calls.map((tc: any, tIdx: number) => (
+                          <Tool
+                            key={tIdx}
+                            toolPart={{
+                              type: tc.name || 'tool_invocation',
+                              state: tc.error ? 'output-error' : tc.result ? 'output-available' : 'output-available',
+                              input: tc.args,
+                              output: tc.result,
+                              toolCallId: tc.id,
+                              errorText: tc.error,
+                            }}
+                          />
+                        ))}
+                      </div>
+                    )}
+
+                    {msg.cards && msg.cards.length > 0 && (
+                      <div className="space-y-2">
+                        {msg.cards.map((c: any, cIdx: number) => (
+                          <div key={cIdx} className="rounded-xl border border-white/10 bg-[#050609] p-3 text-xs font-mono text-zinc-300">
+                            {c.rendered_text && (
+                              <pre className="whitespace-pre overflow-x-auto custom-scrollbar">{c.rendered_text}</pre>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    <div className="bg-[#0b0e14] border border-[#1c212e] rounded-2xl p-4 text-xs text-zinc-200 shadow-md space-y-2 font-sans leading-relaxed whitespace-pre-wrap">
+                      {msg.content}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ))}
+            {centralCopilotThinking && (
+              <div className="flex justify-start w-full">
+                <div className="bg-[#0b0e14] border border-[#1c212e] rounded-xl p-3 text-xs text-zinc-400 flex items-center gap-2.5 font-mono">
+                  <span className="w-2 h-2 rounded-full bg-sky-400 animate-ping" />
+                  <span>Routing deterministic tools & executing plan...</span>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Quick Action Suggestions (Prompt-Kit PromptSuggestion) */}
+          <div className="px-6 py-2.5 border-t border-white/5 bg-[#06080d] flex flex-wrap items-center gap-2 text-[11px] font-mono">
+            <span className="text-[10px] uppercase text-zinc-500 font-semibold mr-1">Suggestions:</span>
+            <PromptSuggestion onClick={() => sendCentralCopilotMessage('Scan repository and calculate coverage matrix')}>
+              Scan AST
+            </PromptSuggestion>
+            <PromptSuggestion onClick={() => sendCentralCopilotMessage('Translate missing keys into Spanish, German and Japanese')}>
+              Translate Missing
+            </PromptSuggestion>
+            <PromptSuggestion onClick={() => sendCentralCopilotMessage('Execute 4-tier verification critic on all locales')}>
+              4-Tier Critic
+            </PromptSuggestion>
+            <PromptSuggestion onClick={() => sendCentralCopilotMessage('Simulate Japanese Google SERP preview')}>
+              SERP Preview
+            </PromptSuggestion>
+            <PromptSuggestion onClick={() => sendCentralCopilotMessage('List checkpoints or undo last changes')}>
+              Checkpoints
+            </PromptSuggestion>
+            <PromptSuggestion onClick={() => sendCentralCopilotMessage('Diagnose repository framework and localization readiness')}>
+              Diagnostics
+            </PromptSuggestion>
+          </div>
+
+          {/* Prompt-Kit PromptInput Bar */}
+          <div className="p-4 border-t border-white/10 bg-[#0b0e14]">
+            <PromptInput
+              value={centralCopilotInput}
+              onValueChange={setCentralCopilotInput}
+              onSubmit={() => sendCentralCopilotMessage(centralCopilotInput)}
+              isLoading={centralCopilotThinking}
+              disabled={centralCopilotThinking}
+            >
+              <PromptInputTextarea
+                placeholder="Instruct agent or query repository (e.g. 'Scan AST', 'Translate missing keys to German', 'Run critic')..."
+              />
+              <PromptInputActions>
+                <span className="text-[11px] text-zinc-500 font-mono">Enter to send, Shift+Enter for newline</span>
+                <button
+                  type="button"
+                  onClick={() => sendCentralCopilotMessage(centralCopilotInput)}
+                  disabled={centralCopilotThinking || !centralCopilotInput.trim()}
+                  className="px-4 py-2 bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white rounded-xl font-medium text-xs flex items-center gap-1.5 transition-all cursor-pointer font-mono shadow-sm"
+                >
+                  <span>Execute</span>
+                  <span>→</span>
+                </button>
+              </PromptInputActions>
+            </PromptInput>
+          </div>
+        </div>
+      )}
 
       {/* ─── TAB 1: OVERVIEW ─────────────────────────────────────────────────── */}
       {activeTab === 'overview' && (

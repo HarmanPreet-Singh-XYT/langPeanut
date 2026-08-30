@@ -24,11 +24,13 @@ import (
 	"github.com/langPeanut/langpeanut-cloud/internal/auth"
 	"github.com/langPeanut/langpeanut-cloud/internal/db"
 	"github.com/langPeanut/langPeanut/pkg/agents"
+	"github.com/langPeanut/langPeanut/pkg/chat"
 	ghpkg "github.com/langPeanut/langPeanut/pkg/github"
 	"github.com/langPeanut/langPeanut/pkg/llm"
 	"github.com/langPeanut/langPeanut/pkg/logger"
 	"github.com/langPeanut/langPeanut/pkg/platforms"
 	"github.com/langPeanut/langPeanut/pkg/seo"
+	"github.com/langPeanut/langPeanut/pkg/types"
 )
 
 // Handler groups dependencies needed by all route handlers.
@@ -81,11 +83,12 @@ func RegisterRoutes(mux *http.ServeMux, h *Handler) {
 	mux.HandleFunc("POST /api/repos/{repoID}/seo/optimize", h.requireSession(h.handleRunSEOOptimize))
 	mux.HandleFunc("POST /api/repos/{repoID}/seo/apply", h.requireSession(h.handleApplySEOToMatrix))
 
-	// ── Agentic Capabilities: Doctor, Persona, & Pruner ──────────────────────
+	// ── Agentic Capabilities: Doctor, Persona, Pruner & Central Copilot ─────
 	mux.HandleFunc("GET /api/repos/{repoID}/doctor", h.requireSession(h.handleRepoDoctor))
 	mux.HandleFunc("POST /api/repos/{repoID}/discover-persona", h.requireSession(h.handleDiscoverPersona))
 	mux.HandleFunc("GET /api/repos/{repoID}/dead-keys", h.requireSession(h.handleGetDeadKeys))
 	mux.HandleFunc("POST /api/repos/{repoID}/prune-keys", h.requireSession(h.handlePruneDeadKeys))
+	mux.HandleFunc("POST /api/repos/{repoID}/chat", h.requireSession(h.handleRepoChat))
 
 	// ── Jobs ──────────────────────────────────────────────────────────────────
 	// List recent jobs for a repo.
@@ -1816,5 +1819,89 @@ func (h *Handler) handleApplySEOToMatrix(w http.ResponseWriter, r *http.Request)
 		"applied_count": appliedCount,
 		"locale":        req.Locale,
 	})
+}
+
+func (h *Handler) handleRepoChat(w http.ResponseWriter, r *http.Request) {
+	repo, ok := h.authorizeRepo(w, r)
+	if !ok {
+		return
+	}
+
+	var req struct {
+		Message string `json:"message"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Message) == "" {
+		writeError(w, http.StatusBadRequest, "message is required")
+		return
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "streaming unsupported")
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	settings, _ := h.DB.GetRepoSettings(repo.ID)
+	provider := llm.ProviderClaude
+	model := "claude-sonnet-5"
+	if settings != nil {
+		if settings.Provider != "" {
+			provider = llm.ProviderType(settings.Provider)
+		}
+		if settings.Model != "" {
+			model = settings.Model
+		}
+	}
+
+	client := llm.NewClient(provider, model)
+	engine, err := chat.NewEngine(".", client)
+	if err != nil {
+		fmt.Fprintf(w, "data: %s\n\n", `{"type":"error","error":"failed to init engine"}`)
+		flusher.Flush()
+		return
+	}
+
+	// Populate engine with database translation matrix candidates
+	matrix, _ := h.DB.GetTranslationMatrix(repo.ID)
+	if enMap, ok := matrix["en"]; ok {
+		for k, v := range enMap {
+			engine.Candidates = append(engine.Candidates, types.StringCandidate{
+				Key:        k,
+				RawValue:   v,
+				CleanValue: v,
+			})
+		}
+	}
+
+	eventChan := make(chan chat.ChatEvent, 100)
+	doneChan := make(chan struct{})
+
+	go func() {
+		defer close(doneChan)
+		_, _ = engine.SendMessage(r.Context(), req.Message, eventChan)
+	}()
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-doneChan:
+			for len(eventChan) > 0 {
+				ev := <-eventChan
+				data, _ := json.Marshal(ev)
+				fmt.Fprintf(w, "data: %s\n\n", data)
+				flusher.Flush()
+			}
+			return
+		case ev := <-eventChan:
+			data, _ := json.Marshal(ev)
+			fmt.Fprintf(w, "data: %s\n\n", data)
+			flusher.Flush()
+		}
+	}
 }
 
