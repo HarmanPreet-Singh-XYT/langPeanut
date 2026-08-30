@@ -235,6 +235,36 @@ function RepoDetailsContent() {
   const [cellValue, setCellValue] = useState('')
   const [savingCell, setSavingCell] = useState(false)
 
+  // AI Translation Copilot State
+  const [copilotState, setCopilotState] = useState<{
+    isOpen: boolean
+    key: string
+    sourceLocale: string
+    sourceText: string
+    targetLocale: string
+    currentTranslation: string
+    instruction: string
+    loading: boolean
+    result: {
+      translated_text: string
+      explanation: string
+      icu_variables_ok: boolean
+      length_reduction?: string
+    } | null
+    error: string | null
+  }>({
+    isOpen: false,
+    key: '',
+    sourceLocale: 'en',
+    sourceText: '',
+    targetLocale: '',
+    currentTranslation: '',
+    instruction: 'shorter',
+    loading: false,
+    result: null,
+    error: null,
+  })
+
   // Trigger & Live Real Runner Terminal State
   const [selectedJobId, setSelectedJobId] = useState<number | null>(null)
   const activeJobId = selectedJobId || (jobsData && jobsData.length > 0 ? jobsData[0].ID : null)
@@ -248,6 +278,23 @@ function RepoDetailsContent() {
   const [toastMsg, setToastMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [copiedConfig, setCopiedConfig] = useState(false)
   const [copiedYAML, setCopiedYAML] = useState(false)
+
+  // Autonomous Agentic Feature States
+  const [discoveringPersona, setDiscoveringPersona] = useState(false)
+  const [runningDoctor, setRunningDoctor] = useState(false)
+  const [doctorReport, setDoctorReport] = useState<any>(null)
+  const [pruningKeys, setPruningKeys] = useState(false)
+
+  // Target Branch Selector State & Remote Branches SWR
+  const [selectedBranch, setSelectedBranch] = useState<string>('')
+  const [isBranchDropdownOpen, setIsBranchDropdownOpen] = useState(false)
+  const [customBranchInput, setCustomBranchInput] = useState('')
+  const { data: branchesData } = useSWR<
+    Array<{ name: string; is_default: boolean; protected: boolean }>
+  >(
+    authed && repo ? `/api/repos/${repo.ID}/branches` : null,
+    fetcher
+  )
 
   // Populate settings when repo is loaded
   useEffect(() => {
@@ -379,17 +426,19 @@ function RepoDetailsContent() {
     if (!repo) return
     setTriggering(true)
     try {
+      const targetBranch = selectedBranch || repo.DefaultBranch || 'main'
       const res = await fetch(`/api/repos/${repo.ID}/jobs`, {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          branch: targetBranch,
           user_directive: userDirective.trim(),
         }),
       })
       const body = await res.json()
       if (res.ok) {
-        showToast(`Job #${body.ID} queued for ${repo.Owner}/${repo.Name}`)
+        showToast(`Job #${body.ID} queued for ${repo.Owner}/${repo.Name} on branch '${targetBranch}'`)
         setSelectedJobId(body.ID)
         mutateJobs()
         mutateMatrix()
@@ -404,10 +453,11 @@ function RepoDetailsContent() {
     }
   }
 
-  async function saveMatrixCell(rowKey: string, colKey: string) {
+  async function saveMatrixCell(rowKey: string, colKey: string, customVal?: string) {
     if (!repo) return
     setSavingCell(true)
     try {
+      const val = customVal !== undefined ? customVal : cellValue
       const res = await fetch(`/api/repos/${repo.ID}/matrix`, {
         method: 'PUT',
         credentials: 'include',
@@ -415,7 +465,7 @@ function RepoDetailsContent() {
         body: JSON.stringify({
           locale: colKey,
           key: rowKey,
-          value: cellValue,
+          value: val,
         }),
       })
       if (res.ok) {
@@ -427,6 +477,152 @@ function RepoDetailsContent() {
       showToast('Failed to save translation cell', 'error')
     } finally {
       setSavingCell(false)
+    }
+  }
+
+  function openCopilot(key: string, targetLocale: string, currentVal: string) {
+    const srcText = rawMatrix?.['en']?.[key] || key
+    setCopilotState({
+      isOpen: true,
+      key,
+      sourceLocale: 'en',
+      sourceText: srcText,
+      targetLocale,
+      currentTranslation: currentVal,
+      instruction: 'shorter',
+      loading: false,
+      result: null,
+      error: null,
+    })
+  }
+
+  async function generateWithCopilot(customInstruction?: string) {
+    if (!repo) return
+    const instr = customInstruction !== undefined ? customInstruction : copilotState.instruction
+    setCopilotState((prev) => ({ ...prev, loading: true, error: null, instruction: instr }))
+    try {
+      const res = await fetch(`/api/repos/${repo.ID}/matrix/copilot`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          key: copilotState.key,
+          source_locale: copilotState.sourceLocale,
+          source_text: copilotState.sourceText,
+          target_locale: copilotState.targetLocale,
+          current_translation: copilotState.currentTranslation,
+          instruction: instr,
+          apply_directly: false,
+        }),
+      })
+      const data = await res.json()
+      if (res.ok) {
+        setCopilotState((prev) => ({
+          ...prev,
+          loading: false,
+          result: data,
+          error: null,
+        }))
+      } else {
+        setCopilotState((prev) => ({
+          ...prev,
+          loading: false,
+          error: data.error || 'AI generation failed',
+        }))
+      }
+    } catch (e: any) {
+      setCopilotState((prev) => ({
+        ...prev,
+        loading: false,
+        error: e?.message || 'Network error during AI Copilot call',
+      }))
+    }
+  }
+
+  async function applyCopilotResult() {
+    if (!repo || !copilotState.result) return
+    const key = copilotState.key
+    const loc = copilotState.targetLocale
+    const val = copilotState.result.translated_text
+
+    await saveMatrixCell(key, loc, val)
+    setCopilotState((prev) => ({ ...prev, isOpen: false }))
+  }
+
+  async function discoverPersona() {
+    if (!repo) return
+    setDiscoveringPersona(true)
+    try {
+      const res = await fetch(`/api/repos/${repo.ID}/discover-persona`, {
+        method: 'POST',
+        credentials: 'include',
+      })
+      const data = await res.json()
+      if (res.ok) {
+        if (data.recommended_tone) {
+          setSelectedTone(data.recommended_tone)
+        }
+        if (data.brand_lexicon && data.brand_lexicon.length > 0) {
+          setGlossaryInput(data.brand_lexicon.join(', '))
+        }
+        if (data.locales_suggested && data.locales_suggested.length > 0) {
+          setSelectedLocales(Array.from(new Set([...selectedLocales, ...data.locales_suggested])))
+        }
+        showToast(`✨ Persona discovered: Tone '${data.recommended_tone}', ${data.brand_lexicon?.length || 0} brand terms locked`)
+      } else {
+        showToast(data.error || 'Failed to discover persona', 'error')
+      }
+    } catch {
+      showToast('Network error during persona discovery', 'error')
+    } finally {
+      setDiscoveringPersona(false)
+    }
+  }
+
+  async function runDoctorCheck() {
+    if (!repo) return
+    setRunningDoctor(true)
+    try {
+      const res = await fetch(`/api/repos/${repo.ID}/doctor`, {
+        credentials: 'include',
+      })
+      const data = await res.json()
+      if (res.ok) {
+        setDoctorReport(data)
+        showToast(`🩺 Doctor audit: Health score ${data.health_score}/100 (${data.status})`)
+      } else {
+        showToast(data.error || 'Failed to run doctor audit', 'error')
+      }
+    } catch {
+      showToast('Network error during doctor audit', 'error')
+    } finally {
+      setRunningDoctor(false)
+    }
+  }
+
+  async function pruneDeadKeys() {
+    if (!repo) return
+    setPruningKeys(true)
+    try {
+      const res = await fetch(`/api/repos/${repo.ID}/prune-keys`, {
+        method: 'POST',
+        credentials: 'include',
+      })
+      const data = await res.json()
+      if (res.ok) {
+        mutateMatrix()
+        if (data.total_dead_keys > 0) {
+          showToast(`🧹 Pruned ${data.total_dead_keys} stale keys across ${data.pruned_locales?.join(', ') || 'locale files'}`)
+        } else {
+          showToast('✓ 100% Clean! No orphaned translation keys found.')
+        }
+      } else {
+        showToast(data.error || 'Failed to prune dead keys', 'error')
+      }
+    } catch {
+      showToast('Network error during dead key pruning', 'error')
+    } finally {
+      setPruningKeys(false)
     }
   }
 
@@ -555,9 +751,113 @@ jobs:
                 <h1 className="text-2xl font-extrabold text-white tracking-tight">
                   {repo.Owner} / {repo.Name}
                 </h1>
-                <span className="text-[11px] font-mono px-2 py-0.5 rounded-full bg-slate-800 border border-white/10 text-slate-300">
-                  branch: {repo.DefaultBranch}
-                </span>
+                
+                {/* Interactive Target Branch Selector */}
+                <div className="relative inline-block">
+                  <button
+                    type="button"
+                    onClick={() => setIsBranchDropdownOpen(!isBranchDropdownOpen)}
+                    className="text-[11px] font-mono px-2.5 py-0.5 rounded-full bg-slate-800 hover:bg-slate-700 border border-white/15 text-sky-300 flex items-center gap-1.5 cursor-pointer shadow-sm transition-all"
+                    title="Click to switch target branch"
+                  >
+                    <svg className="w-3 h-3 text-sky-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <line x1="6" y1="3" x2="6" y2="15" />
+                      <circle cx="18" cy="6" r="3" />
+                      <circle cx="6" cy="18" r="3" />
+                      <path d="M18 9a9 9 0 0 1-9 9" />
+                    </svg>
+                    <span>branch: <strong className="text-white">{selectedBranch || repo.DefaultBranch || 'main'}</strong></span>
+                    <svg className="w-2.5 h-2.5 text-slate-400 ml-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="6 9 12 15 18 9" />
+                    </svg>
+                  </button>
+
+                  {isBranchDropdownOpen && (
+                    <div className="absolute left-0 mt-2 w-72 rounded-2xl bg-slate-950 border border-white/15 shadow-2xl p-3 z-50 space-y-2.5 backdrop-blur-xl">
+                      <div className="flex items-center justify-between px-1">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                          Select Target Branch
+                        </span>
+                        <span className="text-[10px] text-sky-400 font-mono">
+                          {branchesData?.length || 1} available
+                        </span>
+                      </div>
+
+                      {/* Custom branch input */}
+                      <div>
+                        <input
+                          type="text"
+                          value={customBranchInput}
+                          onChange={(e) => setCustomBranchInput(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' && customBranchInput.trim()) {
+                              setSelectedBranch(customBranchInput.trim())
+                              setIsBranchDropdownOpen(false)
+                              setCustomBranchInput('')
+                              showToast(`Target branch set to: ${customBranchInput.trim()}`)
+                            }
+                          }}
+                          placeholder="Type branch name & press Enter…"
+                          className="w-full rounded-xl bg-slate-900 border border-white/10 px-3 py-1.5 text-xs text-white placeholder:text-slate-600 focus:outline-none focus:border-sky-400 font-mono"
+                        />
+                      </div>
+
+                      <div className="max-h-52 overflow-y-auto space-y-1">
+                        {branchesData && branchesData.length > 0 ? (
+                          branchesData.map((b) => {
+                            const isCur = (selectedBranch || repo.DefaultBranch || 'main') === b.name
+                            return (
+                              <button
+                                key={b.name}
+                                type="button"
+                                onClick={() => {
+                                  setSelectedBranch(b.name)
+                                  setIsBranchDropdownOpen(false)
+                                  showToast(`Target branch set to: ${b.name}`)
+                                }}
+                                className={`w-full text-left px-3 py-2 rounded-xl text-xs font-mono flex items-center justify-between cursor-pointer transition-colors ${
+                                  isCur
+                                    ? 'bg-sky-500/15 text-sky-300 font-bold border border-sky-500/30'
+                                    : 'text-slate-300 hover:bg-white/5 hover:text-white'
+                                }`}
+                              >
+                                <div className="flex items-center gap-2 truncate">
+                                  <svg className="w-3 h-3 text-slate-400 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <line x1="6" y1="3" x2="6" y2="15" />
+                                    <circle cx="18" cy="6" r="3" />
+                                    <circle cx="6" cy="18" r="3" />
+                                    <path d="M18 9a9 9 0 0 1-9 9" />
+                                  </svg>
+                                  <span className="truncate">{b.name}</span>
+                                </div>
+                                <div className="flex items-center gap-1.5 shrink-0">
+                                  {b.is_default && (
+                                    <span className="text-[9px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 border border-white/5">
+                                      default
+                                    </span>
+                                  )}
+                                  {isCur && <span className="text-sky-400 font-bold text-xs">✓</span>}
+                                </div>
+                              </button>
+                            )
+                          })
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedBranch(repo.DefaultBranch || 'main')
+                              setIsBranchDropdownOpen(false)
+                            }}
+                            className="w-full text-left px-3 py-2 rounded-xl text-xs font-mono text-sky-300 bg-sky-500/15 cursor-pointer"
+                          >
+                            {repo.DefaultBranch || 'main'} (default)
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
                 {latestStatus && (
                   <span className={`text-[11px] font-mono px-2 py-0.5 rounded-full border ${latestStatus.bg} ${latestStatus.border} ${latestStatus.text}`}>
                     {latestStatus.label}
@@ -688,6 +988,87 @@ jobs:
               </div>
             </div>
           </div>
+
+          {/* Autonomous Diagnostic Health Doctor Panel */}
+          <div className="glass-panel p-6 rounded-2xl space-y-4 border border-sky-500/20 bg-sky-950/10">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-sky-500/20 border border-sky-500/30 text-sky-400 flex items-center justify-center font-bold text-base">
+                  🩺
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                    i18n Readiness & Framework Doctor
+                    {doctorReport && (
+                      <span className={`text-[10px] font-mono px-2 py-0.5 rounded-full font-bold border ${
+                        doctorReport.health_score >= 80
+                          ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
+                          : doctorReport.health_score >= 50
+                          ? 'bg-amber-500/10 text-amber-400 border-amber-500/30'
+                          : 'bg-rose-500/10 text-rose-400 border-rose-500/30'
+                      }`}>
+                        {doctorReport.health_score}/100 {doctorReport.status}
+                      </span>
+                    )}
+                  </h3>
+                  <p className="text-xs text-slate-400">
+                    Autonomous 360° health audit of framework dependencies, locale directories, and hardcoded UI literals.
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={runDoctorCheck}
+                disabled={runningDoctor}
+                className="rounded-xl bg-sky-600 hover:bg-sky-500 disabled:bg-sky-900 text-white text-xs font-semibold px-4 py-2 cursor-pointer shadow-lg shadow-sky-600/30 flex items-center gap-1.5 shrink-0"
+              >
+                {runningDoctor ? 'Analyzing Codebase…' : 'Run Health Check 🩺'}
+              </button>
+            </div>
+
+            {doctorReport && (
+              <div className="pt-3 border-t border-white/10 space-y-3">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                  <div className="p-2.5 rounded-xl bg-slate-900/80 border border-white/5 space-y-0.5">
+                    <span className="text-[10px] uppercase font-bold text-slate-400">Framework</span>
+                    <p className="text-white font-semibold">{doctorReport.framework_display || doctorReport.framework}</p>
+                  </div>
+                  <div className="p-2.5 rounded-xl bg-slate-900/80 border border-white/5 space-y-0.5">
+                    <span className="text-[10px] uppercase font-bold text-slate-400">Untranslated Strings</span>
+                    <p className="text-amber-400 font-semibold font-mono">~{doctorReport.hardcoded_strings_estimated} literals</p>
+                  </div>
+                  <div className="p-2.5 rounded-xl bg-slate-900/80 border border-white/5 space-y-0.5">
+                    <span className="text-[10px] uppercase font-bold text-slate-400">Configured Dictionaries</span>
+                    <p className="text-sky-400 font-semibold font-mono">[{doctorReport.configured_locales?.join(', ') || 'none'}]</p>
+                  </div>
+                  <div className="p-2.5 rounded-xl bg-slate-900/80 border border-white/5 space-y-0.5">
+                    <span className="text-[10px] uppercase font-bold text-slate-400">Auto-Fixable Issues</span>
+                    <p className="text-emerald-400 font-semibold">{doctorReport.auto_fixable_count} of {doctorReport.issues?.length || 0}</p>
+                  </div>
+                </div>
+
+                {doctorReport.issues && doctorReport.issues.length > 0 && (
+                  <div className="space-y-1.5 pt-1">
+                    {doctorReport.issues.map((iss: any, idx: number) => (
+                      <div key={idx} className="p-2.5 rounded-xl bg-slate-900/60 border border-white/5 flex items-start gap-2.5 text-xs">
+                        <span className="text-sm">
+                          {iss.severity === 'ERROR' ? '❌' : iss.severity === 'WARNING' ? '⚠️' : 'ℹ️'}
+                        </span>
+                        <div className="flex-1 min-w-0">
+                          <div className="font-semibold text-white">{iss.title}</div>
+                          <div className="text-slate-400 text-[11px] mt-0.5">{iss.description}</div>
+                          {iss.auto_fix_hint && (
+                            <div className="text-sky-300 text-[11px] mt-1 font-mono">💡 {iss.auto_fix_hint}</div>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       )}
 
@@ -812,9 +1193,19 @@ jobs:
 
           {/* Section 2: Tone & Brand Persona */}
           <div className="glass-panel p-6 rounded-2xl space-y-4">
-            <div>
-              <h3 className="text-sm font-bold text-white">2. Cultural Tone & Brand Persona</h3>
-              <p className="text-xs text-slate-400">Sets the translation style memory and vocabulary constraints.</p>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div>
+                <h3 className="text-sm font-bold text-white">2. Cultural Tone & Brand Persona</h3>
+                <p className="text-xs text-slate-400">Sets the translation style memory and vocabulary constraints.</p>
+              </div>
+              <button
+                type="button"
+                onClick={discoverPersona}
+                disabled={discoveringPersona}
+                className="rounded-xl bg-purple-600/20 hover:bg-purple-600/30 border border-purple-500/40 text-purple-300 text-xs font-semibold px-3.5 py-1.5 flex items-center gap-1.5 cursor-pointer transition-all shrink-0"
+              >
+                {discoveringPersona ? 'Mining Assets…' : '✨ Auto-Discover Persona & Tone'}
+              </button>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
@@ -1020,9 +1411,19 @@ jobs:
               </div>
 
               <div className="sm:col-span-2">
-                <label className="text-[11px] font-semibold text-slate-300 block mb-1">
-                  Brand Glossary & Do-Not-Translate Lexicon
-                </label>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-[11px] font-semibold text-slate-300 block">
+                    Brand Glossary & Do-Not-Translate Lexicon
+                  </label>
+                  <button
+                    type="button"
+                    onClick={discoverPersona}
+                    disabled={discoveringPersona}
+                    className="text-[11px] text-purple-400 hover:text-purple-300 font-semibold cursor-pointer"
+                  >
+                    {discoveringPersona ? 'Mining…' : '✨ Auto-Detect Terms'}
+                  </button>
+                </div>
                 <input
                   type="text"
                   value={glossaryInput}
@@ -1121,8 +1522,16 @@ jobs:
               />
               <button
                 type="button"
+                onClick={pruneDeadKeys}
+                disabled={pruningKeys}
+                className="rounded-xl bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-300 text-xs font-medium px-3.5 py-1.5 cursor-pointer flex items-center gap-1.5 transition-all"
+              >
+                {pruningKeys ? 'Pruning…' : '🧹 Prune Dead Keys'}
+              </button>
+              <button
+                type="button"
                 onClick={copyGitHubActionsYAML}
-                className="rounded-xl bg-white/[0.05] hover:bg-white/[0.1] border border-white/10 text-slate-300 text-xs font-medium px-3.5 py-1.5"
+                className="rounded-xl bg-white/[0.05] hover:bg-white/[0.1] border border-white/10 text-slate-300 text-xs font-medium px-3.5 py-1.5 cursor-pointer"
               >
                 {copiedYAML ? '✓ Copied' : 'Export Actions YAML'}
               </button>
@@ -1184,7 +1593,7 @@ jobs:
                             const val = rawMatrix?.[loc]?.[keyStr] || ''
 
                             return (
-                              <td key={loc} className="p-3.5">
+                              <td key={loc} className="p-3.5 group relative">
                                 {isEditing ? (
                                   <div className="flex items-center gap-1.5">
                                     <input
@@ -1202,16 +1611,34 @@ jobs:
                                     >
                                       Save
                                     </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => openCopilot(keyStr, loc, cellValue || val)}
+                                      title="Open AI Copilot"
+                                      className="bg-purple-600/80 hover:bg-purple-500 text-white px-2 py-1 rounded text-[10px] font-bold flex items-center gap-1 cursor-pointer"
+                                    >
+                                      ✨
+                                    </button>
                                   </div>
                                 ) : (
-                                  <div
-                                    onClick={() => {
-                                      setEditingCell({ rowKey: keyStr, colKey: loc })
-                                      setCellValue(val)
-                                    }}
-                                    className="cursor-pointer hover:text-sky-300 text-slate-300 p-1 rounded hover:bg-white/5 transition-all"
-                                  >
-                                    {val || <span className="text-slate-600 italic text-[11px]">untranslated</span>}
+                                  <div className="flex items-center justify-between gap-2">
+                                    <div
+                                      onClick={() => {
+                                        setEditingCell({ rowKey: keyStr, colKey: loc })
+                                        setCellValue(val)
+                                      }}
+                                      className="cursor-pointer hover:text-sky-300 text-slate-300 p-1 rounded hover:bg-white/5 transition-all flex-1 min-w-0 truncate"
+                                    >
+                                      {val || <span className="text-slate-600 italic text-[11px]">untranslated</span>}
+                                    </div>
+                                    <button
+                                      type="button"
+                                      onClick={() => openCopilot(keyStr, loc, val)}
+                                      title="AI Translation Copilot"
+                                      className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-purple-500/20 text-purple-400 hover:text-purple-300 text-[10px] font-mono shrink-0 flex items-center gap-0.5 border border-purple-500/30 cursor-pointer"
+                                    >
+                                      ✨ AI
+                                    </button>
                                   </div>
                                 )}
                               </td>
@@ -1225,6 +1652,167 @@ jobs:
               )
             })()}
           </div>
+
+          {/* ─── AI TRANSLATION COPILOT MODAL (HUMAN CHECKPOINT) ───────────────── */}
+          {copilotState.isOpen && (
+            <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+              <div className="glass-panel w-full max-w-xl rounded-2xl border border-purple-500/30 bg-slate-950 p-6 shadow-2xl space-y-5 animate-in fade-in zoom-in-95 duration-150">
+                {/* Header */}
+                <div className="flex items-center justify-between border-b border-white/10 pb-3.5">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-xl bg-purple-500/20 border border-purple-500/40 text-purple-300 flex items-center justify-center font-bold text-sm shadow-inner">
+                      ✨
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                        AI Translation Copilot
+                        <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-300 border border-purple-500/30">
+                          Human Checkpoint
+                        </span>
+                      </h3>
+                      <p className="text-[11px] text-slate-400 font-mono">
+                        Key: <span className="text-sky-300 font-semibold">{copilotState.key}</span> • Target: <span className="uppercase text-purple-300 font-bold">[{copilotState.targetLocale}]</span>
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setCopilotState((prev) => ({ ...prev, isOpen: false }))}
+                    className="text-slate-400 hover:text-white p-1 text-lg font-bold cursor-pointer"
+                  >
+                    ✕
+                  </button>
+                </div>
+
+                {/* Source and Current comparison */}
+                <div className="grid grid-cols-2 gap-3 text-xs">
+                  <div className="p-3 rounded-xl bg-white/[0.03] border border-white/10 space-y-1">
+                    <div className="text-[10px] uppercase font-bold text-slate-400">English (Source)</div>
+                    <div className="text-slate-200 font-medium">{copilotState.sourceText || '—'}</div>
+                  </div>
+                  <div className="p-3 rounded-xl bg-white/[0.03] border border-white/10 space-y-1">
+                    <div className="text-[10px] uppercase font-bold text-slate-400">Current [{copilotState.targetLocale}]</div>
+                    <div className="text-slate-300 italic">{copilotState.currentTranslation || '(untranslated)'}</div>
+                  </div>
+                </div>
+
+                {/* Directive / Quick Actions */}
+                <div className="space-y-2">
+                  <label className="text-[11px] font-bold text-slate-300 block">
+                    Agent Directive / Optimization Goal
+                  </label>
+                  <div className="flex flex-wrap gap-2">
+                    {[
+                      { id: 'shorter', label: '⚡ Make Shorter (-30%)', hint: 'Compact synonym for mobile buttons' },
+                      { id: 'casual', label: '😊 Casual & Friendly', hint: 'Warm colloquial phrasing' },
+                      { id: 'formal', label: '👔 Formal & Enterprise', hint: 'B2B professional phrasing' },
+                      { id: 'brand_safe', label: '🛡️ Brand Safe', hint: 'Keep technical names untouched' },
+                    ].map((preset) => (
+                      <button
+                        key={preset.id}
+                        type="button"
+                        onClick={() => {
+                          setCopilotState((prev) => ({ ...prev, instruction: preset.id }))
+                          generateWithCopilot(preset.id)
+                        }}
+                        className={`text-xs px-3 py-1.5 rounded-xl border font-medium transition-all cursor-pointer ${
+                          copilotState.instruction === preset.id
+                            ? 'bg-purple-600/30 border-purple-400 text-purple-200 font-bold shadow-md shadow-purple-900/40'
+                            : 'bg-white/[0.03] border-white/10 text-slate-300 hover:text-white hover:bg-white/[0.08]'
+                        }`}
+                      >
+                        {preset.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Custom prompt input */}
+                  <div className="pt-2">
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={
+                          ['shorter', 'casual', 'formal', 'brand_safe'].includes(copilotState.instruction)
+                            ? ''
+                            : copilotState.instruction
+                        }
+                        onChange={(e) => setCopilotState((prev) => ({ ...prev, instruction: e.target.value }))}
+                        placeholder="Or enter custom instruction (e.g. 'Use Latin American Spanish' or 'Sound like a gamer')..."
+                        className="flex-1 rounded-xl bg-slate-900 border border-white/10 px-3.5 py-2 text-xs text-white placeholder:text-slate-500 focus:border-purple-400 focus:outline-none"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => generateWithCopilot()}
+                        disabled={copilotState.loading}
+                        className="rounded-xl bg-purple-600 hover:bg-purple-500 disabled:bg-purple-900 text-white text-xs font-semibold px-4 py-2 flex items-center gap-1.5 cursor-pointer shadow-lg shadow-purple-600/30"
+                      >
+                        {copilotState.loading ? 'Generating…' : 'Regenerate ✨'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Error state */}
+                {copilotState.error && (
+                  <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs font-mono">
+                    {copilotState.error}
+                  </div>
+                )}
+
+                {/* Result Card */}
+                {copilotState.result && (
+                  <div className="p-4 rounded-xl bg-purple-950/30 border border-purple-500/40 space-y-3 animate-in fade-in duration-200">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] uppercase font-bold text-purple-300 tracking-wider">
+                        AI Suggested Translation
+                      </span>
+                      <div className="flex items-center gap-1.5">
+                        {copilotState.result.icu_variables_ok && (
+                          <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 font-semibold">
+                            ✓ ICU Matched
+                          </span>
+                        )}
+                        {copilotState.result.length_reduction && (
+                          <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-sky-500/10 border border-sky-500/30 text-sky-400 font-semibold">
+                            {copilotState.result.length_reduction}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="text-sm font-semibold text-white bg-slate-900/80 p-3 rounded-lg border border-white/10 font-mono">
+                      {copilotState.result.translated_text}
+                    </div>
+
+                    {copilotState.result.explanation && (
+                      <p className="text-[11px] text-slate-400 italic">
+                        Decision Note: {copilotState.result.explanation}
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                {/* Modal Actions */}
+                <div className="flex items-center justify-end gap-3 pt-3 border-t border-white/10">
+                  <button
+                    type="button"
+                    onClick={() => setCopilotState((prev) => ({ ...prev, isOpen: false }))}
+                    className="rounded-xl bg-white/[0.05] hover:bg-white/[0.1] text-slate-300 text-xs font-semibold px-4 py-2 cursor-pointer"
+                  >
+                    Close
+                  </button>
+                  <button
+                    type="button"
+                    onClick={applyCopilotResult}
+                    disabled={!copilotState.result || copilotState.loading}
+                    className="rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-800 disabled:text-slate-600 text-white text-xs font-semibold px-5 py-2 shadow-lg shadow-emerald-600/30 flex items-center gap-1.5 cursor-pointer"
+                  >
+                    ✓ Apply & Save to Matrix
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

@@ -370,8 +370,13 @@ func (db *DB) GetAPICredential(teamID int64, provider string) (*APICredential, e
 
 // CreateJob inserts a new pending job and returns its ID.
 func (db *DB) CreateJob(repoID int64, triggerType string) (*Job, error) {
-	res, err := db.Exec(`INSERT INTO jobs(repo_id, trigger_type, status) VALUES(?,?,'pending')`,
-		repoID, triggerType)
+	return db.CreateJobWithBranch(repoID, triggerType, "")
+}
+
+// CreateJobWithBranch inserts a new pending job with an explicit target branch.
+func (db *DB) CreateJobWithBranch(repoID int64, triggerType, branch string) (*Job, error) {
+	res, err := db.Exec(`INSERT INTO jobs(repo_id, trigger_type, branch, status) VALUES(?,?,?,'pending')`,
+		repoID, triggerType, branch)
 	if err != nil {
 		return nil, fmt.Errorf("create job: %w", err)
 	}

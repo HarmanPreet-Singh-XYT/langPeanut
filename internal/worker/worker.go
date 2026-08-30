@@ -169,9 +169,17 @@ func runJob(ctx context.Context, cfg Config, job *db.Job) error {
 		return fmt.Errorf("ensure mirror: %w", err)
 	}
 
-	headSHA, err := cfg.Mirror.HeadCommitSHA(mirrorPath, repo.DefaultBranch)
+	baseBranch := job.Branch
+	if baseBranch == "" {
+		baseBranch = repo.DefaultBranch
+	}
+	if baseBranch == "" {
+		baseBranch = "main"
+	}
+
+	headSHA, err := cfg.Mirror.HeadCommitSHA(mirrorPath, baseBranch)
 	if err != nil {
-		return fmt.Errorf("head commit sha: %w", err)
+		return fmt.Errorf("head commit sha for branch %s: %w", baseBranch, err)
 	}
 
 	settingsHash := computeSettingsHash(settings)
@@ -198,7 +206,7 @@ func runJob(ctx context.Context, cfg Config, job *db.Job) error {
 	// ── Step 6: launch sandboxed runner container ────────────────────────────
 	resultPath := filepath.Join(scratchDir, "result.json")
 	sandboxErr := launchSandbox(ctx, cfg, job, scratchDir, resultPath,
-		apiKey, settings, branch, authURL)
+		apiKey, settings, branch, baseBranch, authURL)
 
 	// ── Step 10–11: read result, open PR, persist usage ─────────────────────
 	// We always attempt a PR even after sandbox error — partial results still have value.
@@ -233,7 +241,7 @@ func runJob(ctx context.Context, cfg Config, job *db.Job) error {
 
 	// PR creation stays in the trusted host process — sandbox never holds the App key.
 	pr, prErr := ghpkg.OpenLocalizationPR(ctx, prTok.Token, repo.Owner, repo.Name,
-		branch, repo.DefaultBranch, pipelineResult, meta)
+		branch, baseBranch, pipelineResult, meta)
 	prURL := ""
 	if pr != nil {
 		prURL = pr.HTMLURL
@@ -282,7 +290,7 @@ func runJob(ctx context.Context, cfg Config, job *db.Job) error {
 // launchSandbox spawns a langpeanut-runner container per §6.3 or falls back to runner binary.
 func launchSandbox(ctx context.Context, cfg Config, job *db.Job,
 	scratchDir, resultPath, apiKey string,
-	settings *db.RepoSettings, branch, authURL string,
+	settings *db.RepoSettings, branch, baseBranch, authURL string,
 ) error {
 	localesJSON, _ := json.Marshal(settings.Locales)
 	hostJobsDir := os.Getenv("HOST_JOBS_DIR")
@@ -313,6 +321,7 @@ func launchSandbox(ctx context.Context, cfg Config, job *db.Job,
 			"-e", "TONE_PRESET=" + settings.TonePreset,
 			"-e", "USER_DIRECTIVE=" + directive,
 			"-e", "BRANCH=" + branch,
+			"-e", "BASE_BRANCH=" + baseBranch,
 			"-e", "GIT_AUTH_URL=" + authURL,
 			"-e", "CUSTOM_INSTALL_CMD=" + settings.CustomInstallCmd,
 			"-e", "CUSTOM_BUILD_CMD=" + settings.CustomBuildCmd,
@@ -369,6 +378,7 @@ func launchSandbox(ctx context.Context, cfg Config, job *db.Job,
 		"TONE_PRESET="+settings.TonePreset,
 		"USER_DIRECTIVE="+directive,
 		"BRANCH="+branch,
+		"BASE_BRANCH="+baseBranch,
 		"GIT_AUTH_URL="+authURL,
 		"CUSTOM_INSTALL_CMD="+settings.CustomInstallCmd,
 		"CUSTOM_BUILD_CMD="+settings.CustomBuildCmd,

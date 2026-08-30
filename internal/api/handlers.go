@@ -15,13 +15,19 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 
 	"github.com/langPeanut/langpeanut-cloud/internal/auth"
 	"github.com/langPeanut/langpeanut-cloud/internal/db"
+	"github.com/langPeanut/langPeanut/pkg/agents"
 	ghpkg "github.com/langPeanut/langPeanut/pkg/github"
+	"github.com/langPeanut/langPeanut/pkg/llm"
 	"github.com/langPeanut/langPeanut/pkg/logger"
+	"github.com/langPeanut/langPeanut/pkg/platforms"
 )
 
 // Handler groups dependencies needed by all route handlers.
@@ -60,6 +66,14 @@ func RegisterRoutes(mux *http.ServeMux, h *Handler) {
 	mux.HandleFunc("PUT /api/repos/{repoID}/settings", h.requireSession(h.handleUpsertSettings))
 	mux.HandleFunc("GET /api/repos/{repoID}/matrix", h.requireSession(h.handleGetMatrix))
 	mux.HandleFunc("PUT /api/repos/{repoID}/matrix", h.requireSession(h.handleUpdateMatrixCell))
+	mux.HandleFunc("POST /api/repos/{repoID}/matrix/copilot", h.requireSession(h.handleMatrixCopilot))
+	mux.HandleFunc("GET /api/repos/{repoID}/branches", h.requireSession(h.handleListBranches))
+
+	// ── Agentic Capabilities: Doctor, Persona, & Pruner ──────────────────────
+	mux.HandleFunc("GET /api/repos/{repoID}/doctor", h.requireSession(h.handleRepoDoctor))
+	mux.HandleFunc("POST /api/repos/{repoID}/discover-persona", h.requireSession(h.handleDiscoverPersona))
+	mux.HandleFunc("GET /api/repos/{repoID}/dead-keys", h.requireSession(h.handleGetDeadKeys))
+	mux.HandleFunc("POST /api/repos/{repoID}/prune-keys", h.requireSession(h.handlePruneDeadKeys))
 
 	// ── Jobs ──────────────────────────────────────────────────────────────────
 	// List recent jobs for a repo.
@@ -442,6 +456,276 @@ func (h *Handler) handleUpdateMatrixCell(w http.ResponseWriter, r *http.Request)
 	})
 }
 
+type matrixCopilotReq struct {
+	Key                string `json:"key"`
+	SourceLocale       string `json:"source_locale"`
+	SourceText         string `json:"source_text"`
+	TargetLocale       string `json:"target_locale"`
+	CurrentTranslation string `json:"current_translation"`
+	Instruction        string `json:"instruction"`
+	ApplyDirectly      bool   `json:"apply_directly"`
+}
+
+type matrixCopilotResp struct {
+	Key             string `json:"key"`
+	TargetLocale    string `json:"target_locale"`
+	TranslatedText  string `json:"translated_text"`
+	Explanation     string `json:"explanation"`
+	ICUVariablesOk  bool   `json:"icu_variables_ok"`
+	LengthReduction string `json:"length_reduction,omitempty"`
+}
+
+func (h *Handler) handleMatrixCopilot(w http.ResponseWriter, r *http.Request) {
+	repo, ok := h.authorizeRepo(w, r)
+	if !ok {
+		return
+	}
+	var req matrixCopilotReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Key == "" || req.TargetLocale == "" {
+		writeError(w, http.StatusBadRequest, "invalid payload: key and target_locale required")
+		return
+	}
+	if req.SourceLocale == "" {
+		req.SourceLocale = "en"
+	}
+	if req.SourceText == "" {
+		req.SourceText = req.CurrentTranslation
+	}
+	if req.SourceText == "" {
+		req.SourceText = req.Key
+	}
+
+	settings, err := h.DB.GetRepoSettings(repo.ID)
+	if err != nil || settings == nil {
+		writeError(w, http.StatusBadRequest, "please configure repository settings and AI provider first")
+		return
+	}
+
+	// Resolve API Key: check repo override first, then team's global credential
+	var encKey []byte
+	if len(settings.EncryptedAPIKeyOverride) > 0 {
+		encKey = settings.EncryptedAPIKeyOverride
+	} else {
+		inst, err := h.DB.GetInstallationByID(repo.InstallationID)
+		if err == nil && inst != nil {
+			cred, _ := h.DB.GetAPICredential(inst.TeamID, settings.Provider)
+			if cred != nil {
+				encKey = cred.EncryptedKey
+			}
+		}
+	}
+
+	if len(encKey) == 0 {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("no API key configured for provider '%s'. Set an API key in Global AI Keys Vault or Repo Settings.", settings.Provider))
+		return
+	}
+
+	apiKey, err := auth.Decrypt(h.MasterKey, encKey)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "decrypt api key: "+err.Error())
+		return
+	}
+
+	client := llm.NewClientWithAPIKey(llm.ProviderType(settings.Provider), settings.Model, apiKey)
+
+	systemPrompt := `You are langPeanut Translation Copilot, an expert localization AI agent.
+Your task is to translate or re-synthesize a single UI string according to the user's specific directive.
+CRITICAL INVARIANTS:
+1. Preserve all ICU variables, placeholders, and tokens exactly (e.g. {userName}, {count}, (${total}), %s, @value).
+2. Do NOT wrap output in markdown code fences or markdown blocks. Return ONLY valid JSON in this exact shape:
+{"translated_text": "...", "explanation": "Brief 1-sentence note explaining the translation decision"}`
+
+	directive := req.Instruction
+	if directive == "" || directive == "shorter" {
+		directive = "Make the translation more concise and shorter (reduce length by ~20-35% without losing core meaning so it fits compact mobile buttons)."
+	} else if directive == "casual" {
+		directive = "Use a friendly, warm, colloquial, engaging tone suitable for modern apps."
+	} else if directive == "formal" {
+		directive = "Use an authoritative, precise, professional enterprise-grade B2B tone."
+	} else if directive == "brand_safe" {
+		directive = "Ensure all brand names and technical terms remain completely untranslated in English."
+	}
+
+	userPrompt := fmt.Sprintf("Source Key: %s\nSource Language: %s\nSource Text: \"%s\"\nTarget Language: %s\nCurrent Translation: \"%s\"\nUser Directive: %s\n\nGenerate the perfected translation for locale [%s].",
+		req.Key, req.SourceLocale, req.SourceText, req.TargetLocale, req.CurrentTranslation, directive, req.TargetLocale)
+
+	ctx := r.Context()
+	llmOut, err := client.Complete(ctx, systemPrompt, userPrompt)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "AI Copilot completion failed: "+err.Error())
+		return
+	}
+
+	type aiResult struct {
+		TranslatedText string `json:"translated_text"`
+		Explanation    string `json:"explanation"`
+	}
+	var res aiResult
+	cleanJSON := strings.TrimSpace(llmOut)
+	if strings.HasPrefix(cleanJSON, "```") {
+		lines := strings.Split(cleanJSON, "\n")
+		if len(lines) > 2 {
+			cleanJSON = strings.Join(lines[1:len(lines)-1], "\n")
+		}
+	}
+	if err := json.Unmarshal([]byte(cleanJSON), &res); err != nil || res.TranslatedText == "" {
+		res.TranslatedText = strings.Trim(strings.TrimSpace(llmOut), "\"`'")
+		res.Explanation = fmt.Sprintf("Synthesized via %s (%s)", settings.Provider, settings.Model)
+	}
+
+	// ICU variable validation
+	icuOk := true
+	reICU := regexp.MustCompile(`\{[a-zA-Z0-9_]+\}`)
+	srcTokens := reICU.FindAllString(req.SourceText, -1)
+	for _, tok := range srcTokens {
+		if !strings.Contains(res.TranslatedText, tok) {
+			icuOk = false
+			break
+		}
+	}
+
+	var lenRed string
+	if len(req.CurrentTranslation) > 0 && len(res.TranslatedText) < len(req.CurrentTranslation) {
+		pct := int(float64(len(req.CurrentTranslation)-len(res.TranslatedText)) / float64(len(req.CurrentTranslation)) * 100)
+		lenRed = fmt.Sprintf("-%d%% shorter", pct)
+	}
+
+	if req.ApplyDirectly {
+		_ = h.DB.UpdateTranslationCell(repo.ID, req.TargetLocale, req.Key, res.TranslatedText)
+	}
+
+	writeJSON(w, http.StatusOK, matrixCopilotResp{
+		Key:             req.Key,
+		TargetLocale:    req.TargetLocale,
+		TranslatedText:  res.TranslatedText,
+		Explanation:     res.Explanation,
+		ICUVariablesOk:  icuOk,
+		LengthReduction: lenRed,
+	})
+}
+
+// ─── Autonomous Agentic Endpoints: Doctor, Persona Scout & Pruner ─────────────
+
+func (h *Handler) getRepoScanDir(repoID int64) string {
+	dataDir := os.Getenv("DATA_DIR")
+	if dataDir == "" {
+		dataDir = "data"
+	}
+	// Check jobs directory for latest unpacked working copy
+	jobsDir := filepath.Join(dataDir, "jobs")
+	entries, err := os.ReadDir(jobsDir)
+	if err == nil {
+		for i := len(entries) - 1; i >= 0; i-- {
+			e := entries[i]
+			if e.IsDir() {
+				targetRepoDir := filepath.Join(jobsDir, e.Name(), "repo")
+				if _, err := os.Stat(targetRepoDir); err == nil {
+					return targetRepoDir
+				}
+			}
+		}
+	}
+	return "."
+}
+
+func (h *Handler) handleRepoDoctor(w http.ResponseWriter, r *http.Request) {
+	repo, ok := h.authorizeRepo(w, r)
+	if !ok {
+		return
+	}
+	scanDir := h.getRepoScanDir(repo.ID)
+	registry := platforms.NewRegistry()
+	platform, _ := registry.AutoDetect(scanDir)
+
+	doctor := agents.NewDoctorAgent(platform)
+	report, err := doctor.DiagnoseProject(scanDir)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "doctor audit failed: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, report)
+}
+
+func (h *Handler) handleDiscoverPersona(w http.ResponseWriter, r *http.Request) {
+	repo, ok := h.authorizeRepo(w, r)
+	if !ok {
+		return
+	}
+	settings, err := h.DB.GetRepoSettings(repo.ID)
+	if err != nil || settings == nil {
+		writeError(w, http.StatusBadRequest, "please configure repo settings first")
+		return
+	}
+
+	var apiKey string
+	var encKey []byte
+	if len(settings.EncryptedAPIKeyOverride) > 0 {
+		encKey = settings.EncryptedAPIKeyOverride
+	} else {
+		inst, err := h.DB.GetInstallationByID(repo.InstallationID)
+		if err == nil && inst != nil {
+			cred, _ := h.DB.GetAPICredential(inst.TeamID, settings.Provider)
+			if cred != nil {
+				encKey = cred.EncryptedKey
+			}
+		}
+	}
+	if len(encKey) > 0 {
+		apiKey, _ = auth.Decrypt(h.MasterKey, encKey)
+	}
+
+	var client llm.Client
+	if apiKey != "" {
+		client = llm.NewClientWithAPIKey(llm.ProviderType(settings.Provider), settings.Model, apiKey)
+	}
+
+	scanDir := h.getRepoScanDir(repo.ID)
+	scout := agents.NewPersonaScoutAgent(client)
+	report, err := scout.DiscoverPersona(scanDir)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "persona discovery failed: "+err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, report)
+}
+
+func (h *Handler) handleGetDeadKeys(w http.ResponseWriter, r *http.Request) {
+	repo, ok := h.authorizeRepo(w, r)
+	if !ok {
+		return
+	}
+	scanDir := h.getRepoScanDir(repo.ID)
+	registry := platforms.NewRegistry()
+	platform, _ := registry.AutoDetect(scanDir)
+
+	pruner := agents.NewPrunerAgent(platform)
+	report, err := pruner.AnalyzeDeadKeys(scanDir)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "dead key analysis failed: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, report)
+}
+
+func (h *Handler) handlePruneDeadKeys(w http.ResponseWriter, r *http.Request) {
+	repo, ok := h.authorizeRepo(w, r)
+	if !ok {
+		return
+	}
+	scanDir := h.getRepoScanDir(repo.ID)
+	registry := platforms.NewRegistry()
+	platform, _ := registry.AutoDetect(scanDir)
+
+	pruner := agents.NewPrunerAgent(platform)
+	report, err := pruner.PruneDeadKeys(scanDir)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "prune keys failed: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, report)
+}
+
 // ─── Jobs ─────────────────────────────────────────────────────────────────────
 
 func (h *Handler) handleListJobs(w http.ResponseWriter, r *http.Request) {
@@ -458,7 +742,76 @@ func (h *Handler) handleListJobs(w http.ResponseWriter, r *http.Request) {
 }
 
 type triggerJobReq struct {
+	Branch        string `json:"branch,omitempty"`
 	UserDirective string `json:"user_directive,omitempty"`
+}
+
+type branchInfo struct {
+	Name      string `json:"name"`
+	IsDefault bool   `json:"is_default"`
+	Protected bool   `json:"protected"`
+}
+
+func (h *Handler) handleListBranches(w http.ResponseWriter, r *http.Request) {
+	repo, ok := h.authorizeRepo(w, r)
+	if !ok {
+		return
+	}
+
+	branches := []branchInfo{}
+	defaultBranch := repo.DefaultBranch
+	if defaultBranch == "" {
+		defaultBranch = "main"
+	}
+
+	// Try querying GitHub API with installation token
+	inst, err := h.DB.GetInstallationByID(repo.InstallationID)
+	if err == nil && inst != nil && len(h.PrivateKeyPEM) > 0 {
+		pk, err := ghpkg.ParsePrivateKeyPEM(h.PrivateKeyPEM)
+		if err == nil && pk != nil {
+			appCfg := ghpkg.AppConfig{
+				AppID:      h.AppID,
+				PrivateKey: pk,
+			}
+			tok, err := ghpkg.CreateInstallationToken(r.Context(), appCfg, inst.InstallationID)
+			if err == nil && tok != nil && tok.Token != "" {
+				req, reqErr := http.NewRequestWithContext(r.Context(), "GET",
+					fmt.Sprintf("https://api.github.com/repos/%s/%s/branches?per_page=100", repo.Owner, repo.Name), nil)
+				if reqErr == nil {
+				req.Header.Set("Authorization", "Bearer "+tok.Token)
+				req.Header.Set("Accept", "application/vnd.github+json")
+				resp, httpErr := http.DefaultClient.Do(req)
+				if httpErr == nil && resp.StatusCode == http.StatusOK {
+					var ghBranches []struct {
+						Name      string `json:"name"`
+						Protected bool   `json:"protected"`
+					}
+					if json.NewDecoder(resp.Body).Decode(&ghBranches) == nil {
+						for _, b := range ghBranches {
+							branches = append(branches, branchInfo{
+								Name:      b.Name,
+								IsDefault: b.Name == defaultBranch,
+								Protected: b.Protected,
+							})
+						}
+					}
+					resp.Body.Close()
+				}
+			}
+		}
+	}
+}
+
+	// Fallback if no remote branches returned
+	if len(branches) == 0 {
+		branches = append(branches, branchInfo{
+			Name:      defaultBranch,
+			IsDefault: true,
+			Protected: false,
+		})
+	}
+
+	writeJSON(w, http.StatusOK, branches)
 }
 
 func (h *Handler) handleTriggerJob(w http.ResponseWriter, r *http.Request) {
@@ -492,12 +845,20 @@ func (h *Handler) handleTriggerJob(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	job, err := h.DB.CreateJob(repo.ID, "manual")
+	targetBranch := strings.TrimSpace(req.Branch)
+	if targetBranch == "" {
+		targetBranch = repo.DefaultBranch
+	}
+	if targetBranch == "" {
+		targetBranch = "main"
+	}
+
+	job, err := h.DB.CreateJobWithBranch(repo.ID, "manual", targetBranch)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "create job: "+err.Error())
 		return
 	}
-	slog.Info("api: job queued", "job_id", job.ID, "repo_id", repo.ID)
+	slog.Info("api: job queued", "job_id", job.ID, "repo_id", repo.ID, "branch", targetBranch)
 	writeJSON(w, http.StatusAccepted, job)
 }
 

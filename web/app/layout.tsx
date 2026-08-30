@@ -38,7 +38,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         {/* Global Footer */}
         <footer className="border-t border-white/[0.08] mt-28 py-12 text-center text-xs text-slate-500">
           <div className="max-w-7xl mx-auto px-6 flex flex-col sm:flex-row items-center justify-between gap-4">
-            <p>© 2026 langPeanut — Built for the micro1 Agentic Workflows Hackathon.</p>
+            <p>© 2026 langPeanut — Universal Multi-Agent Localization Workflow & Studio.</p>
             <div className="flex items-center gap-4 text-slate-400 text-[11px]">
               <span>Tree-Sitter AST</span>
               <span>•</span>
