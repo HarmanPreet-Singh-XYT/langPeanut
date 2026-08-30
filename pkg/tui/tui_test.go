@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/langPeanut/langPeanut/pkg/agents"
 	"github.com/langPeanut/langPeanut/pkg/llm"
 	"github.com/langPeanut/langPeanut/pkg/types"
 )
@@ -91,7 +92,7 @@ func TestTUI_1ClickLocalizationAsyncFlow(t *testing.T) {
 	if m.wizardStep != 0 {
 		t.Fatalf("Expected wizardStep=0 (Languages), got %d", m.wizardStep)
 	}
-	if !strings.Contains(m.View(), "Step 1 of 4") {
+	if !strings.Contains(m.View(), "Step 1 of 5") {
 		t.Fatalf("Expected wizard step 1 in view, got:\n%s", m.View())
 	}
 
@@ -101,31 +102,41 @@ func TestTUI_1ClickLocalizationAsyncFlow(t *testing.T) {
 	if m.wizardStep != 1 {
 		t.Fatalf("Expected wizardStep=1, got %d", m.wizardStep)
 	}
-	if !strings.Contains(m.View(), "Step 2 of 4") {
+	if !strings.Contains(m.View(), "Step 2 of 5") {
 		t.Fatalf("Expected wizard step 2 in view, got:\n%s", m.View())
 	}
 
-	// Step 2 -> Step 3 (Safety Mode)
+	// Step 2 -> Step 3 (UI Directive)
 	model, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = model.(*Model)
 	if m.wizardStep != 2 {
 		t.Fatalf("Expected wizardStep=2, got %d", m.wizardStep)
 	}
-	if !strings.Contains(m.View(), "Step 3 of 4") {
+	if !strings.Contains(m.View(), "Step 3 of 5") {
 		t.Fatalf("Expected wizard step 3 in view, got:\n%s", m.View())
 	}
 
-	// Step 3 -> Step 4 (Summary Confirmation)
+	// Step 3 -> Step 4 (Safety Mode)
 	model, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = model.(*Model)
 	if m.wizardStep != 3 {
 		t.Fatalf("Expected wizardStep=3, got %d", m.wizardStep)
 	}
-	if !strings.Contains(m.View(), "Step 4 of 4") {
-		t.Fatalf("Expected wizard step 4 summary in view, got:\n%s", m.View())
+	if !strings.Contains(m.View(), "Step 4 of 5") {
+		t.Fatalf("Expected wizard step 4 in view, got:\n%s", m.View())
 	}
 
-	// Step 4 -> Launch Pipeline!
+	// Step 4 -> Step 5 (Summary Confirmation)
+	model, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = model.(*Model)
+	if m.wizardStep != 4 {
+		t.Fatalf("Expected wizardStep=4, got %d", m.wizardStep)
+	}
+	if !strings.Contains(m.View(), "Step 5 of 5") {
+		t.Fatalf("Expected wizard step 5 summary in view, got:\n%s", m.View())
+	}
+
+	// Step 5 -> Launch Pipeline!
 	model, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = model.(*Model)
 
@@ -345,4 +356,93 @@ func TestTUI_TokenStatsViewAndShortcut(t *testing.T) {
 		t.Fatalf("Expected state=ViewMainMenu after pressing esc, got %v", m.state)
 	}
 }
+
+func TestTUI_WorkflowCompletionSummaryAndDependencyInstall(t *testing.T) {
+	app := NewApp(filepath.Join("..", "..", "examples", "nextjs-app"))
+
+	// 1. Simulate completion of 1-click full localization pipeline
+	mockResult := &agents.PipelineResult{
+		ScannedFilesCount:   5,
+		ExtractedCandidates: 12,
+		UniqueKeysCount:     12,
+		RefactoredFiles:     []string{"src/components/Navbar.tsx", "src/components/Footer.tsx"},
+		GeneratedLocales:    []string{"es", "fr", "de", "ja"},
+		DependencyStatus: &types.DependencyStatus{
+			Framework:       types.FrameworkReact,
+			ManifestFile:    "package.json",
+			InstalledDeps:   []string{"react-i18next", "i18next"},
+			ManifestUpdated: true,
+			CommandExecuted: "npm install react-i18next i18next",
+			ConfigCreated:   []string{"src/i18n.ts"},
+			Success:         true,
+		},
+	}
+
+	model, _ := app.Update(fullLocDoneMsg{result: mockResult})
+	m := model.(*Model)
+
+	// Verify state transitioned to ViewSummary (NOT ViewAudit or raw scan)
+	if m.state != ViewSummary {
+		t.Fatalf("Expected state=ViewSummary upon workflow completion, got %v", m.state)
+	}
+
+	// Verify Summary View renders all key sections cleanly
+	view := m.View()
+	if !strings.Contains(view, "Execution Summary") {
+		t.Fatalf("Expected Execution Summary header in view, got:\n%s", view)
+	}
+	if !strings.Contains(view, "Framework Dependencies & Manifest Setup") {
+		t.Fatalf("Expected Dependencies box in view, got:\n%s", view)
+	}
+	if !strings.Contains(view, "package.json") || !strings.Contains(view, "npm install react-i18next i18next") {
+		t.Fatalf("Expected manifest and install command in view, got:\n%s", view)
+	}
+	if !strings.Contains(view, "Navbar.tsx") {
+		t.Fatalf("Expected refactored file in view, got:\n%s", view)
+	}
+	if !strings.Contains(view, "Multilingual Catalogs Written") {
+		t.Fatalf("Expected multilingual catalogs in view, got:\n%s", view)
+	}
+	if !strings.Contains(view, "[i] Run Dependency Install") {
+		t.Fatalf("Expected [i] action shortcut in view, got:\n%s", view)
+	}
+
+	// 2. Press 'i' to trigger dependency install command
+	model, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
+	m = model.(*Model)
+
+	if !m.loading {
+		t.Fatalf("Expected loading=true after pressing 'i' to install dependencies")
+	}
+	if cmd == nil {
+		t.Fatalf("Expected non-nil tea.Cmd for async dependency install")
+	}
+
+	// 3. Simulate dependency install completion
+	depMsg := installDepsDoneMsg{
+		status: &types.DependencyStatus{
+			Framework:       types.FrameworkReact,
+			ManifestFile:    "package.json",
+			CommandExecuted: "npm install",
+			Success:         true,
+		},
+	}
+	model, _ = m.Update(depMsg)
+	m = model.(*Model)
+
+	if m.loading {
+		t.Fatalf("Expected loading=false after dependency install completed")
+	}
+	if !strings.Contains(m.statusMsg, "npm install") {
+		t.Fatalf("Expected status message confirming install, got: %s", m.statusMsg)
+	}
+
+	// 4. Press Enter or Esc to return to Main Menu
+	model, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = model.(*Model)
+	if m.state != ViewMainMenu {
+		t.Fatalf("Expected state=ViewMainMenu after pressing enter from summary, got %v", m.state)
+	}
+}
+
 

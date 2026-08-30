@@ -38,6 +38,7 @@ const (
 	EventPush              WebhookEventType = "push"
 	EventInstallation      WebhookEventType = "installation"
 	EventInstallationRepos WebhookEventType = "installation_repositories"
+	EventIssueComment      WebhookEventType = "issue_comment"
 	EventUnhandled         WebhookEventType = "unhandled"
 )
 
@@ -73,11 +74,91 @@ type InstallationEvent struct {
 	} `json:"installation"`
 }
 
+// IssueCommentEvent represents a PR or Issue comment event from GitHub webhooks
+type IssueCommentEvent struct {
+	Action string `json:"action"` // "created", "edited"
+	Issue  struct {
+		Number      int `json:"number"`
+		PullRequest *struct {
+			URL string `json:"url"`
+		} `json:"pull_request,omitempty"`
+	} `json:"issue"`
+	Comment struct {
+		ID   int64  `json:"id"`
+		Body string `json:"body"`
+		User struct {
+			Login string `json:"login"`
+		} `json:"user"`
+	} `json:"comment"`
+	Repository struct {
+		Name          string `json:"name"`
+		FullName      string `json:"full_name"`
+		DefaultBranch string `json:"default_branch"`
+		Owner         struct {
+			Login string `json:"login"`
+		} `json:"owner"`
+	} `json:"repository"`
+	Installation struct {
+		ID int64 `json:"id"`
+	} `json:"installation"`
+}
+
+// BotCommand represents a parsed @langpeanut interactive command in PR comments
+type BotCommand struct {
+	Action     string   `json:"action"` // "translate", "audit", "review", "help"
+	Locales    []string `json:"locales,omitempty"`
+	Tone       string   `json:"tone,omitempty"`
+	Provider   string   `json:"provider,omitempty"`
+	RawCommand string   `json:"raw_command"`
+}
+
+// ParseBotCommand inspects a comment body for @langpeanut or /langpeanut commands
+func ParseBotCommand(body string) (*BotCommand, bool) {
+	lines := strings.Split(body, "\n")
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "@langpeanut") && !strings.HasPrefix(trimmed, "/langpeanut") && !strings.HasPrefix(trimmed, "@langPeanut") {
+			continue
+		}
+
+		parts := strings.Fields(trimmed)
+		if len(parts) < 2 {
+			return &BotCommand{Action: "translate", RawCommand: trimmed}, true
+		}
+
+		cmd := &BotCommand{
+			Action:     strings.ToLower(parts[1]),
+			RawCommand: trimmed,
+		}
+
+		// Parse flags: --locales/-l es,ja --tone/-t formal --provider/-p claude
+		for i := 2; i < len(parts); i++ {
+			p := parts[i]
+			if (p == "--locales" || p == "-l") && i+1 < len(parts) {
+				locs := strings.Split(parts[i+1], ",")
+				for _, loc := range locs {
+					if clean := strings.TrimSpace(loc); clean != "" {
+						cmd.Locales = append(cmd.Locales, clean)
+					}
+				}
+				i++
+			} else if (p == "--tone" || p == "-t") && i+1 < len(parts) {
+				cmd.Tone = strings.TrimSpace(parts[i+1])
+				i++
+			} else if (p == "--provider" || p == "-p") && i+1 < len(parts) {
+				cmd.Provider = strings.TrimSpace(parts[i+1])
+				i++
+			}
+		}
+
+		return cmd, true
+	}
+
+	return nil, false
+}
+
 // ParseWebhook identifies the event type from the X-GitHub-Event header and
-// decodes the payload into the matching typed struct. The caller (the
-// langpeanut-cloud API handler) is expected to call VerifySignature first —
-// this function does no signature checking itself, keeping the two concerns
-// (authenticity vs. parsing) independently testable.
+// decodes the payload into the matching typed struct.
 func ParseWebhook(eventHeader string, payload []byte) (WebhookEventType, any, error) {
 	switch eventHeader {
 	case "push":
@@ -98,15 +179,24 @@ func ParseWebhook(eventHeader string, payload []byte) (WebhookEventType, any, er
 			return EventUnhandled, nil, fmt.Errorf("decode installation_repositories event: %w", err)
 		}
 		return EventInstallationRepos, &evt, nil
+	case "issue_comment":
+		var evt IssueCommentEvent
+		if err := json.Unmarshal(payload, &evt); err != nil {
+			return EventUnhandled, nil, fmt.Errorf("decode issue_comment event: %w", err)
+		}
+		return EventIssueComment, &evt, nil
 	default:
 		return EventUnhandled, nil, nil
 	}
 }
 
 // IsDefaultBranchPush reports whether a push event landed on the repo's
-// default branch — the only push events worth triggering an automatic
-// localization job for for now (per cloud_plan.md §9's still-open question on
-// trigger model; feature-branch pushes are ignored until that's decided).
+// default branch.
 func (e *PushEvent) IsDefaultBranchPush() bool {
 	return e.Ref == "refs/heads/"+e.Repository.DefaultBranch
+}
+
+// IsPullRequestComment reports whether an issue_comment event was created on a Pull Request
+func (e *IssueCommentEvent) IsPullRequestComment() bool {
+	return e.Issue.PullRequest != nil && e.Action == "created"
 }

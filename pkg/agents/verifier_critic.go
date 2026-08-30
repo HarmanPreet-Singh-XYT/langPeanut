@@ -130,32 +130,62 @@ func (vc *VerifierCriticAgent) verifyTier2ICUTokens(sourceLocale types.LocaleDat
 	}
 }
 
-// Tier 3: Evaluates character expansion ratios and warns on potential UI layout overflow
+// Tier 3: Evaluates character expansion ratios, language-specific thresholds, and warns on potential UI layout overflow
 func (vc *VerifierCriticAgent) verifyTier3UIExpansion(sourceLocale types.LocaleData, targetLocales map[string]types.LocaleData, report *types.VerificationReport) {
 	for key, sourceText := range sourceLocale.Entries {
 		srcLen := len(sourceText)
-		if srcLen < 5 {
+		if srcLen < 3 {
 			continue
 		}
 
 		for targetCode, targetData := range targetLocales {
-			targetText := targetData.Entries[key]
+			targetText, exists := targetData.Entries[key]
+			if !exists {
+				continue
+			}
 			tgtLen := len(targetText)
+			if tgtLen == 0 {
+				continue
+			}
 
 			ratio := float64(tgtLen) / float64(srcLen)
 
-			// Expansion warning thresholds: German/Russian can be 1.4x, but > 2.5x indicates potential run-away generation
-			if ratio > 2.5 {
+			// Language-specific threshold adjustments
+			maxAllowedRatio := 2.5
+			switch strings.ToLower(targetCode) {
+			case "de", "de-de", "de-at", "de-ch":
+				maxAllowedRatio = 2.8 // German words frequently compound
+			case "ru", "uk", "pl", "cs":
+				maxAllowedRatio = 2.6 // Slavic languages have rich inflection
+			case "ja", "zh", "zh-cn", "zh-tw", "ko":
+				maxAllowedRatio = 2.2 // Asian logographic scripts are usually more compact
+			}
+
+			// 1. Extreme run-away generation check
+			if ratio > maxAllowedRatio {
 				report.Diagnostics = append(report.Diagnostics, types.Diagnostic{
 					Tier:        types.Tier3UIExpansion,
 					Severity:    "WARNING",
 					Key:         key,
 					Locale:      targetCode,
-					Expected:    fmt.Sprintf("Length <= %d chars", int(float64(srcLen)*2.0)),
+					Expected:    fmt.Sprintf("Length <= %d chars (%.1fx max)", int(float64(srcLen)*maxAllowedRatio), maxAllowedRatio),
 					Actual:      fmt.Sprintf("%d chars (%.1fx expansion)", tgtLen, ratio),
 					Message:     fmt.Sprintf("Locale '%s' key '%s' has extreme character expansion (%.1fx). May clip in fixed-width UI components.", targetCode, key, ratio),
 					CanAutoFix:  false,
 					AutoFixHint: "Consider concise phrasing or testing on small screen sizes",
+				})
+			} else if srcLen <= 20 && ratio >= 2.0 {
+				// 2. Short UI button/action text expansion alert (> 2.0x expansion on short strings like "Save", "Submit")
+				report.Diagnostics = append(report.Diagnostics, types.Diagnostic{
+					Tier:        types.Tier3UIExpansion,
+					Severity:    "INFO",
+					Key:         key,
+					Locale:      targetCode,
+					Expected:    fmt.Sprintf("Length <= %d chars for compact UI text", int(float64(srcLen)*1.75)),
+					Actual:      fmt.Sprintf("%d chars (%.1fx expansion)", tgtLen, ratio),
+					Message:     fmt.Sprintf("Locale '%s' short UI string '%s' expanded from %d to %d chars (+%.0f%%). Verify button layout.", targetCode, key, srcLen, tgtLen, (ratio-1.0)*100),
+					CanAutoFix:  false,
+					AutoFixHint: "Verify mobile button padding and container flex sizing",
 				})
 			}
 		}

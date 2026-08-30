@@ -50,14 +50,111 @@ func (p *FlutterPlatform) Detect(projectRoot string) (bool, float64) {
 }
 
 func (p *FlutterPlatform) DefaultLocaleDir(projectRoot string) string {
-	if DirExists(projectRoot, "lib/l10n") {
-		return "lib/l10n"
+	if cfg, err := readL10nYAML(projectRoot); err == nil && cfg.arbDir != "" {
+		return cfg.arbDir
 	}
 	return "lib/l10n"
 }
 
+// arbLocaleFilePattern matches Flutter's default `app_en.arb` / `app_pt_BR.arb`
+// naming convention, as well as arbitrary prefixes such as `intl_en.arb`.
+var arbLocaleFilePattern = regexp.MustCompile(`^(.+)_([a-zA-Z]{2,3}(?:_[a-zA-Z]{2,4})?)\.arb$`)
+
+// DiscoverExistingLocales scans the ARB directory (from l10n.yaml or the
+// lib/l10n convention) for already-present app_{locale}.arb files, so a run
+// against a project with existing translations can diff against what's
+// already there instead of assuming a greenfield source-only setup.
+func (p *FlutterPlatform) DiscoverExistingLocales(projectRoot string) (map[string]string, error) {
+	rawDir := p.DefaultLocaleDir(projectRoot)
+	dir := rawDir
+	if !filepath.IsAbs(dir) {
+		dir = filepath.Join(projectRoot, rawDir)
+	}
+
+	found := make(map[string]string)
+	arbFiles := findFilesWithExt(dir, ".arb")
+	for _, f := range arbFiles {
+		base := filepath.Base(f)
+		m := arbLocaleFilePattern.FindStringSubmatch(base)
+		if m == nil {
+			continue
+		}
+		locale := normalizeArbLocale(m[2])
+
+		// @@locale inside the file is authoritative when present; the filename
+		// match above is only a fallback for files that omit it.
+		if data, err := readFileBytes(f); err == nil {
+			var raw map[string]any
+			if json.Unmarshal(data, &raw) == nil {
+				if lc, ok := raw["@@locale"].(string); ok && lc != "" {
+					locale = lc
+				}
+			}
+		}
+		found[locale] = f
+	}
+	return found, nil
+}
+
+// normalizeArbLocale converts a filename-derived locale fragment like "pt_BR"
+// into the standard "pt-BR" locale code form used throughout langPeanut.
+func normalizeArbLocale(s string) string {
+	return strings.Replace(s, "_", "-", 1)
+}
+
 func (p *FlutterPlatform) DefaultSourceFile(projectRoot string, sourceLocale string) string {
-	return filepath.Join(p.DefaultLocaleDir(projectRoot), fmt.Sprintf("app_%s.arb", sourceLocale))
+	prefix := arbFilePrefix(projectRoot)
+	return filepath.Join(p.DefaultLocaleDir(projectRoot), fmt.Sprintf("%s%s.arb", prefix, sourceLocale))
+}
+
+// arbFilePrefix reads l10n.yaml's template-arb-file (e.g. "app_en.arb") to
+// recover the project's actual ARB naming convention (some projects use
+// "intl_en.arb" or a custom prefix instead of Flutter's "app_" default).
+func arbFilePrefix(projectRoot string) string {
+	cfg, err := readL10nYAML(projectRoot)
+	if err == nil && cfg.templateArbFile != "" {
+		base := filepath.Base(cfg.templateArbFile)
+		base = strings.TrimSuffix(base, ".arb")
+		if idx := strings.LastIndex(base, "_"); idx > 0 {
+			return base[:idx+1]
+		}
+	}
+	return "app_"
+}
+
+// l10nConfig holds the handful of l10n.yaml fields relevant to locating an
+// existing Flutter project's ARB catalogs (see
+// https://docs.flutter.dev/ui/accessibility-and-localization/internationalization#l10n-yaml).
+type l10nConfig struct {
+	arbDir          string
+	templateArbFile string
+}
+
+func readL10nYAML(projectRoot string) (*l10nConfig, error) {
+	data, err := readFileBytes(filepath.Join(projectRoot, "l10n.yaml"))
+	if err != nil {
+		return nil, err
+	}
+	cfg := &l10nConfig{}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.SplitN(line, ":", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := strings.TrimSpace(parts[0])
+		val := strings.Trim(strings.TrimSpace(parts[1]), `"'`)
+		switch key {
+		case "arb-dir":
+			cfg.arbDir = val
+		case "template-arb-file":
+			cfg.templateArbFile = val
+		}
+	}
+	return cfg, nil
 }
 
 // Widget/parameter names whose string argument is UI-facing text.
@@ -519,6 +616,12 @@ func (p *FlutterPlatform) ParseLocaleFile(raw []byte, format string) (*types.Loc
 	}, nil
 }
 
+// ParseLocaleFileForLocale is equivalent to ParseLocaleFile for ARB, since
+// each locale already lives in its own file.
+func (p *FlutterPlatform) ParseLocaleFileForLocale(raw []byte, locale string) (*types.LocaleData, error) {
+	return p.ParseLocaleFile(raw, "")
+}
+
 func extractICUPlaceholders(s string) map[string]any {
 	reg := regexp.MustCompile(`\{([a-zA-Z0-9_]+)\}`)
 	matches := reg.FindAllStringSubmatch(s, -1)
@@ -536,3 +639,12 @@ func extractICUPlaceholders(s string) map[string]any {
 	}
 	return placeholders
 }
+
+func (p *FlutterPlatform) CheckDependencies(projectRoot string) (*types.DependencyStatus, error) {
+	return FlutterCheckDependencies(projectRoot)
+}
+
+func (p *FlutterPlatform) EnsureDependencies(projectRoot string, autoInstall bool) (*types.DependencyStatus, error) {
+	return FlutterEnsureDependencies(projectRoot, autoInstall)
+}
+

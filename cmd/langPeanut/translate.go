@@ -15,9 +15,12 @@ import (
 )
 
 var (
-	stylePreset  string
-	providerFlag string
-	modelFlag    string
+	stylePreset     string
+	providerFlag    string
+	modelFlag       string
+	chunkWordsFlag  int
+	chunkKeysFlag   int
+	concurrencyFlag int
 )
 
 var translateCmd = &cobra.Command{
@@ -49,9 +52,39 @@ var translateCmd = &cobra.Command{
 		if providerFlag != "" {
 			supervisor.Translator.LLM = llm.NewClient(llm.ProviderType(providerFlag), modelFlag)
 			fmt.Printf("Provider Override: %s (Model: %s)\n", providerFlag, modelFlag)
+
+			if providerFlag == "nllb-local" || providerFlag == "nllb" {
+				if downloaded, p, _ := llm.IsNLLBModelDownloaded(); downloaded {
+					fmt.Printf("✓ Using Local Meta NLLB-200 offline model: %s\n", p)
+				} else {
+					fmt.Printf("⬇ Downloading Local Meta NLLB-200 offline model (~380MB GGUF)...\n")
+					_, err := llm.EnsureNLLBModel(context.Background(), func(down, tot int64, pct float64) {
+						fmt.Printf("\r[Download] %.1f%% (%.1f MB / %.1f MB)", pct, float64(down)/(1024*1024), float64(tot)/(1024*1024))
+					})
+					fmt.Println()
+					if err != nil {
+						fmt.Printf("⚠ Download failed: %v. Falling back to offline synthesizer.\n", err)
+					} else {
+						fmt.Printf("✓ Model downloaded successfully.\n")
+					}
+				}
+			}
 		} else if modelFlag != "" {
 			supervisor.Translator.LLM = llm.NewClient(llm.ProviderOpenAI, modelFlag)
 			fmt.Printf("Model Override: %s\n", modelFlag)
+		}
+
+		if concurrencyFlag > 0 {
+			supervisor.Translator.Concurrency = concurrencyFlag
+			fmt.Printf("Concurrency Override: %d parallel workers\n", concurrencyFlag)
+		}
+		if chunkWordsFlag > 0 {
+			supervisor.Translator.ChunkWordBudget = chunkWordsFlag
+			fmt.Printf("Chunk Word Budget Override: %d words per batch call\n", chunkWordsFlag)
+		}
+		if chunkKeysFlag > 0 {
+			supervisor.Translator.ChunkKeyCeiling = chunkKeysFlag
+			fmt.Printf("Chunk Key Ceiling Override: %d keys per batch call\n", chunkKeysFlag)
 		}
 		fmt.Println()
 
@@ -165,6 +198,9 @@ func init() {
 	translateCmd.Flags().StringVar(&stylePreset, "style", "default", "Translation style preset (default, gen_z, casual, formal, humorous, pirate)")
 	translateCmd.Flags().StringVar(&providerFlag, "provider", "", "LLM provider override (claude, openai, gemini, deepl, custom, local)")
 	translateCmd.Flags().StringVar(&modelFlag, "model", "", "Custom model tag override (e.g. claude-3-5-haiku, gpt-4.5-preview, gemini-2.5-pro)")
+	translateCmd.Flags().IntVarP(&concurrencyFlag, "concurrency", "c", 0, "Max concurrent parallel LLM calls (default: 5 or model config)")
+	translateCmd.Flags().IntVar(&chunkWordsFlag, "chunk-words", 0, "Max words (approx tokens) per LLM batch call (0 = auto model-aware)")
+	translateCmd.Flags().IntVar(&chunkKeysFlag, "chunk-keys", 0, "Max keys per LLM batch call (0 = auto model-aware)")
 	rootCmd.AddCommand(translateCmd)
 	rootCmd.AddCommand(rollbackCmd)
 }

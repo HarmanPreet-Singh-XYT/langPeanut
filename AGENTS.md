@@ -56,7 +56,7 @@ Every agent working on this codebase must adhere to the 6-agent separation of co
 ## 3. Mandatory Agent Operating Protocols
 
 ### Protocol 1: Continuous Changelog Maintenance (Strictly Enforced)
-* Every agent **MUST** update [CHANGELOG.md](file:///Users/harmanpreetsingh/Public/Code/langTranslate/CHANGELOG.md) on every meaningful interaction, user directive, bug fix, or architectural change.
+* Every agent **MUST** update the active log [CHANGELOG1.md](file:///Users/harmanpreetsingh/Public/Code/langpeanut_local/CHANGELOG1.md) (continuation from [CHANGELOG.md](file:///Users/harmanpreetsingh/Public/Code/langpeanut_local/CHANGELOG.md)) on every meaningful interaction, user directive, bug fix, or architectural change.
 * When the user gives instructions, redirects architecture, or points out a flaw:
   1. Note the user's directive and why it was given.
   2. Document the action taken and files modified.
@@ -84,7 +84,8 @@ Every agent working on this codebase must adhere to the 6-agent separation of co
 
 | File | Purpose |
 | :--- | :--- |
-| [AGENTS.md](file:///Users/harmanpreetsingh/Public/Code/langTranslate/AGENTS.md) | System guidelines and operating protocols for agents. |
-| [CHANGELOG.md](file:///Users/harmanpreetsingh/Public/Code/langTranslate/CHANGELOG.md) | Live log of user directives, AI actions, fixes, and improvement iterations. |
-| [idea.md](file:///Users/harmanpreetsingh/Public/Code/langTranslate/idea.md) | Product specification, multi-agent architecture, and hackathon alignment. |
-| [PLAN.md](file:///Users/harmanpreetsingh/Public/Code/langTranslate/PLAN.md) | Technical implementation milestones and task tracking. |
+| [AGENTS.md](file:///Users/harmanpreetsingh/Public/Code/langpeanut_local/AGENTS.md) | System guidelines and operating protocols for agents. |
+| [CHANGELOG.md](file:///Users/harmanpreetsingh/Public/Code/langpeanut_local/CHANGELOG.md) | Live log of user directives, AI actions, fixes, and improvement iterations. |
+| [CHANGELOG1.md](file:///Users/harmanpreetsingh/Public/Code/langpeanut_local/CHANGELOG1.md) | Historical interaction archive (Session Entries 1–97). |
+| [idea.md](file:///Users/harmanpreetsingh/Public/Code/langpeanut_local/idea.md) | Product specification, multi-agent architecture, and hackathon alignment. |
+| [PLAN.md](file:///Users/harmanpreetsingh/Public/Code/langpeanut_local/PLAN.md) | Technical implementation milestones and task tracking. |

@@ -130,6 +130,31 @@ type CodeRepairResult struct {
 	Explanation     string               `json:"explanation,omitempty"`
 }
 
+// DirectiveResult represents the outcome of the Post-Localization App Integration Agent
+type DirectiveResult struct {
+	Directive      string   `json:"directive"`
+	Success        bool     `json:"success"`
+	CreatedFiles   []string `json:"created_files,omitempty"`
+	PatchedFiles   []string `json:"patched_files,omitempty"`
+	Explanation    string   `json:"explanation,omitempty"`
+	CompilerPassed bool     `json:"compiler_passed"`
+	Attempts       int      `json:"attempts"`
+}
+
+// DependencyStatus records the outcome of localization framework dependency checks and installation
+type DependencyStatus struct {
+	Framework       Framework `json:"framework"`
+	ManifestFile    string    `json:"manifest_file,omitempty"`
+	MissingDeps     []string  `json:"missing_dependencies,omitempty"`
+	InstalledDeps   []string  `json:"installed_dependencies,omitempty"`
+	ManifestUpdated bool      `json:"manifest_updated"`
+	CommandExecuted string    `json:"command_executed,omitempty"`
+	CommandOutput   string    `json:"command_output,omitempty"`
+	ConfigCreated   []string  `json:"config_created,omitempty"`
+	Success         bool      `json:"success"`
+	Message         string    `json:"message"`
+}
+
 // VerificationReport contains all diagnostics from the 4-tier critic
 type VerificationReport struct {
 	Passed      bool         `json:"passed"`

@@ -18,6 +18,11 @@ import (
 
 // RunDiagnostics checks target files for AST syntax errors and native toolchain compiler diagnostics
 func RunDiagnostics(projectRoot string, targetFiles []string) ([]types.CompilerDiagnostic, error) {
+	return RunDiagnosticsWithCustom(projectRoot, targetFiles, "")
+}
+
+// RunDiagnosticsWithCustom checks target files for AST syntax errors, custom build/typecheck command, or native toolchain
+func RunDiagnosticsWithCustom(projectRoot string, targetFiles []string, customBuildCmd string) ([]types.CompilerDiagnostic, error) {
 	var diagnostics []types.CompilerDiagnostic
 
 	// 1. In-Memory Tree-Sitter AST grammar checks
@@ -36,11 +41,65 @@ func RunDiagnostics(projectRoot string, targetFiles []string) ([]types.CompilerD
 		diagnostics = append(diagnostics, astErrors...)
 	}
 
-	// 2. Native toolchain typecheck / linter (if applicable)
-	toolchainErrors := runToolchainCheck(projectRoot, targetFiles)
-	diagnostics = append(diagnostics, toolchainErrors...)
+	// 2. Custom build / typecheck command or native toolchain
+	if strings.TrimSpace(customBuildCmd) != "" {
+		customErrors := runCustomBuildCheck(projectRoot, targetFiles, customBuildCmd)
+		diagnostics = append(diagnostics, customErrors...)
+	} else {
+		toolchainErrors := runToolchainCheck(projectRoot, targetFiles)
+		diagnostics = append(diagnostics, toolchainErrors...)
+	}
 
 	return deduplicateDiagnostics(diagnostics), nil
+}
+
+func runCustomBuildCheck(projectRoot string, targetFiles []string, customBuildCmd string) []types.CompilerDiagnostic {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	var cmd *exec.Cmd
+	if isWindows() {
+		cmd = exec.CommandContext(ctx, "cmd.exe", "/c", customBuildCmd)
+	} else {
+		cmd = exec.CommandContext(ctx, "sh", "-c", customBuildCmd)
+	}
+	cmd.Dir = projectRoot
+	var outBuf bytes.Buffer
+	cmd.Stdout = &outBuf
+	cmd.Stderr = &outBuf
+
+	err := cmd.Run()
+	if err == nil {
+		return nil // Build succeeded with 0 errors
+	}
+
+	output := outBuf.String()
+	// Try parsing standard TypeScript/Dart compiler formats first
+	diags := parseTypeScriptOutput(output, targetFiles)
+	if len(diags) == 0 {
+		diags = parseDartOutput(output, targetFiles)
+	}
+
+	if len(diags) == 0 && len(output) > 0 {
+		errMsg := strings.TrimSpace(output)
+		if len(errMsg) > 200 {
+			errMsg = errMsg[:197] + "..."
+		}
+		targetFile := "project"
+		if len(targetFiles) > 0 {
+			targetFile = targetFiles[0]
+		}
+		diags = append(diags, types.CompilerDiagnostic{
+			FilePath: targetFile,
+			Line:     1,
+			Column:   1,
+			Message:  fmt.Sprintf("[%s] %s", customBuildCmd, errMsg),
+			Source:   "custom-build",
+			Severity: "ERROR",
+		})
+	}
+
+	return diags
 }
 
 // checkASTErrors locates specific error nodes in the tree-sitter AST

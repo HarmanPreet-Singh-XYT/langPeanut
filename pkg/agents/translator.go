@@ -4,21 +4,27 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/langPeanut/langPeanut/pkg/llm"
+	"github.com/langPeanut/langPeanut/pkg/logger"
 	"github.com/langPeanut/langPeanut/pkg/memory"
 	"github.com/langPeanut/langPeanut/pkg/types"
 )
 
 // TranslatorAgent handles translating source strings to target locales while strictly preserving ICU syntax
 type TranslatorAgent struct {
-	Memory        *memory.TranslationMemory
-	ProjectMemory *memory.ProjectMemory
-	LLM           llm.Client
+	Memory          *memory.TranslationMemory
+	ProjectMemory   *memory.ProjectMemory
+	LLM             llm.Client
+	ChunkWordBudget int // Target words/tokens budget per batch call (0 = auto model-aware)
+	ChunkKeyCeiling int // Max keys per batch call (0 = auto model-aware)
+	Concurrency     int // Max concurrent chunk workers per language (0 = default 5)
 }
 
 func NewTranslatorAgent(tm *memory.TranslationMemory, pm *memory.ProjectMemory) *TranslatorAgent {
@@ -438,10 +444,22 @@ func (ta *TranslatorAgent) TranslateLocale(ctx context.Context, sourceEntries ma
 			}
 		}
 
-		// 3. Check Built-in Standard or Gen-Z Dictionaries
-		if ta.ProjectMemory != nil && ta.ProjectMemory.Style == memory.StyleGenZ {
-			if genZDict, ok := genZDictionary[targetLocale]; ok {
-				if val, exists := genZDict[sourceText]; exists {
+		// 3. Check Built-in Standard or Gen-Z Dictionaries (ONLY for offline deterministic benchmark ProviderLocal)
+		if ta.LLM == nil || ta.LLM.Name() == llm.ProviderLocal {
+			if ta.ProjectMemory != nil && ta.ProjectMemory.Style == memory.StyleGenZ {
+				if genZDict, ok := genZDictionary[targetLocale]; ok {
+					if val, exists := genZDict[sourceText]; exists {
+						result.Entries[key] = val
+						if ta.Memory != nil {
+							ta.Memory.Set(sourceText, targetLocale, val)
+						}
+						continue
+					}
+				}
+			}
+
+			if localeDict, ok := dictionary[targetLocale]; ok {
+				if val, exists := localeDict[sourceText]; exists {
 					result.Entries[key] = val
 					if ta.Memory != nil {
 						ta.Memory.Set(sourceText, targetLocale, val)
@@ -451,29 +469,25 @@ func (ta *TranslatorAgent) TranslateLocale(ctx context.Context, sourceEntries ma
 			}
 		}
 
-		if localeDict, ok := dictionary[targetLocale]; ok {
-			if val, exists := localeDict[sourceText]; exists {
-				result.Entries[key] = val
-				if ta.Memory != nil {
-					ta.Memory.Set(sourceText, targetLocale, val)
-				}
-				continue
-			}
-		}
-
 		uncached[key] = sourceText
 	}
 
-	// 4. If there are uncached keys and a live LLM is configured, translate in concurrent dynamic word-budget chunks (~10,000 words / max 300 keys)
+	// 4. If there are uncached keys and a live LLM is configured, translate in dynamic word-budget chunks
 	if len(uncached) > 0 && ta.LLM != nil && ta.LLM.Name() != llm.ProviderLocal {
-		const maxWordsPerChunk = 10000
-		const maxKeysPerChunk = 300
+		maxWordsPerChunk, maxKeysPerChunk, concurrency := ta.getEffectiveChunkSettings()
 		batches := chunkMapByWordBudget(uncached, maxWordsPerChunk, maxKeysPerChunk)
+
+		if len(batches) == 1 {
+			logger.Get().Info("TRANSLATOR", fmt.Sprintf("[%s] Translating all %d uncached keys in 1 single API call (fits context budget: %d words / %d keys)", targetLocale, len(uncached), maxWordsPerChunk, maxKeysPerChunk))
+		} else {
+			logger.Get().Info("TRANSLATOR", fmt.Sprintf("[%s] Partitioned %d uncached keys into %d parallel batch calls (budget: %d words, ceiling: %d keys, concurrency: %d)", targetLocale, len(uncached), len(batches), maxWordsPerChunk, maxKeysPerChunk, concurrency))
+		}
+
 		var bWg sync.WaitGroup
 		var bMu sync.Mutex
 
-		// Limit concurrent LLM chunk requests per language to 5 for high throughput
-		chunkSem := make(chan struct{}, 5)
+		// Limit concurrent LLM chunk requests per language to configured concurrency
+		chunkSem := make(chan struct{}, concurrency)
 
 		for _, b := range batches {
 			bWg.Add(1)
@@ -525,6 +539,87 @@ func (ta *TranslatorAgent) TranslateLocale(ctx context.Context, sourceEntries ma
 	}
 
 	return result, nil
+}
+
+// getEffectiveChunkSettings computes runtime chunking word budget, key ceiling, and concurrency.
+// If not explicitly configured, it applies model-aware intelligent defaults based on the LLM provider's context size.
+func (ta *TranslatorAgent) getEffectiveChunkSettings() (maxWords, maxKeys, concurrency int) {
+	concurrency = ta.Concurrency
+	if concurrency <= 0 {
+		if val := os.Getenv("LANGPEANUT_CONCURRENCY"); val != "" {
+			if parsed, err := strconv.Atoi(val); err == nil && parsed > 0 {
+				concurrency = parsed
+			}
+		}
+	}
+	if concurrency <= 0 {
+		concurrency = 5
+	}
+
+	maxWords = ta.ChunkWordBudget
+	if maxWords <= 0 {
+		if val := os.Getenv("LANGPEANUT_CHUNK_WORDS"); val != "" {
+			if parsed, err := strconv.Atoi(val); err == nil && parsed > 0 {
+				maxWords = parsed
+			}
+		}
+	}
+
+	maxKeys = ta.ChunkKeyCeiling
+	if maxKeys <= 0 {
+		if val := os.Getenv("LANGPEANUT_CHUNK_KEYS"); val != "" {
+			if parsed, err := strconv.Atoi(val); err == nil && parsed > 0 {
+				maxKeys = parsed
+			}
+		}
+	}
+
+	// Model-aware dynamic defaults if not manually specified:
+	if maxWords <= 0 || maxKeys <= 0 {
+		providerName := ""
+		if ta.LLM != nil {
+			providerName = strings.ToLower(string(ta.LLM.Name()))
+		}
+
+		switch {
+		case strings.Contains(providerName, "claude"), strings.Contains(providerName, "anthropic"),
+			strings.Contains(providerName, "openai"), strings.Contains(providerName, "gpt"),
+			strings.Contains(providerName, "gemini"):
+			// Frontier high-context models (128k - 1M token context windows):
+			// 50,000 token budget (~38,000 words) allows full apps & large modules to translate in 1 single call
+			if maxWords <= 0 {
+				maxWords = 38000 // ~50,000 tokens
+			}
+			if maxKeys <= 0 {
+				maxKeys = 1500
+			}
+		case strings.Contains(providerName, "ollama"), strings.Contains(providerName, "custom"):
+			// Standard local models (4k - 8k context window):
+			if maxWords <= 0 {
+				maxWords = 3000
+			}
+			if maxKeys <= 0 {
+				maxKeys = 100
+			}
+		case strings.Contains(providerName, "nllb"):
+			// NLLB-200 (512 token sequence budget):
+			if maxWords <= 0 {
+				maxWords = 400
+			}
+			if maxKeys <= 0 {
+				maxKeys = 50
+			}
+		default:
+			if maxWords <= 0 {
+				maxWords = 10000
+			}
+			if maxKeys <= 0 {
+				maxKeys = 300
+			}
+		}
+	}
+
+	return maxWords, maxKeys, concurrency
 }
 
 func (ta *TranslatorAgent) translateBatchWithLLM(ctx context.Context, batch map[string]string, targetLocale string) (map[string]string, error) {

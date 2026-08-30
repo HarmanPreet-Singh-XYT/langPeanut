@@ -54,7 +54,58 @@ func (p *AndroidPlatform) DefaultSourceFile(projectRoot string, sourceLocale str
 	if sourceLocale == "en" {
 		return filepath.Join(p.DefaultLocaleDir(projectRoot), "values/strings.xml")
 	}
-	return filepath.Join(p.DefaultLocaleDir(projectRoot), fmt.Sprintf("values-%s/strings.xml", sourceLocale))
+	return filepath.Join(p.DefaultLocaleDir(projectRoot), fmt.Sprintf("values-%s/strings.xml", androidValuesQualifier(sourceLocale)))
+}
+
+// androidValuesQualifier converts a locale code like "pt-BR" into Android's
+// resource-qualifier form "pt-rBR" used for values-{qualifier}/ directories.
+func androidValuesQualifier(locale string) string {
+	if idx := strings.Index(locale, "-"); idx > 0 {
+		return locale[:idx] + "-r" + locale[idx+1:]
+	}
+	return locale
+}
+
+// androidQualifierToLocale reverses androidValuesQualifier, e.g. "pt-rBR" -> "pt-BR".
+func androidQualifierToLocale(qualifier string) string {
+	return strings.Replace(qualifier, "-r", "-", 1)
+}
+
+// DiscoverExistingLocales scans app/src/main/res for values(-{qualifier})?
+// directories that already contain a strings.xml, e.g. an existing project
+// with values-de/, values-es/, values-pt-rBR/ already translated.
+func (p *AndroidPlatform) DiscoverExistingLocales(projectRoot string) (map[string]string, error) {
+	rawDir := p.DefaultLocaleDir(projectRoot)
+	dir := rawDir
+	if !filepath.IsAbs(dir) {
+		dir = filepath.Join(projectRoot, rawDir)
+	}
+
+	found := make(map[string]string)
+	entries, err := osReadDir(dir)
+	if err != nil {
+		return found, nil
+	}
+
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if name != "values" && !strings.HasPrefix(name, "values-") {
+			continue
+		}
+		stringsPath := filepath.Join(dir, name, "strings.xml")
+		if !fileExistsAbs(stringsPath) {
+			continue
+		}
+		locale := "en"
+		if name != "values" {
+			locale = androidQualifierToLocale(strings.TrimPrefix(name, "values-"))
+		}
+		found[locale] = stringsPath
+	}
+	return found, nil
 }
 
 // Composable function names whose string argument is UI-facing text.
@@ -321,6 +372,12 @@ func (p *AndroidPlatform) ParseLocaleFile(raw []byte, format string) (*types.Loc
 	}, nil
 }
 
+// ParseLocaleFileForLocale is equivalent to ParseLocaleFile, since each
+// locale already lives in its own values-{qualifier}/strings.xml file.
+func (p *AndroidPlatform) ParseLocaleFileForLocale(raw []byte, locale string) (*types.LocaleData, error) {
+	return p.ParseLocaleFile(raw, "")
+}
+
 func ToSnakeCase(input string) string {
 	reg := regexp.MustCompile(`[^a-zA-Z0-9\s]+`)
 	clean := reg.ReplaceAllString(input, " ")
@@ -336,3 +393,12 @@ func ToSnakeCase(input string) string {
 	}
 	return strings.Join(words, "_")
 }
+
+func (p *AndroidPlatform) CheckDependencies(projectRoot string) (*types.DependencyStatus, error) {
+	return AndroidCheckDependencies(projectRoot)
+}
+
+func (p *AndroidPlatform) EnsureDependencies(projectRoot string, autoInstall bool) (*types.DependencyStatus, error) {
+	return AndroidEnsureDependencies(projectRoot, autoInstall)
+}
+

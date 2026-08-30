@@ -15,7 +15,7 @@ func TestTokenTracker_RecordAndPersist(t *testing.T) {
 	tracker.Record("openai", "gpt-5.4-mini-2026-03-17", 1200, 800)
 
 	// Record a Claude call
-	tracker.Record("claude", "claude-3-7-sonnet-20250219", 2500, 1500)
+	tracker.Record("claude", "claude-sonnet-5", 2500, 1500)
 
 	stats := tracker.GetStats()
 	if stats.TotalInputTokens != 3700 {

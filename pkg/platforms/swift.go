@@ -259,26 +259,45 @@ func (p *SwiftPlatform) GenerateRefactorPlan(filePath string, content []byte, ca
 	return plan, nil
 }
 
+// xcstringsExistingKey is the LocaleData.Metadata key under which the raw,
+// already-on-disk .xcstrings catalog is threaded through from
+// ParseLocaleFile so FormatLocaleFile can merge this locale's entries into
+// it instead of overwriting every other locale sharing the same file.
+const xcstringsExistingKey = "_xcstrings_existing_raw"
+
 func (p *SwiftPlatform) FormatLocaleFile(localeData types.LocaleData) ([]byte, error) {
 	cat := map[string]any{
 		"sourceLanguage": localeData.LocaleCode,
 		"version":        "1.0",
 		"strings":        make(map[string]any),
 	}
+	if existing, ok := localeData.Metadata[xcstringsExistingKey].(map[string]any); ok {
+		for k, v := range existing {
+			cat[k] = v
+		}
+		if _, ok := cat["strings"].(map[string]any); !ok {
+			cat["strings"] = make(map[string]any)
+		}
+	}
 
 	stringsMap := cat["strings"].(map[string]any)
 	for k, v := range localeData.Entries {
-		stringsMap[k] = map[string]any{
-			"extractionState": "manual",
-			"localizations": map[string]any{
-				localeData.LocaleCode: map[string]any{
-					"stringUnit": map[string]string{
-						"state": "translated",
-						"value": v,
-					},
-				},
+		entry, ok := stringsMap[k].(map[string]any)
+		if !ok {
+			entry = map[string]any{"extractionState": "manual"}
+		}
+		locs, ok := entry["localizations"].(map[string]any)
+		if !ok {
+			locs = make(map[string]any)
+		}
+		locs[localeData.LocaleCode] = map[string]any{
+			"stringUnit": map[string]string{
+				"state": "translated",
+				"value": v,
 			},
 		}
+		entry["localizations"] = locs
+		stringsMap[k] = entry
 	}
 
 	return json.MarshalIndent(cat, "", "  ")
@@ -315,6 +334,100 @@ func (p *SwiftPlatform) ParseLocaleFile(raw []byte, format string) (*types.Local
 	}, nil
 }
 
+// ParseLocaleFileForLocale extracts only the given locale's translations from
+// the shared .xcstrings catalog, and threads the full raw catalog through
+// Metadata so a subsequent FormatLocaleFile call can merge this locale's new
+// entries back in without discarding every other locale's translations.
+func (p *SwiftPlatform) ParseLocaleFileForLocale(raw []byte, locale string) (*types.LocaleData, error) {
+	var rawMap map[string]any
+	if err := json.Unmarshal(raw, &rawMap); err != nil {
+		return nil, err
+	}
+
+	entries := make(map[string]string)
+	if stringsObj, ok := rawMap["strings"].(map[string]any); ok {
+		for k, item := range stringsObj {
+			itemMap, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			locs, ok := itemMap["localizations"].(map[string]any)
+			if !ok {
+				continue
+			}
+			locItem, ok := locs[locale].(map[string]any)
+			if !ok {
+				continue
+			}
+			su, ok := locItem["stringUnit"].(map[string]any)
+			if !ok {
+				continue
+			}
+			if val, ok := su["value"].(string); ok {
+				entries[k] = val
+			}
+		}
+	}
+
+	return &types.LocaleData{
+		LocaleCode: locale,
+		Format:     "xcstrings",
+		Entries:    entries,
+		Metadata:   map[string]any{xcstringsExistingKey: rawMap},
+	}, nil
+}
+
+// DiscoverExistingLocales inspects an existing Localizable.xcstrings catalog
+// (a single file holding every locale, unlike ARB/strings.xml/i18next JSON
+// which use one file per locale) and returns every locale code it already
+// has translations for, mapped to that same catalog file path.
+func (p *SwiftPlatform) DiscoverExistingLocales(projectRoot string) (map[string]string, error) {
+	rawPath := p.DefaultSourceFile(projectRoot, "")
+	path := rawPath
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(projectRoot, rawPath)
+	}
+
+	found := make(map[string]string)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return found, nil
+	}
+
+	var rawMap map[string]any
+	if err := json.Unmarshal(data, &rawMap); err != nil {
+		return found, nil
+	}
+
+	if src, ok := rawMap["sourceLanguage"].(string); ok && src != "" {
+		found[src] = path
+	}
+	if stringsObj, ok := rawMap["strings"].(map[string]any); ok {
+		for _, item := range stringsObj {
+			itemMap, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			locs, ok := itemMap["localizations"].(map[string]any)
+			if !ok {
+				continue
+			}
+			for locale := range locs {
+				found[locale] = path
+			}
+		}
+	}
+	return found, nil
+}
+
+func (p *SwiftPlatform) CheckDependencies(projectRoot string) (*types.DependencyStatus, error) {
+	return SwiftCheckDependencies(projectRoot)
+}
+
+func (p *SwiftPlatform) EnsureDependencies(projectRoot string, autoInstall bool) (*types.DependencyStatus, error) {
+	return SwiftEnsureDependencies(projectRoot, autoInstall)
+}
+
 func findFilesWithExt(root, ext string) []string {
 	var matches []string
 	filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
@@ -325,3 +438,4 @@ func findFilesWithExt(root, ext string) []string {
 	})
 	return matches
 }
+

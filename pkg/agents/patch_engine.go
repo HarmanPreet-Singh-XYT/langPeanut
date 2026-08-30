@@ -2,6 +2,7 @@ package agents
 
 import (
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -20,17 +21,32 @@ func NewPatchEngine() *PatchEngine {
 func (pe *PatchEngine) ApplyRefactorPlan(plan *types.FileRefactorPlan) (string, error) {
 	content := []byte(plan.OriginalContent)
 
-	// 1. Sort all patches in descending order of StartByte so later replacements don't invalidate earlier offsets
+	// 1. Sort all patches in descending order of StartByte (and descending EndByte if StartBytes match)
 	sort.Slice(plan.Patches, func(i, j int) bool {
+		if plan.Patches[i].StartByte == plan.Patches[j].StartByte {
+			return plan.Patches[i].EndByte > plan.Patches[j].EndByte
+		}
 		return plan.Patches[i].StartByte > plan.Patches[j].StartByte
 	})
 
-	// 2. Apply string replacements
+	// 2. Filter out duplicate / overlapping patches
+	var cleanPatches []types.ByteRangePatch
+	lastStart := len(content) + 1
+
 	for _, patch := range plan.Patches {
 		if patch.StartByte < 0 || patch.EndByte > len(content) || patch.StartByte > patch.EndByte {
-			return "", fmt.Errorf("invalid patch byte range [%d, %d] on file size %d", patch.StartByte, patch.EndByte, len(content))
+			continue
 		}
+		// If this patch overlaps with an already processed later patch (descending order), skip it
+		if patch.EndByte > lastStart {
+			continue
+		}
+		cleanPatches = append(cleanPatches, patch)
+		lastStart = patch.StartByte
+	}
 
+	// 3. Apply string replacements
+	for _, patch := range cleanPatches {
 		prefix := content[:patch.StartByte]
 		suffix := content[patch.EndByte:]
 
@@ -50,7 +66,13 @@ func (pe *PatchEngine) ApplyRefactorPlan(plan *types.FileRefactorPlan) (string, 
 		}
 	}
 
-	// 5. In-memory AST syntax validation using real tree-sitter grammar
+	// 5. If React / Next.js and useTranslation or react-i18next is injected, ensure 'use client' directive
+	ext := strings.ToLower(filepath.Ext(plan.FilePath))
+	if (ext == ".tsx" || ext == ".jsx" || ext == ".ts" || ext == ".js") && strings.Contains(resultStr, "react-i18next") {
+		resultStr = EnsureUseClientDirective(resultStr)
+	}
+
+	// 6. In-memory AST syntax validation using real tree-sitter grammar
 	if err := pe.ValidateSyntax(resultStr, plan.FilePath); err != nil {
 		return "", fmt.Errorf("in-memory AST validation failed for %s: %w", plan.FilePath, err)
 	}
@@ -81,14 +103,52 @@ func (pe *PatchEngine) injectImport(src, importStmt string) string {
 	}
 
 	// If no existing imports, prepend at top (after "use client" if present)
-	if len(lines) > 0 && (strings.HasPrefix(strings.TrimSpace(lines[0]), "\"use client\"") || strings.HasPrefix(strings.TrimSpace(lines[0]), "'use client'")) {
-		newLines := make([]string, 0, len(lines)+2)
-		newLines = append(newLines, lines[0], "", importStmt)
-		newLines = append(newLines, lines[1:]...)
-		return strings.Join(newLines, "\n")
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "\"use client\"") || strings.HasPrefix(trimmed, "'use client'") {
+			newLines := make([]string, 0, len(lines)+2)
+			newLines = append(newLines, lines[:i+1]...)
+			newLines = append(newLines, "", importStmt)
+			newLines = append(newLines, lines[i+1:]...)
+			return strings.Join(newLines, "\n")
+		}
 	}
 
 	return importStmt + "\n\n" + src
+}
+
+// EnsureUseClientDirective ensures 'use client'; is placed at the top of a React/Next.js file
+// if it is not already present, avoiding RSC createContext runtime errors.
+func EnsureUseClientDirective(src string) string {
+	trimmed := strings.TrimSpace(src)
+	if strings.HasPrefix(trimmed, "\"use client\"") || strings.HasPrefix(trimmed, "'use client'") {
+		return src
+	}
+
+	lines := strings.Split(src, "\n")
+	insertIdx := -1
+
+	for i, line := range lines {
+		t := strings.TrimSpace(line)
+		if t == "" || strings.HasPrefix(t, "//") || strings.HasPrefix(t, "/*") || strings.HasPrefix(t, "*") || strings.HasPrefix(t, "#!") {
+			continue
+		}
+		if strings.HasPrefix(t, "\"use client\"") || strings.HasPrefix(t, "'use client'") {
+			return src // Directive already present
+		}
+		insertIdx = i
+		break
+	}
+
+	if insertIdx <= 0 {
+		return "'use client';\n\n" + src
+	}
+
+	newLines := make([]string, 0, len(lines)+2)
+	newLines = append(newLines, lines[:insertIdx]...)
+	newLines = append(newLines, "'use client';", "")
+	newLines = append(newLines, lines[insertIdx:]...)
+	return strings.Join(newLines, "\n")
 }
 
 // ValidateSyntax validates the refactored code using tree-sitter AST parsing

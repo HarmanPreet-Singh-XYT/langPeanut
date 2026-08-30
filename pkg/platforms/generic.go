@@ -3,6 +3,7 @@ package platforms
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -129,3 +130,41 @@ func (p *GenericPlatform) ParseLocaleFile(raw []byte, format string) (*types.Loc
 		Entries: entries,
 	}, nil
 }
+
+// ParseLocaleFileForLocale is equivalent to ParseLocaleFile, since each
+// locale already lives in its own flat "{lang}.json" file.
+func (p *GenericPlatform) ParseLocaleFileForLocale(raw []byte, locale string) (*types.LocaleData, error) {
+	return p.ParseLocaleFile(raw, "")
+}
+
+// DiscoverExistingLocales scans the locale directory for already-present
+// flat "{lang}.json" catalog files.
+func (p *GenericPlatform) DiscoverExistingLocales(projectRoot string) (map[string]string, error) {
+	rawDir := p.DefaultLocaleDir(projectRoot)
+	dir := rawDir
+	if !filepath.IsAbs(dir) {
+		dir = filepath.Join(projectRoot, rawDir)
+	}
+
+	found := make(map[string]string)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return found, nil
+	}
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".json") {
+			locale := strings.TrimSuffix(e.Name(), ".json")
+			found[locale] = filepath.Join(dir, e.Name())
+		}
+	}
+	return found, nil
+}
+
+func (p *GenericPlatform) CheckDependencies(projectRoot string) (*types.DependencyStatus, error) {
+	return GenericCheckDependencies(projectRoot)
+}
+
+func (p *GenericPlatform) EnsureDependencies(projectRoot string, autoInstall bool) (*types.DependencyStatus, error) {
+	return GenericEnsureDependencies(projectRoot, autoInstall)
+}
+

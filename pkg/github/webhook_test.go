@@ -119,9 +119,56 @@ func TestParseWebhook_Unhandled(t *testing.T) {
 	}
 }
 
+func TestParseWebhook_IssueComment(t *testing.T) {
+	payload := []byte(`{
+		"action": "created",
+		"issue": {
+			"number": 12,
+			"pull_request": {"url": "https://api.github.com/repos/acme/widgets/pulls/12"}
+		},
+		"comment": {
+			"id": 999,
+			"body": "@langpeanut translate --locales es,ja --tone formal",
+			"user": {"login": "octocat"}
+		},
+		"repository": {"name": "widgets", "full_name": "acme/widgets", "default_branch": "main", "owner": {"login": "acme"}},
+		"installation": {"id": 42}
+	}`)
+
+	eventType, decoded, err := ParseWebhook("issue_comment", payload)
+	if err != nil {
+		t.Fatalf("ParseWebhook: %v", err)
+	}
+	if eventType != EventIssueComment {
+		t.Fatalf("eventType = %v, want %v", eventType, EventIssueComment)
+	}
+	evt, ok := decoded.(*IssueCommentEvent)
+	if !ok {
+		t.Fatalf("decoded type = %T, want *IssueCommentEvent", decoded)
+	}
+	if !evt.IsPullRequestComment() {
+		t.Error("expected IsPullRequestComment to be true")
+	}
+
+	cmd, hasCmd := ParseBotCommand(evt.Comment.Body)
+	if !hasCmd || cmd == nil {
+		t.Fatal("expected @langpeanut bot command to be detected")
+	}
+	if cmd.Action != "translate" {
+		t.Errorf("expected action 'translate', got %s", cmd.Action)
+	}
+	if len(cmd.Locales) != 2 || cmd.Locales[0] != "es" || cmd.Locales[1] != "ja" {
+		t.Errorf("expected locales [es, ja], got %v", cmd.Locales)
+	}
+	if cmd.Tone != "formal" {
+		t.Errorf("expected tone 'formal', got %s", cmd.Tone)
+	}
+}
+
 func TestParseWebhook_MalformedJSON(t *testing.T) {
 	_, _, err := ParseWebhook("push", []byte(`not json`))
 	if err == nil {
 		t.Fatal("expected error for malformed push payload")
 	}
 }
+

@@ -16,6 +16,7 @@ import (
 	"github.com/langPeanut/langPeanut/benchmark"
 	"github.com/langPeanut/langPeanut/pkg/agents"
 	"github.com/langPeanut/langPeanut/pkg/llm"
+	"github.com/langPeanut/langPeanut/pkg/logger"
 	"github.com/langPeanut/langPeanut/pkg/memory"
 	"github.com/langPeanut/langPeanut/pkg/orchestrator"
 	"github.com/langPeanut/langPeanut/pkg/platforms"
@@ -41,20 +42,50 @@ type StudioServer struct {
 	RefactorPlans map[string]*types.FileRefactorPlan `json:"refactor_plans"`
 }
 
+func findRepoRoot(startDir string) string {
+	curr, err := filepath.Abs(startDir)
+	if err != nil {
+		return startDir
+	}
+	for i := 0; i < 6; i++ {
+		if _, err := os.Stat(filepath.Join(curr, "go.mod")); err == nil {
+			return curr
+		}
+		if _, err := os.Stat(filepath.Join(curr, ".git")); err == nil {
+			return curr
+		}
+		parent := filepath.Dir(curr)
+		if parent == curr {
+			break
+		}
+		curr = parent
+	}
+	return startDir
+}
+
 func NewStudioServer(projectRoot string) *StudioServer {
 	absRoot, err := filepath.Abs(projectRoot)
 	if err != nil {
 		absRoot = projectRoot
 	}
+	repoRoot := findRepoRoot(absRoot)
+
+	// If launched in repo root and no direct framework detected, default target to examples/nextjs-app for instant gratification
+	targetPath := absRoot
+	if absRoot == repoRoot && !platforms.FileExists(absRoot, "package.json") && platforms.DirExists(absRoot, "examples/nextjs-app") {
+		targetPath = filepath.Join(repoRoot, "examples", "nextjs-app")
+	}
 
 	registry := platforms.NewRegistry()
-	platform, _ := registry.AutoDetect(absRoot)
+	platform, _ := registry.AutoDetect(targetPath)
 	if platform == nil {
 		platform, _ = registry.Get(types.FrameworkGeneric)
 	}
 
+	_ = memory.EnsureGitignore(targetPath)
+
 	s := &StudioServer{
-		ProjectRoot:   absRoot,
+		ProjectRoot:   targetPath,
 		Platform:      platform,
 		PlatformName:  string(platform.Name()),
 		PlatformDesc:  platform.DisplayName(),
@@ -62,7 +93,7 @@ func NewStudioServer(projectRoot string) *StudioServer {
 		TargetLocales: []string{"es", "fr", "de", "ja"},
 		ToneStyle:     "default",
 		RefactorPlans: make(map[string]*types.FileRefactorPlan),
-		Logs:          []string{fmt.Sprintf("[%s] Attached to project: %s", time.Now().Format("15:04:05"), absRoot)},
+		Logs:          []string{fmt.Sprintf("[%s] Attached to project: %s", time.Now().Format("15:04:05"), targetPath)},
 	}
 
 	// Trigger initial scan
@@ -77,10 +108,11 @@ func (s *StudioServer) performScan() {
 	scout := agents.NewASTScoutAgent(s.Platform)
 	report, err := scout.ScanProject(s.ProjectRoot, "")
 	if err == nil && report != nil {
-		s.Candidates = report.Candidates
+		contextAgent := agents.NewContextAgent()
+		s.Candidates = contextAgent.EnhanceFast(report.Candidates)
 		s.ScannedFiles = report.TotalFilesScanned
 		s.Logs = append(s.Logs, fmt.Sprintf("[%s] AST Scout scan completed: %d files scanned, %d string candidates found",
-			time.Now().Format("15:04:05"), report.TotalFilesScanned, len(report.Candidates)))
+			time.Now().Format("15:04:05"), report.TotalFilesScanned, len(s.Candidates)))
 	}
 }
 
@@ -186,19 +218,20 @@ func (s *StudioServer) handleResetExamples(w http.ResponseWriter, r *http.Reques
 	root := s.ProjectRoot
 	s.mu.Unlock()
 
+	repoRoot := findRepoRoot(root)
 	gitCmd := exec.Command("git", "checkout", "HEAD", "--", "examples/")
-	gitCmd.Dir = root
+	gitCmd.Dir = repoRoot
 	_ = gitCmd.Run()
 
-	_ = os.RemoveAll(filepath.Join(root, "examples", "nextjs-app", "src", "locales"))
-	_ = os.RemoveAll(filepath.Join(root, "examples", "nextjs-app", "trajectories"))
-	_ = os.RemoveAll(filepath.Join(root, "examples", "flutter-app", "lib", "l10n"))
-	_ = os.RemoveAll(filepath.Join(root, "examples", "flutter-app", "trajectories"))
-	_ = os.RemoveAll(filepath.Join(root, "examples", "swiftui-app", "Resources"))
-	_ = os.RemoveAll(filepath.Join(root, "examples", "swiftui-app", "trajectories"))
-	_ = os.RemoveAll(filepath.Join(root, "examples", "android-app", "app", "src", "main", "res", "values-fr"))
-	_ = os.RemoveAll(filepath.Join(root, "examples", "android-app", "app", "src", "main", "res", "values-es"))
-	_ = os.RemoveAll(filepath.Join(root, "examples", "android-app", "trajectories"))
+	_ = os.RemoveAll(filepath.Join(repoRoot, "examples", "nextjs-app", "src", "locales"))
+	_ = os.RemoveAll(filepath.Join(repoRoot, "examples", "nextjs-app", "trajectories"))
+	_ = os.RemoveAll(filepath.Join(repoRoot, "examples", "flutter-app", "lib", "l10n"))
+	_ = os.RemoveAll(filepath.Join(repoRoot, "examples", "flutter-app", "trajectories"))
+	_ = os.RemoveAll(filepath.Join(repoRoot, "examples", "swiftui-app", "Resources"))
+	_ = os.RemoveAll(filepath.Join(repoRoot, "examples", "swiftui-app", "trajectories"))
+	_ = os.RemoveAll(filepath.Join(repoRoot, "examples", "android-app", "app", "src", "main", "res", "values-fr"))
+	_ = os.RemoveAll(filepath.Join(repoRoot, "examples", "android-app", "app", "src", "main", "res", "values-es"))
+	_ = os.RemoveAll(filepath.Join(repoRoot, "examples", "android-app", "trajectories"))
 
 	s.performScan()
 
@@ -431,12 +464,16 @@ func toCamelCase(s string) string {
 }
 
 type RunPipelineRequest struct {
-	SourceLocale  string   `json:"source_locale"`
-	TargetLocales []string `json:"target_locales"`
-	ToneStyle     string   `json:"tone_style"`
-	Provider      string   `json:"provider"`
-	Model         string   `json:"model"`
-	DryRun        bool     `json:"dry_run"`
+	SourceLocale     string   `json:"source_locale"`
+	TargetLocales    []string `json:"target_locales"`
+	ToneStyle        string   `json:"tone_style"`
+	Provider         string   `json:"provider"`
+	Model            string   `json:"model"`
+	Directive        string   `json:"directive,omitempty"`
+	CustomInstallCmd string   `json:"custom_install_cmd,omitempty"`
+	CustomBuildCmd   string   `json:"custom_build_cmd,omitempty"`
+	ExistingMode     string   `json:"existing_mode,omitempty"` // "skip" (default), "replace" (regenerate all)
+	DryRun           bool     `json:"dry_run"`
 }
 
 func (s *StudioServer) handleRunPipeline(w http.ResponseWriter, r *http.Request) {
@@ -478,6 +515,42 @@ func (s *StudioServer) handleRunPipeline(w http.ResponseWriter, r *http.Request)
 			return
 		}
 
+		if req.ExistingMode != "" {
+			supervisor.ExistingMode = req.ExistingMode
+			s.mu.Lock()
+			s.Logs = append(s.Logs, fmt.Sprintf("[%s] Existing translations strategy: %s", time.Now().Format("15:04:05"), req.ExistingMode))
+			s.mu.Unlock()
+		}
+
+		cfg := memory.LoadConfig(s.ProjectRoot)
+		if req.Provider != "" {
+			supervisor.Translator.LLM = llm.NewClient(llm.ProviderType(req.Provider), req.Model)
+		} else if cfg.ActiveProvider != "" && cfg.ActiveProvider != "local" {
+			if cfg.GetAPIKey(cfg.ActiveProvider) != "" || cfg.ActiveProvider == "ollama" {
+				supervisor.Translator.LLM = llm.NewClient(llm.ProviderType(cfg.ActiveProvider), cfg.ActiveModel)
+			} else {
+				supervisor.Translator.LLM = llm.AutoDetectClient()
+			}
+		} else {
+			supervisor.Translator.LLM = llm.AutoDetectClient()
+		}
+
+		if req.ToneStyle != "" && supervisor.ProjectMemory != nil {
+			supervisor.ProjectMemory.Style = memory.StylePreset(req.ToneStyle)
+		}
+		if req.Directive != "" {
+			supervisor.UserDirective = req.Directive
+			s.mu.Lock()
+			s.Logs = append(s.Logs, fmt.Sprintf("[%s] App Integration Directive: %s", time.Now().Format("15:04:05"), req.Directive))
+			s.mu.Unlock()
+		}
+		if req.CustomInstallCmd != "" {
+			supervisor.CustomInstallCmd = req.CustomInstallCmd
+		}
+		if req.CustomBuildCmd != "" {
+			supervisor.CustomBuildCmd = req.CustomBuildCmd
+		}
+
 		supervisor.OnProgress = func(stage string) {
 			s.mu.Lock()
 			s.Logs = append(s.Logs, fmt.Sprintf("[%s] %s", time.Now().Format("15:04:05"), stage))
@@ -495,6 +568,13 @@ func (s *StudioServer) handleRunPipeline(w http.ResponseWriter, r *http.Request)
 		} else {
 			s.Logs = append(s.Logs, fmt.Sprintf("[%s] Localization succeeded — scanned: %d, keys: %d, locales: %d",
 				time.Now().Format("15:04:05"), res.ScannedFilesCount, res.UniqueKeysCount, len(res.GeneratedLocales)))
+			if res.DependencyStatus != nil && (res.DependencyStatus.ManifestUpdated || len(res.DependencyStatus.InstalledDeps) > 0) {
+				s.Logs = append(s.Logs, fmt.Sprintf("[%s] Language Dependencies: %s (command: %s)",
+					time.Now().Format("15:04:05"), strings.Join(res.DependencyStatus.InstalledDeps, ", "), res.DependencyStatus.CommandExecuted))
+			}
+			if res.DirectiveResult != nil && res.DirectiveResult.Success {
+				s.Logs = append(s.Logs, fmt.Sprintf("[%s] UI Directive: %s", time.Now().Format("15:04:05"), res.DirectiveResult.Explanation))
+			}
 			if res.VerificationReport != nil {
 				vr := res.VerificationReport
 				status := "passed"
@@ -506,6 +586,9 @@ func (s *StudioServer) handleRunPipeline(w http.ResponseWriter, r *http.Request)
 			}
 		}
 		s.mu.Unlock()
+
+		// Refresh candidate list and disk state
+		s.performScan()
 	}()
 
 	w.Header().Set("Content-Type", "application/json")
@@ -762,6 +845,16 @@ func (s *StudioServer) handleRollback(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "rolled_back"})
 }
 
+func maskSecret(s string) string {
+	if s == "" {
+		return ""
+	}
+	if len(s) <= 8 {
+		return "••••••••"
+	}
+	return s[:4] + "••••" + s[len(s)-4:]
+}
+
 func (s *StudioServer) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
 	projectRoot := s.ProjectRoot
@@ -769,29 +862,80 @@ func (s *StudioServer) handleGetSettings(w http.ResponseWriter, r *http.Request)
 
 	cacheDir := filepath.Join(projectRoot, ".langPeanut", "cache")
 	pm, _ := memory.NewProjectMemory(cacheDir)
+	cfg := memory.LoadConfig(projectRoot)
+
+	downloaded, path, sz := llm.IsNLLBModelDownloaded()
+	runnerInstalled, runnerPath := llm.IsLlamaCLIInstalled()
+
+	ollamaCtx, ollamaCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ollamaStatus := llm.CheckOllamaStatus(ollamaCtx)
+	ollamaCancel()
+	bestOllama := ""
+	if ollamaStatus.Running && len(ollamaStatus.Models) > 0 {
+		bestOllama = llm.BestOllamaModelForTranslation(ollamaStatus.Models)
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"style":            pm.Style,
-		"custom_prompt":    pm.CustomPrompt,
-		"glossary":         pm.Glossary,
-		"exclude_files":    pm.ExcludeFiles,
-		"exclude_patterns": pm.ExcludePatterns,
-		"api_keys": map[string]bool{
-			"anthropic": os.Getenv("ANTHROPIC_API_KEY") != "",
-			"openai":    os.Getenv("OPENAI_API_KEY") != "",
-			"gemini":    os.Getenv("GEMINI_API_KEY") != "",
-			"deepl":     os.Getenv("DEEPL_API_KEY") != "",
+		"style":                      cfg.StylePreset,
+		"active_provider":            cfg.ActiveProvider,
+		"active_model":               cfg.ActiveModel,
+		"chunk_word_budget":          cfg.ChunkWordBudget,
+		"chunk_key_ceiling":          cfg.ChunkKeyCeiling,
+		"concurrency":                cfg.Concurrency,
+		"custom_install_cmd":         cfg.CustomInstallCmd,
+		"custom_build_cmd":           cfg.CustomBuildCmd,
+		"existing_translations_mode": cfg.GetExistingTranslationsMode(),
+		"custom_prompt":              pm.CustomPrompt,
+		"glossary":                   pm.Glossary,
+		"exclude_files":              pm.ExcludeFiles,
+		"exclude_patterns":           pm.ExcludePatterns,
+		"nllb_downloaded":            downloaded,
+		"nllb_path":                  path,
+		"nllb_size_mb":               float64(sz) / (1024 * 1024),
+		"llama_installed":            runnerInstalled,
+		"llama_path":                 runnerPath,
+		"ollama_running":             ollamaStatus.Running,
+		"ollama_models":              ollamaStatus.Models,
+		"ollama_url":                 ollamaStatus.BaseURL,
+		"best_ollama_model":          bestOllama,
+		"api_keys": map[string]string{
+			"anthropic":  maskSecret(os.Getenv("ANTHROPIC_API_KEY")),
+			"openai":     maskSecret(os.Getenv("OPENAI_API_KEY")),
+			"gemini":     maskSecret(os.Getenv("GEMINI_API_KEY")),
+			"deepl":      maskSecret(os.Getenv("DEEPL_API_KEY")),
+			"hf":         maskSecret(os.Getenv("HF_TOKEN")),
+			"custom_url": os.Getenv("OPENAI_BASE_URL"),
+		},
+		"has_keys": map[string]bool{
+			"anthropic":       os.Getenv("ANTHROPIC_API_KEY") != "",
+			"openai":          os.Getenv("OPENAI_API_KEY") != "",
+			"gemini":          os.Getenv("GEMINI_API_KEY") != "",
+			"deepl":           os.Getenv("DEEPL_API_KEY") != "",
+			"hf":              os.Getenv("HF_TOKEN") != "" || os.Getenv("HUGGINGFACE_API_KEY") != "",
+			"custom_url":      os.Getenv("OPENAI_BASE_URL") != "",
+			"nllb_local":      downloaded && runnerInstalled,
+			"llama_installed": runnerInstalled,
+			"ollama":          ollamaStatus.Running && len(ollamaStatus.Models) > 0,
 		},
 	})
 }
 
 type SaveSettingsRequest struct {
-	Style           string                       `json:"style"`
-	CustomPrompt    string                       `json:"custom_prompt"`
-	Glossary        map[string]map[string]string `json:"glossary"`
-	ExcludeFiles    []string                     `json:"exclude_files"`
-	ExcludePatterns []string                     `json:"exclude_patterns"`
+	ActiveProvider           string                       `json:"active_provider"`
+	ActiveModel              string                       `json:"active_model"`
+	Style                    string                       `json:"style"`
+	ChunkWordBudget          int                          `json:"chunk_word_budget"`
+	ChunkKeyCeiling          int                          `json:"chunk_key_ceiling"`
+	Concurrency              int                          `json:"concurrency"`
+	CustomPrompt             string                       `json:"custom_prompt"`
+	CustomInstallCmd         string                       `json:"custom_install_cmd"`
+	CustomBuildCmd           string                       `json:"custom_build_cmd"`
+	ExistingTranslationsMode string                       `json:"existing_translations_mode"`
+	APIKeys                  map[string]string            `json:"api_keys"`
+	Glossary                 map[string]map[string]string `json:"glossary"`
+	ExcludeFiles             []string                     `json:"exclude_files"`
+	ExcludePatterns          []string                     `json:"exclude_patterns"`
 }
 
 func (s *StudioServer) handleSaveSettings(w http.ResponseWriter, r *http.Request) {
@@ -810,9 +954,36 @@ func (s *StudioServer) handleSaveSettings(w http.ResponseWriter, r *http.Request
 	projectRoot := s.ProjectRoot
 	s.mu.Unlock()
 
+	cfg := memory.LoadConfig(projectRoot)
+	if req.ActiveProvider != "" {
+		cfg.ActiveProvider = req.ActiveProvider
+		cfg.ActiveModel = req.ActiveModel
+	}
+	if req.Style != "" {
+		cfg.StylePreset = req.Style
+	}
+	if req.ChunkWordBudget > 0 || req.ChunkKeyCeiling > 0 || req.Concurrency > 0 {
+		cfg.ChunkWordBudget = req.ChunkWordBudget
+		cfg.ChunkKeyCeiling = req.ChunkKeyCeiling
+		cfg.Concurrency = req.Concurrency
+	}
+	cfg.CustomInstallCmd = req.CustomInstallCmd
+	cfg.CustomBuildCmd = req.CustomBuildCmd
+	if req.ExistingTranslationsMode != "" {
+		cfg.ExistingTranslationsMode = req.ExistingTranslationsMode
+	}
+	for k, v := range req.APIKeys {
+		if v != "" {
+			_ = cfg.SetAPIKey(k, v, projectRoot)
+		}
+	}
+	_ = cfg.Save(projectRoot)
+
 	cacheDir := filepath.Join(projectRoot, ".langPeanut", "cache")
 	pm, _ := memory.NewProjectMemory(cacheDir)
-	pm.Style = memory.StylePreset(req.Style)
+	if req.Style != "" {
+		pm.Style = memory.StylePreset(req.Style)
+	}
 	pm.CustomPrompt = req.CustomPrompt
 	pm.Glossary = req.Glossary
 	pm.ExcludeFiles = req.ExcludeFiles
@@ -821,6 +992,142 @@ func (s *StudioServer) handleSaveSettings(w http.ResponseWriter, r *http.Request
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "saved"})
+}
+
+func (s *StudioServer) handleDownloadNLLBModel(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+
+	path, err := llm.EnsureNLLBModel(r.Context(), func(down, tot int64, pct float64) {
+		data, _ := json.Marshal(map[string]any{
+			"downloaded": down,
+			"total":      tot,
+			"percent":    pct,
+		})
+		_, _ = fmt.Fprintf(w, "data: %s\n\n", string(data))
+		flusher.Flush()
+	})
+
+	if err != nil {
+		data, _ := json.Marshal(map[string]any{"error": err.Error()})
+		_, _ = fmt.Fprintf(w, "data: %s\n\n", string(data))
+		flusher.Flush()
+		return
+	}
+
+	data, _ := json.Marshal(map[string]any{"status": "complete", "percent": 100.0, "path": path})
+	_, _ = fmt.Fprintf(w, "data: %s\n\n", string(data))
+	flusher.Flush()
+}
+
+func (s *StudioServer) handleInstallLlamaRunner(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+
+	installedPath, err := llm.InstallLlamaCLIViaBrew(r.Context(), func(line string) {
+		data, _ := json.Marshal(map[string]any{
+			"status": "installing",
+			"log":    line,
+		})
+		_, _ = fmt.Fprintf(w, "data: %s\n\n", string(data))
+		flusher.Flush()
+	})
+
+	if err != nil {
+		data, _ := json.Marshal(map[string]any{"error": err.Error()})
+		_, _ = fmt.Fprintf(w, "data: %s\n\n", string(data))
+		flusher.Flush()
+		return
+	}
+
+	data, _ := json.Marshal(map[string]any{"status": "complete", "path": installedPath})
+	_, _ = fmt.Fprintf(w, "data: %s\n\n", string(data))
+	flusher.Flush()
+}
+
+type TestModelApiRequest struct {
+	Provider   string `json:"provider"`
+	Model      string `json:"model"`
+	APIKey     string `json:"api_key"`
+	TargetLang string `json:"target_lang"`
+	SampleText string `json:"sample_text"`
+}
+
+func (s *StudioServer) handleTestModel(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req TestModelApiRequest
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	s.mu.RLock()
+	projectRoot := s.ProjectRoot
+	s.mu.RUnlock()
+
+	cfg := memory.LoadConfig(projectRoot)
+
+	prov := llm.ProviderType(req.Provider)
+	if prov == "" {
+		prov = llm.ProviderType(cfg.ActiveProvider)
+		if prov == "" {
+			prov = llm.ProviderLocal
+		}
+	}
+	mod := req.Model
+	if mod == "" {
+		mod = cfg.ActiveModel
+	}
+	key := req.APIKey
+	if key == "" {
+		key = cfg.GetAPIKey(string(prov))
+	}
+
+	tgt := req.TargetLang
+	if tgt == "" {
+		tgt = "es"
+	}
+
+	txt := req.SampleText
+	if txt == "" {
+		txt = "Welcome to langPeanut! Effortless multi-agent software localization."
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
+	defer cancel()
+
+	res, err := llm.TestModelConnection(ctx, prov, mod, key, tgt, txt)
+
+	w.Header().Set("Content-Type", "application/json")
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+	}
+	_ = json.NewEncoder(w).Encode(res)
 }
 
 func (s *StudioServer) handleGetTree(w http.ResponseWriter, r *http.Request) {
@@ -1021,6 +1328,12 @@ func (s *StudioServer) handleRunBenchmark(w http.ResponseWriter, r *http.Request
 	_ = json.NewEncoder(w).Encode(results)
 }
 
+func (s *StudioServer) handleGetDiagnosticLogs(w http.ResponseWriter, r *http.Request) {
+	events := logger.Get().GetRecent(100)
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(events)
+}
+
 func (s *StudioServer) handleGetBenchmark(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
 	results := s.LastBenchmark
@@ -1028,6 +1341,21 @@ func (s *StudioServer) handleGetBenchmark(w http.ResponseWriter, r *http.Request
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(results)
+}
+
+func (s *StudioServer) handleDependencies(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	autoInstall := r.Method == http.MethodPost
+	status, err := s.Platform.EnsureDependencies(s.ProjectRoot, autoInstall)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(status)
 }
 
 // StartInteractiveWebStudio launches the full interactive project-aware Web Studio
@@ -1050,6 +1378,7 @@ func StartInteractiveWebStudio(projectRoot string, port int, autoOpen bool) erro
 	mux.HandleFunc("/api/candidates/update", studio.handleUpdateCandidate)
 	mux.HandleFunc("/api/candidates/batch", studio.handleBatchCandidates)
 	mux.HandleFunc("/api/run", studio.handleRunPipeline)
+	mux.HandleFunc("/api/dependencies", studio.handleDependencies)
 	mux.HandleFunc("/api/diff", studio.handleGetDiff)
 	mux.HandleFunc("/api/apply", studio.handleApplyChanges)
 	mux.HandleFunc("/api/locales", studio.handleGetLocales)
@@ -1058,6 +1387,10 @@ func StartInteractiveWebStudio(projectRoot string, port int, autoOpen bool) erro
 	mux.HandleFunc("/api/rollback", studio.handleRollback)
 	mux.HandleFunc("/api/settings", studio.handleGetSettings)
 	mux.HandleFunc("/api/settings/save", studio.handleSaveSettings)
+	mux.HandleFunc("/api/models/download", studio.handleDownloadNLLBModel)
+	mux.HandleFunc("/api/models/install-runner", studio.handleInstallLlamaRunner)
+	mux.HandleFunc("/api/models/test", studio.handleTestModel)
+	mux.HandleFunc("/api/logs", studio.handleGetDiagnosticLogs)
 	mux.HandleFunc("/api/benchmark/run", studio.handleRunBenchmark)
 	mux.HandleFunc("/api/benchmark", studio.handleGetBenchmark)
 	mux.HandleFunc("/api/languages", handleLanguages)
@@ -1140,10 +1473,10 @@ const InteractiveAppHTML = `<!DOCTYPE html>
   </script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <style>
-    @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,300;0,400;0,500;0,700;0,900;1,400&family=Roboto+Mono:wght@400;500;600;700&display=swap');
     * { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
-    body, button, input, select, textarea { font-family: 'Poppins', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #07080b; color: #f3f4f6; letter-spacing: -0.01em; }
-    pre, code, .font-mono { font-family: 'JetBrains Mono', monospace; letter-spacing: normal; }
+    body, button, input, select, textarea { font-family: 'Roboto', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background-color: #07080b; color: #f3f4f6; }
+    pre, code, .font-mono { font-family: 'Roboto Mono', 'JetBrains Mono', monospace; letter-spacing: normal; }
     .custom-scrollbar::-webkit-scrollbar { width: 5px; height: 5px; }
     .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
     .custom-scrollbar::-webkit-scrollbar-thumb { background: #1f2430; border-radius: 3px; }
@@ -1615,49 +1948,88 @@ const InteractiveAppHTML = `<!DOCTYPE html>
 
       <!-- ================================= SCREEN 6: PIPELINE RUNNER & LOGS ================================= -->
       <div id="screenRunner" class="hidden flex-1 flex flex-col min-h-0 p-5 space-y-4">
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div class="p-4 rounded-xl panel space-y-3">
-            <span class="text-xs font-semibold text-zinc-200 uppercase tracking-wide flex items-center gap-2">
-              <i class="fa-solid fa-language text-sky-400"></i> Target Languages
-            </span>
-            <div class="grid grid-cols-2 gap-2 text-xs">
-              <label class="flex items-center gap-2 p-2 rounded-lg field cursor-pointer hover:border-sky-500"><input type="checkbox" checked value="es" class="runner-loc-cb accent-sky-500"> Spanish (es)</label>
-              <label class="flex items-center gap-2 p-2 rounded-lg field cursor-pointer hover:border-sky-500"><input type="checkbox" checked value="fr" class="runner-loc-cb accent-sky-500"> French (fr)</label>
-              <label class="flex items-center gap-2 p-2 rounded-lg field cursor-pointer hover:border-sky-500"><input type="checkbox" checked value="de" class="runner-loc-cb accent-sky-500"> German (de)</label>
-              <label class="flex items-center gap-2 p-2 rounded-lg field cursor-pointer hover:border-sky-500"><input type="checkbox" checked value="ja" class="runner-loc-cb accent-sky-500"> Japanese (ja)</label>
-              <label class="flex items-center gap-2 p-2 rounded-lg field cursor-pointer hover:border-sky-500"><input type="checkbox" value="ar" class="runner-loc-cb accent-sky-500"> Arabic (ar)</label>
-              <label class="flex items-center gap-2 p-2 rounded-lg field cursor-pointer hover:border-sky-500"><input type="checkbox" value="hi" class="runner-loc-cb accent-sky-500"> Hindi (hi)</label>
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+          <!-- Target Languages Comprehensive Hub (38+ Languages) -->
+          <div class="p-4 rounded-xl panel space-y-3 lg:col-span-2 flex flex-col">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <span class="text-xs font-semibold text-zinc-200 uppercase tracking-wide flex items-center gap-2">
+                <i class="fa-solid fa-language text-sky-400"></i> Target Languages (<span id="runnerSelectedCount" class="text-sky-400 font-bold">4</span> selected)
+              </span>
+              <!-- Quick Presets -->
+              <div class="flex flex-wrap items-center gap-1 text-[11px]">
+                <button onclick="applyLangPreset('top5')" class="px-2 py-0.5 rounded bg-zinc-800 hover:bg-sky-600/30 text-zinc-300 hover:text-sky-300 border border-zinc-700 transition-all cursor-pointer">Top 5</button>
+                <button onclick="applyLangPreset('eu')" class="px-2 py-0.5 rounded bg-zinc-800 hover:bg-sky-600/30 text-zinc-300 hover:text-sky-300 border border-zinc-700 transition-all cursor-pointer">EU Tier 1</button>
+                <button onclick="applyLangPreset('apac')" class="px-2 py-0.5 rounded bg-zinc-800 hover:bg-sky-600/30 text-zinc-300 hover:text-sky-300 border border-zinc-700 transition-all cursor-pointer">Asia-Pac</button>
+                <button onclick="applyLangPreset('americas')" class="px-2 py-0.5 rounded bg-zinc-800 hover:bg-sky-600/30 text-zinc-300 hover:text-sky-300 border border-zinc-700 transition-all cursor-pointer">Americas</button>
+                <button onclick="applyLangPreset('nordics')" class="px-2 py-0.5 rounded bg-zinc-800 hover:bg-sky-600/30 text-zinc-300 hover:text-sky-300 border border-zinc-700 transition-all cursor-pointer">Nordics</button>
+                <button onclick="applyLangPreset('all')" class="px-2 py-0.5 rounded bg-zinc-800 hover:bg-sky-600/30 text-zinc-300 hover:text-sky-300 border border-zinc-700 transition-all cursor-pointer">All 38</button>
+                <button onclick="applyLangPreset('clear')" class="px-2 py-0.5 rounded bg-zinc-800 hover:bg-rose-600/30 text-zinc-400 hover:text-rose-300 border border-zinc-700 transition-all cursor-pointer">Clear</button>
+              </div>
+            </div>
+
+            <!-- Search + Custom Language Adder -->
+            <div class="flex gap-2 text-xs">
+              <div class="relative flex-1">
+                <i class="fa-solid fa-magnifying-glass absolute left-3 top-2.5 text-zinc-500 text-[10px]"></i>
+                <input id="runnerLangSearch" type="text" oninput="filterCatalogLanguages()" placeholder="Search 38+ languages (e.g. Italian, Korean, zh, ja)..." class="w-full pl-8 pr-3 py-1.5 rounded-lg field text-xs text-zinc-200" />
+              </div>
+              <div class="flex gap-1.5">
+                <input id="runnerCustomLangInput" type="text" placeholder="+ Custom (e.g. pt-BR, fil)" class="w-40 px-2.5 py-1.5 rounded-lg field text-xs font-mono text-zinc-200" onkeydown="if(event.key==='Enter'){addCustomTargetLanguage(); event.preventDefault();}" />
+                <button onclick="addCustomTargetLanguage()" class="px-3 py-1.5 rounded-lg bg-sky-600/30 hover:bg-sky-600/50 text-sky-300 border border-sky-500/30 text-xs font-semibold flex items-center gap-1 transition-all cursor-pointer" title="Add Custom Language Code">
+                  <i class="fa-solid fa-plus"></i> Add
+                </button>
+              </div>
+            </div>
+
+            <!-- Scrollable Language Grid -->
+            <div id="runnerLangGrid" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2 max-h-52 overflow-y-auto custom-scrollbar pr-1 text-xs">
+              <!-- Dynamically rendered by JS -->
             </div>
           </div>
 
-          <div class="p-4 rounded-xl panel space-y-3">
-            <span class="text-xs font-semibold text-zinc-200 uppercase tracking-wide flex items-center gap-2">
-              <i class="fa-solid fa-masks-theater text-amber-400"></i> Style Persona Memory
-            </span>
-            <select id="runnerToneSelector" class="w-full py-2 px-3 rounded-lg field text-xs text-zinc-200 font-medium">
-              <option value="default">Standard Native (Professional UI)</option>
-              <option value="gen_z">Gen-Z Slang ('no cap', 'slay', 'fire')</option>
-              <option value="pirate">Pirate / Gamer ('Ahoy Matey!', 'Plunder')</option>
-              <option value="formal">Corporate Formal (Enterprise Honorifics)</option>
-              <option value="casual">Casual Friendly (Warm & Welcoming)</option>
-            </select>
-            <p class="text-[11px] text-zinc-500 leading-relaxed">
-              Persisted in <code class="text-sky-400 font-mono">.langpeanut.json</code> across developer sessions.
-            </p>
-          </div>
-
-          <div class="p-4 rounded-xl panel flex flex-col justify-between space-y-3">
-            <div>
+          <!-- Controls: Style Persona, App Directive & Execution -->
+          <div class="space-y-3 flex flex-col justify-between">
+            <div class="p-4 rounded-xl panel space-y-2">
               <span class="text-xs font-semibold text-zinc-200 uppercase tracking-wide flex items-center gap-2">
-                <i class="fa-solid fa-diagram-project text-purple-400"></i> Execution Engine
+                <i class="fa-solid fa-masks-theater text-amber-400"></i> Style Persona Memory
               </span>
-              <p class="text-[11px] text-zinc-500 mt-1.5 leading-relaxed">
-                6-agent supervisor DAG with AST tree-sitter isolation and 4-tier verification critic.
+              <select id="runnerToneSelector" class="w-full py-2 px-3 rounded-lg field text-xs text-zinc-200 font-medium">
+                <option value="default">Standard Native (Professional UI)</option>
+                <option value="gen_z">Gen-Z Slang ('no cap', 'slay', 'fire')</option>
+                <option value="pirate">Pirate / Gamer ('Ahoy Matey!', 'Plunder')</option>
+                <option value="formal">Corporate Formal (Enterprise Honorifics)</option>
+                <option value="casual">Casual Friendly (Warm & Welcoming)</option>
+              </select>
+            </div>
+
+            <div class="p-4 rounded-xl panel space-y-2">
+              <span class="text-xs font-semibold text-zinc-200 uppercase tracking-wide flex items-center gap-2">
+                <i class="fa-solid fa-wand-magic-sparkles text-indigo-400"></i> App Integration Directive
+              </span>
+              <input id="runnerDirectiveInput" type="text" placeholder="e.g. Add a language switcher dropdown in Navbar.tsx" class="w-full py-2 px-3 rounded-lg field text-xs text-zinc-200" />
+              <p class="text-[10px] text-zinc-500">
+                Synthesizes UI components & surgically patches parent containers.
               </p>
             </div>
-            <button onclick="executeLocalization()" id="runnerExecuteBtn" class="w-full py-2.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white font-semibold text-xs uppercase tracking-wide flex items-center justify-center gap-2 transition-all shadow-md shadow-sky-600/20">
-              <i class="fa-solid fa-bolt"></i> Run Pipeline
-            </button>
+
+            <div class="p-4 rounded-xl panel space-y-2">
+              <span class="text-xs font-semibold text-zinc-200 uppercase tracking-wide flex items-center gap-2">
+                <i class="fa-solid fa-arrows-rotate text-emerald-400"></i> Existing Translations Strategy
+              </span>
+              <select id="runnerExistingModeSelector" class="w-full py-2 px-3 rounded-lg field text-xs text-zinc-200 font-medium">
+                <option value="skip" selected>⚡ Skip Existing (Translate Missing Only)</option>
+                <option value="replace">🔄 Regenerate & Overwrite All Existing</option>
+              </select>
+              <p class="text-[10px] text-zinc-500">
+                Incremental delta translation or full overwrite regeneration.
+              </p>
+            </div>
+
+            <div class="p-4 rounded-xl panel space-y-2.5">
+              <button onclick="executeLocalization()" id="runnerExecuteBtn" class="w-full py-2.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white font-semibold text-xs uppercase tracking-wide flex items-center justify-center gap-2 transition-all shadow-md shadow-sky-600/20 cursor-pointer">
+                <i class="fa-solid fa-bolt"></i> Run Pipeline
+              </button>
+            </div>
           </div>
         </div>
 
@@ -1777,48 +2149,204 @@ const InteractiveAppHTML = `<!DOCTYPE html>
       <!-- ================================= SCREEN 10: SETTINGS ================================= -->
       <div id="screenSettings" class="hidden flex-1 flex flex-col min-h-0 p-6 space-y-5 overflow-y-auto custom-scrollbar">
         <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
-          <div class="p-5 rounded-xl panel space-y-4">
-            <h3 class="text-xs font-bold text-zinc-100 uppercase tracking-wide flex items-center gap-2">
-              <i class="fa-solid fa-key text-sky-400"></i> AI Provider & API Credentials
-            </h3>
-            <div class="space-y-2 text-xs">
-              <div id="keyStatusAnthropic" class="p-3 rounded-lg field flex items-center justify-between">
-                <span>Anthropic Claude (<code class="text-sky-300 font-mono">ANTHROPIC_API_KEY</code>)</span>
-                <span id="badgeKeyAnthropic" class="text-[10px] px-2 py-0.5 rounded font-mono">Checking...</span>
+          
+          <!-- Left Column: Engine & Model Configuration -->
+          <div class="space-y-5">
+            <div class="p-5 rounded-xl panel space-y-4">
+              <h3 class="text-xs font-bold text-zinc-100 uppercase tracking-wide flex items-center gap-2">
+                <i class="fa-solid fa-microchip text-sky-400"></i> Active AI Provider & Model
+              </h3>
+              <div class="space-y-3 text-xs">
+                <div>
+                  <label class="text-zinc-400 font-medium block mb-1">Translation Provider Engine:</label>
+                  <select id="settingsActiveProvider" onchange="handleProviderChange()" class="w-full field rounded-lg px-3 py-2 text-xs font-mono text-zinc-200">
+                    <option value="ollama">Ollama (100% Offline GPU Engine — Qwen, Gemma, LLaMA)</option>
+                    <option value="claude">Anthropic Claude (claude-sonnet-5 — 1M Context, 128k Out, $2/$10)</option>
+                    <option value="openai">OpenAI (gpt-5.4-mini-2026-03-17 — 400k Context, 128k Out, $0.75/$4.50)</option>
+                    <option value="gemini">Google Gemini (gemini-3.5-flash — $1.50 in / $9.00 out per 1M)</option>
+                    <option value="nllb-cloud">Meta NLLB-200 Cloud (Hugging Face Serverless Inference)</option>
+                    <option value="deepl">DeepL Neural MT API (European / Asian Specialists)</option>
+                    <option value="custom">Custom / vLLM / LM Studio (OpenAI-Compatible Local Endpoint)</option>
+                    <option value="local">Local Deterministic Engine (Offline Benchmark Synthesizer)</option>
+                  </select>
+                </div>
+                <div>
+                  <label class="text-zinc-400 font-medium block mb-1">Dynamic Tone & Style Preset:</label>
+                  <select id="settingsToneStyle" class="w-full field rounded-lg px-3 py-2 text-xs font-mono text-zinc-200">
+                    <option value="default">Standard Accurate — Professional, clear native UI copy</option>
+                    <option value="gen_z">Gen-Z Slang — Trendy internet aesthetic ('no cap', 'slay', 'fire')</option>
+                    <option value="casual">Casual Friendly — Warm, welcoming tone for consumer apps</option>
+                    <option value="formal">Corporate Formal — Enterprise-grade strict polite honorifics</option>
+                    <option value="pirate">Pirate / Gamer — 'Ahoy Matey!' playful gaming copy</option>
+                  </select>
+                </div>
               </div>
-              <div id="keyStatusOpenAI" class="p-3 rounded-lg field flex items-center justify-between">
-                <span>OpenAI (<code class="text-sky-300 font-mono">OPENAI_API_KEY</code>)</span>
-                <span id="badgeKeyOpenAI" class="text-[10px] px-2 py-0.5 rounded font-mono">Checking...</span>
+            </div>
+
+            <!-- Ollama Local Offline GPU Engine Card -->
+            <div class="p-5 rounded-xl panel space-y-4 border border-emerald-500/20 bg-emerald-950/10">
+              <div class="flex items-center justify-between">
+                <h3 class="text-xs font-bold text-emerald-300 uppercase tracking-wide flex items-center gap-2">
+                  <i class="fa-solid fa-microchip text-emerald-400"></i> Ollama Local GPU Engine
+                </h3>
+                <span id="badgeOllamaStatus" class="text-[10px] px-2 py-0.5 rounded font-mono">Checking...</span>
               </div>
-              <div id="keyStatusGemini" class="p-3 rounded-lg field flex items-center justify-between">
-                <span>Google Gemini (<code class="text-sky-300 font-mono">GEMINI_API_KEY</code>)</span>
-                <span id="badgeKeyGemini" class="text-[10px] px-2 py-0.5 rounded font-mono">Checking...</span>
+              <p class="text-[11px] text-zinc-400 leading-relaxed">
+                100% offline, zero-key neural execution running on your Apple Silicon Metal GPU. Zero API cost, zero cloud data transfer.
+              </p>
+              <div>
+                <label class="text-zinc-400 font-medium block mb-1 text-[11px]">Active Ollama Model:</label>
+                <select id="settingsOllamaModelSelect" class="w-full field rounded-lg px-3 py-2 text-xs font-mono text-zinc-200">
+                  <option value="">Auto-Detect Best Model</option>
+                </select>
               </div>
-              <div id="keyStatusDeepL" class="p-3 rounded-lg field flex items-center justify-between">
-                <span>DeepL (<code class="text-sky-300 font-mono">DEEPL_API_KEY</code>)</span>
-                <span id="badgeKeyDeepL" class="text-[10px] px-2 py-0.5 rounded font-mono">Checking...</span>
+              <div id="ollamaModelsContainer" class="p-2.5 rounded-lg bg-zinc-950/80 border border-zinc-800 text-[11px] font-mono space-y-1">
+                <div class="text-zinc-400 flex items-center justify-between">
+                  <span>Available Local Models:</span>
+                  <span id="ollamaActiveModelBadge" class="text-emerald-400 font-semibold"></span>
+                </div>
+                <div id="ollamaModelsList" class="text-zinc-300"></div>
+              </div>
+            </div>
+
+            <!-- Model Test & Connectivity Probe Card -->
+            <div class="p-5 rounded-xl panel space-y-4 border border-violet-500/20 bg-violet-950/10">
+              <div class="flex items-center justify-between">
+                <h3 class="text-xs font-bold text-violet-300 uppercase tracking-wide flex items-center gap-2">
+                  <i class="fa-solid fa-bolt text-violet-400"></i> Live Model Connectivity & Probe
+                </h3>
+                <span id="badgeTestStatus" class="text-[10px] px-2 py-0.5 rounded font-mono text-zinc-400 border border-zinc-700 bg-zinc-900">Ready</span>
+              </div>
+              <p class="text-[11px] text-zinc-400 leading-relaxed">
+                Run an instant translation probe to verify API credentials, endpoint reachability, latency, and ICU syntax preservation.
+              </p>
+              <div class="space-y-2">
+                <input type="text" id="testProbeInput" value="Welcome to langPeanut! Effortless multi-agent software localization." class="w-full field rounded-lg px-3 py-2 text-xs font-mono text-zinc-200">
+                <div class="flex gap-2">
+                  <select id="testProbeTargetLang" class="field rounded-lg px-3 py-2 text-xs font-mono text-zinc-200 flex-1">
+                    <option value="es">Spanish (es)</option>
+                    <option value="fr">French (fr)</option>
+                    <option value="ja">Japanese (ja)</option>
+                    <option value="de">German (de)</option>
+                    <option value="hi">Hindi (hi)</option>
+                    <option value="zh-CN">Chinese (zh)</option>
+                  </select>
+                  <button id="btnRunModelTest" onclick="runModelConnectivityTest()" class="px-4 py-2 rounded-lg bg-violet-600 hover:bg-violet-500 text-white font-semibold text-xs transition-colors flex items-center gap-2">
+                    <i class="fa-solid fa-play"></i> Test Model
+                  </button>
+                </div>
+              </div>
+              <div id="testProbeResultBox" class="hidden p-3 rounded-lg border border-zinc-700 bg-zinc-900/90 text-xs space-y-2"></div>
+            </div>
+          </div>
+
+          <!-- Right Column: API Keys & Preferences -->
+          <div class="space-y-5">
+            <div class="p-5 rounded-xl panel space-y-4">
+              <h3 class="text-xs font-bold text-zinc-100 uppercase tracking-wide flex items-center gap-2">
+                <i class="fa-solid fa-key text-emerald-400"></i> API Credentials & Tokens
+              </h3>
+              <div class="space-y-3 text-xs">
+                <div>
+                  <label class="text-zinc-400 font-medium block mb-1">Hugging Face Token (<code class="text-sky-300 font-mono">HF_TOKEN</code>):</label>
+                  <input type="password" id="keyInputHF" placeholder="hf_..." class="w-full field rounded-lg px-3 py-2 text-xs font-mono text-zinc-200">
+                </div>
+                <div>
+                  <label class="text-zinc-400 font-medium block mb-1">Anthropic API Key (<code class="text-sky-300 font-mono">ANTHROPIC_API_KEY</code>):</label>
+                  <input type="password" id="keyInputAnthropic" placeholder="sk-ant-..." class="w-full field rounded-lg px-3 py-2 text-xs font-mono text-zinc-200">
+                </div>
+                <div>
+                  <label class="text-zinc-400 font-medium block mb-1">OpenAI API Key (<code class="text-sky-300 font-mono">OPENAI_API_KEY</code>):</label>
+                  <input type="password" id="keyInputOpenAI" placeholder="sk-..." class="w-full field rounded-lg px-3 py-2 text-xs font-mono text-zinc-200">
+                </div>
+                <div>
+                  <label class="text-zinc-400 font-medium block mb-1">Google Gemini API Key (<code class="text-sky-300 font-mono">GEMINI_API_KEY</code>):</label>
+                  <input type="password" id="keyInputGemini" placeholder="AIza..." class="w-full field rounded-lg px-3 py-2 text-xs font-mono text-zinc-200">
+                </div>
+                <div>
+                  <label class="text-zinc-400 font-medium block mb-1">DeepL API Key (<code class="text-sky-300 font-mono">DEEPL_API_KEY</code>):</label>
+                  <input type="password" id="keyInputDeepL" placeholder="deepl_key..." class="w-full field rounded-lg px-3 py-2 text-xs font-mono text-zinc-200">
+                </div>
+                <div>
+                  <label class="text-zinc-400 font-medium block mb-1">Custom Base URL (<code class="text-sky-300 font-mono">OPENAI_BASE_URL</code>):</label>
+                  <input type="text" id="keyInputCustomURL" placeholder="http://localhost:11434/v1" class="w-full field rounded-lg px-3 py-2 text-xs font-mono text-zinc-200">
+                </div>
+              </div>
+            </div>
+
+            <!-- Custom Toolchain Commands Card -->
+            <div class="p-5 rounded-xl panel space-y-4 border border-sky-500/20 bg-sky-950/10">
+              <h3 class="text-xs font-bold text-sky-300 uppercase tracking-wide flex items-center gap-2">
+                <i class="fa-solid fa-terminal text-sky-400"></i> Custom Toolchain Commands
+              </h3>
+              <p class="text-[11px] text-zinc-400 leading-relaxed">
+                Override default package manager and compiler commands for specialized monorepos, private registries, or custom build scripts.
+              </p>
+              <div class="space-y-3 text-xs">
+                <div>
+                  <label class="text-zinc-400 font-medium block mb-1">Custom Dependency Install Command:</label>
+                  <input type="text" id="settingsCustomInstallCmd" placeholder="e.g. pnpm install, yarn add react-i18next i18next, flutter pub get" class="w-full field rounded-lg px-3 py-2 text-xs font-mono text-zinc-200">
+                  <span class="text-[10px] text-zinc-500">Executed during dependency resolution & package installation.</span>
+                </div>
+                <div>
+                  <label class="text-zinc-400 font-medium block mb-1">Custom Build / Typecheck Command:</label>
+                  <input type="text" id="settingsCustomBuildCmd" placeholder="e.g. pnpm typecheck, npm run build, tsc --noEmit, flutter analyze" class="w-full field rounded-lg px-3 py-2 text-xs font-mono text-zinc-200">
+                  <span class="text-[10px] text-zinc-500">Executed during compiler diagnostics validation & autonomous code repair.</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Token Budget & Batch Chunking Card -->
+            <div class="p-5 rounded-xl panel space-y-4 border border-indigo-500/20 bg-indigo-950/10">
+              <h3 class="text-xs font-bold text-indigo-300 uppercase tracking-wide flex items-center gap-2">
+                <i class="fa-solid fa-coins text-indigo-400"></i> Token Budget & Batch Chunking Tunables
+              </h3>
+              <p class="text-[11px] text-zinc-400 leading-relaxed">
+                Control LLM context window utilization, batch token budgets, key ceilings per prompt, and parallel concurrency limits.
+              </p>
+              <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+                <div>
+                  <label class="text-zinc-400 font-medium block mb-1">Word/Token Budget:</label>
+                  <input type="number" id="settingsChunkWordBudget" placeholder="0 (Auto Model-Aware)" class="w-full field rounded-lg px-3 py-2 text-xs font-mono text-zinc-200">
+                  <span class="text-[10px] text-zinc-500">Max words per batch (0 = auto)</span>
+                </div>
+                <div>
+                  <label class="text-zinc-400 font-medium block mb-1">Key Ceiling / Batch:</label>
+                  <input type="number" id="settingsChunkKeyCeiling" placeholder="0 (Auto Model-Aware)" class="w-full field rounded-lg px-3 py-2 text-xs font-mono text-zinc-200">
+                  <span class="text-[10px] text-zinc-500">Max keys per prompt (0 = auto)</span>
+                </div>
+                <div>
+                  <label class="text-zinc-400 font-medium block mb-1">Parallel Concurrency:</label>
+                  <input type="number" id="settingsConcurrency" placeholder="5" min="1" max="50" class="w-full field rounded-lg px-3 py-2 text-xs font-mono text-zinc-200">
+                  <span class="text-[10px] text-zinc-500">Simultaneous API calls</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="p-5 rounded-xl panel space-y-4">
+              <h3 class="text-xs font-bold text-zinc-100 uppercase tracking-wide flex items-center gap-2">
+                <i class="fa-solid fa-shield text-amber-400"></i> Defaults & File Exclusions
+              </h3>
+              <div class="space-y-3 text-xs">
+                <div>
+                  <label class="text-zinc-400 font-medium block mb-1">Default Strategy on Existing Translations:</label>
+                  <select id="settingsExistingTranslationsMode" class="w-full field rounded-lg px-3 py-2 text-xs font-mono text-zinc-200">
+                    <option value="skip">Skip Existing (Incremental — Translate Missing Only)</option>
+                    <option value="replace">Regenerate & Overwrite All Existing</option>
+                    <option value="prompt">Prompt Interactively in Terminal</option>
+                  </select>
+                </div>
+                <div>
+                  <label class="text-zinc-400 font-medium block mb-1">Excluded File Patterns (Globs):</label>
+                  <input type="text" id="settingsExcludesInput" placeholder="**/*.test.*, **/mock/**" class="w-full field rounded-lg px-3 py-2 text-xs font-mono text-zinc-200">
+                </div>
+                <button onclick="saveProjectSettings()" class="w-full py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs transition-colors flex items-center justify-center gap-2 shadow-lg shadow-emerald-950/50">
+                  <i class="fa-solid fa-floppy-disk"></i> Save Preferences & Credentials
+                </button>
               </div>
             </div>
           </div>
 
-          <div class="p-5 rounded-xl panel space-y-4">
-            <h3 class="text-xs font-bold text-zinc-100 uppercase tracking-wide flex items-center gap-2">
-              <i class="fa-solid fa-shield text-amber-400"></i> Brand Lexicon & File Exclusions
-            </h3>
-            <div class="space-y-3 text-xs">
-              <div>
-                <label class="text-zinc-400 font-medium block mb-1">Protected Brand Words (Preserved As-Is):</label>
-                <input type="text" id="settingsBrandInput" placeholder="langPeanut, Stripe, GitHub" class="w-full field rounded-lg px-3 py-2 text-xs font-mono text-zinc-200">
-              </div>
-              <div>
-                <label class="text-zinc-400 font-medium block mb-1">Excluded File Patterns (Globs):</label>
-                <input type="text" id="settingsExcludesInput" placeholder="**/*.test.*, **/mock/**" class="w-full field rounded-lg px-3 py-2 text-xs font-mono text-zinc-200">
-              </div>
-              <button onclick="saveProjectSettings()" class="w-full py-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-white font-semibold text-xs transition-colors">
-                Save Preferences to .langpeanut.json
-              </button>
-            </div>
-          </div>
         </div>
       </div>
 
@@ -2344,11 +2872,171 @@ const InteractiveAppHTML = `<!DOCTYPE html>
       document.getElementById('sim2SubmitBtn').innerText = copy.btn2;
     }
 
+    // ---------- Comprehensive 38+ World Language Catalog ----------
+    const ALL_CATALOG_LANGUAGES = [
+      { code: 'es', name: 'Spanish', native: 'Español', flag: '🇪🇸', region: 'eu/americas' },
+      { code: 'fr', name: 'French', native: 'Français', flag: '🇫🇷', region: 'eu/americas' },
+      { code: 'de', name: 'German', native: 'Deutsch', flag: '🇩🇪', region: 'eu' },
+      { code: 'ja', name: 'Japanese', native: '日本語', flag: '🇯🇵', region: 'apac' },
+      { code: 'zh-CN', name: 'Chinese (Simplified)', native: '简体中文', flag: '🇨🇳', region: 'apac' },
+      { code: 'zh-TW', name: 'Chinese (Traditional)', native: '繁體中文', flag: '🇹🇼', region: 'apac' },
+      { code: 'ko', name: 'Korean', native: '한국어', flag: '🇰🇷', region: 'apac' },
+      { code: 'pt', name: 'Portuguese (PT)', native: 'Português', flag: '🇵🇹', region: 'eu' },
+      { code: 'pt-BR', name: 'Portuguese (BR)', native: 'Português (Brasil)', flag: '🇧🇷', region: 'americas' },
+      { code: 'it', name: 'Italian', native: 'Italiano', flag: '🇮🇹', region: 'eu' },
+      { code: 'nl', name: 'Dutch', native: 'Nederlands', flag: '🇳🇱', region: 'eu' },
+      { code: 'ru', name: 'Russian', native: 'Русский', flag: '🇷🇺', region: 'eu' },
+      { code: 'ar', name: 'Arabic', native: 'العربية', flag: '🇸🇦', region: 'me' },
+      { code: 'hi', name: 'Hindi', native: 'हिन्दी', flag: '🇮🇳', region: 'apac' },
+      { code: 'tr', name: 'Turkish', native: 'Türkçe', flag: '🇹🇷', region: 'eu/me' },
+      { code: 'pl', name: 'Polish', native: 'Polski', flag: '🇵🇱', region: 'eu' },
+      { code: 'sv', name: 'Swedish', native: 'Svenska', flag: '🇸🇪', region: 'nordics' },
+      { code: 'da', name: 'Danish', native: 'Dansk', flag: '🇩🇰', region: 'nordics' },
+      { code: 'fi', name: 'Finnish', native: 'Suomi', flag: '🇫🇮', region: 'nordics' },
+      { code: 'no', name: 'Norwegian', native: 'Norsk', flag: '🇳🇴', region: 'nordics' },
+      { code: 'uk', name: 'Ukrainian', native: 'Українська', flag: '🇺🇦', region: 'eu' },
+      { code: 'vi', name: 'Vietnamese', native: 'Tiếng Việt', flag: '🇻🇳', region: 'apac' },
+      { code: 'th', name: 'Thai', native: 'ไทย', flag: '🇹🇭', region: 'apac' },
+      { code: 'id', name: 'Indonesian', native: 'Bahasa Indonesia', flag: '🇮🇩', region: 'apac' },
+      { code: 'ms', name: 'Malay', native: 'Bahasa Melayu', flag: '🇲🇾', region: 'apac' },
+      { code: 'fil', name: 'Filipino', native: 'Filipino', flag: '🇵🇭', region: 'apac' },
+      { code: 'he', name: 'Hebrew', native: 'עברית', flag: '🇮🇱', region: 'me' },
+      { code: 'el', name: 'Greek', native: 'Ελληνικά', flag: '🇬🇷', region: 'eu' },
+      { code: 'cs', name: 'Czech', native: 'Čeština', flag: '🇨🇿', region: 'eu' },
+      { code: 'ro', name: 'Romanian', native: 'Română', flag: '🇷🇴', region: 'eu' },
+      { code: 'hu', name: 'Hungarian', native: 'Magyar', flag: '🇭🇺', region: 'eu' },
+      { code: 'sk', name: 'Slovak', native: 'Slovenčina', flag: '🇸🇰', region: 'eu' },
+      { code: 'bg', name: 'Bulgarian', native: 'Български', flag: '🇧🇬', region: 'eu' },
+      { code: 'hr', name: 'Croatian', native: 'Hrvatski', flag: '🇭🇷', region: 'eu' },
+      { code: 'lt', name: 'Lithuanian', native: 'Lietuvių', flag: '🇱🇹', region: 'eu' },
+      { code: 'lv', name: 'Latvian', native: 'Latviešu', flag: '🇱🇻', region: 'eu' },
+      { code: 'et', name: 'Estonian', native: 'Eesti', flag: '🇪🇪', region: 'eu' },
+      { code: 'sl', name: 'Slovenian', native: 'Slovenščina', flag: '🇸🇮', region: 'eu' },
+      { code: 'ca', name: 'Catalan', native: 'Català', flag: '🇦🇩', region: 'eu' }
+    ];
+
+    let runnerSelectedLocales = new Set(['es', 'fr', 'de', 'ja']);
+    let runnerCustomLocales = [];
+
+    function renderRunnerLanguages(filterQuery = '') {
+      const grid = document.getElementById('runnerLangGrid');
+      if (!grid) return;
+
+      const q = (filterQuery || '').toLowerCase().trim();
+      const allLangs = [...ALL_CATALOG_LANGUAGES, ...runnerCustomLocales];
+      
+      const filtered = allLangs.filter(l => {
+        if (!q) return true;
+        return l.code.toLowerCase().includes(q) || 
+               (l.name && l.name.toLowerCase().includes(q)) || 
+               (l.native && l.native.toLowerCase().includes(q));
+      });
+
+      if (filtered.length === 0) {
+        grid.innerHTML = '<div class="col-span-full py-4 text-center text-zinc-500 font-mono text-xs">No matching languages found. Type above and click "+ Add" to include custom locale.</div>';
+        return;
+      }
+
+      grid.innerHTML = filtered.map(function(l) {
+        var isChecked = runnerSelectedLocales.has(l.code);
+        var activeClass = isChecked ? 'bg-sky-950/20 border-sky-500/40 text-sky-200' : 'text-zinc-300';
+        var checkedAttr = isChecked ? 'checked' : '';
+        var flag = l.flag || '🌐';
+        var name = l.name || l.code;
+        var nativeText = l.native ? '• ' + l.native : '';
+
+        return '<label class="flex items-center justify-between p-2 rounded-lg field cursor-pointer hover:border-sky-500/50 transition-all ' + activeClass + '">' +
+          '<div class="flex items-center gap-2 truncate pr-1">' +
+            '<input type="checkbox" value="' + l.code + '" ' + checkedAttr + ' onchange="toggleRunnerLocale(\'' + l.code + '\', this.checked)" class="runner-loc-cb accent-sky-500 cursor-pointer">' +
+            '<span class="text-sm">' + flag + '</span>' +
+            '<div class="truncate leading-tight">' +
+              '<div class="font-medium text-xs truncate">' + name + '</div>' +
+              '<div class="text-[10px] text-zinc-500 font-mono">' + l.code + ' ' + nativeText + '</div>' +
+            '</div>' +
+          '</div>' +
+        '</label>';
+      }).join('');
+
+      updateSelectedCount();
+    }
+
+    function toggleRunnerLocale(code, checked) {
+      if (checked) {
+        runnerSelectedLocales.add(code);
+      } else {
+        runnerSelectedLocales.delete(code);
+      }
+      updateSelectedCount();
+      renderRunnerLanguages(document.getElementById('runnerLangSearch')?.value || '');
+    }
+
+    function updateSelectedCount() {
+      const el = document.getElementById('runnerSelectedCount');
+      if (el) el.innerText = runnerSelectedLocales.size;
+    }
+
+    function filterCatalogLanguages() {
+      const q = document.getElementById('runnerLangSearch')?.value || '';
+      renderRunnerLanguages(q);
+    }
+
+    function applyLangPreset(preset) {
+      if (preset === 'top5') {
+        runnerSelectedLocales = new Set(['es', 'fr', 'de', 'ja', 'zh-CN']);
+      } else if (preset === 'eu') {
+        runnerSelectedLocales = new Set(['es', 'fr', 'de', 'it', 'pt', 'nl', 'pl']);
+      } else if (preset === 'apac') {
+        runnerSelectedLocales = new Set(['ja', 'zh-CN', 'zh-TW', 'ko', 'vi', 'th', 'id', 'hi']);
+      } else if (preset === 'americas') {
+        runnerSelectedLocales = new Set(['es', 'pt-BR', 'fr', 'ca']);
+      } else if (preset === 'nordics') {
+        runnerSelectedLocales = new Set(['sv', 'da', 'fi', 'no']);
+      } else if (preset === 'all') {
+        runnerSelectedLocales = new Set([...ALL_CATALOG_LANGUAGES.map(l => l.code), ...runnerCustomLocales.map(l => l.code)]);
+      } else if (preset === 'clear') {
+        runnerSelectedLocales.clear();
+      }
+      renderRunnerLanguages(document.getElementById('runnerLangSearch')?.value || '');
+      showToast('Applied preset: ' + preset, 'info');
+    }
+
+    function addCustomTargetLanguage() {
+      const input = document.getElementById('runnerCustomLangInput');
+      if (!input) return;
+      const code = input.value.trim();
+      if (!code) return;
+
+      if (!/^[a-zA-Z]{2,3}(-[a-zA-Z0-9]{2,4})?$/.test(code)) {
+        showToast('Invalid BCP-47 code (e.g. pt-BR, fil, es-419)', 'error');
+        return;
+      }
+
+      if (!ALL_CATALOG_LANGUAGES.some(l => l.code.toLowerCase() === code.toLowerCase()) && 
+          !runnerCustomLocales.some(l => l.code.toLowerCase() === code.toLowerCase())) {
+        runnerCustomLocales.push({
+          code: code,
+          name: 'Custom (' + code + ')',
+          native: code,
+          flag: '🌐',
+          region: 'custom'
+        });
+      }
+
+      runnerSelectedLocales.add(code);
+      input.value = '';
+      renderRunnerLanguages('');
+      showToast('Added custom language: ' + code, 'success');
+    }
+
     // ---------- Pipeline Execution ----------
     async function executeLocalization() {
       switchScreen('runner');
-      const locales = Array.from(document.querySelectorAll('.runner-loc-cb:checked')).map(el => el.value);
+      const locales = Array.from(runnerSelectedLocales);
       const tone = document.getElementById('runnerToneSelector').value;
+      const directive = document.getElementById('runnerDirectiveInput')?.value?.trim() || '';
+      const customInstall = document.getElementById('settingsCustomInstallCmd')?.value?.trim() || '';
+      const customBuild = document.getElementById('settingsCustomBuildCmd')?.value?.trim() || '';
+      const existingMode = document.getElementById('runnerExistingModeSelector')?.value || 'skip';
 
       const btn = document.getElementById('runnerExecuteBtn');
       btn.disabled = true;
@@ -2364,7 +3052,11 @@ const InteractiveAppHTML = `<!DOCTYPE html>
           body: JSON.stringify({
             source_locale: 'en',
             target_locales: locales.length > 0 ? locales : ['es', 'fr', 'de', 'ja'],
-            tone_style: tone
+            tone_style: tone,
+            directive: directive,
+            custom_install_cmd: customInstall,
+            custom_build_cmd: customBuild,
+            existing_mode: existingMode
           })
         });
       } catch (err) {
@@ -2569,42 +3261,238 @@ const InteractiveAppHTML = `<!DOCTYPE html>
       try {
         const res = await fetch('/api/settings');
         const data = await res.json();
-        const keys = data.api_keys || {};
-        setBadge('badgeKeyAnthropic', keys.anthropic);
-        setBadge('badgeKeyOpenAI', keys.openai);
-        setBadge('badgeKeyGemini', keys.gemini);
-        setBadge('badgeKeyDeepL', keys.deepl);
+
+        if (data.active_provider) {
+          document.getElementById('settingsActiveProvider').value = data.active_provider;
+        }
+        if (data.style) {
+          document.getElementById('settingsToneStyle').value = data.style;
+        }
+
+        const badgeOllama = document.getElementById('badgeOllamaStatus');
+        const ollamaList = document.getElementById('ollamaModelsList');
+        const ollamaActive = document.getElementById('ollamaActiveModelBadge');
+        const ollamaSelect = document.getElementById('settingsOllamaModelSelect');
+
+        if (badgeOllama) {
+          if (data.ollama_running && data.ollama_models && data.ollama_models.length > 0) {
+            badgeOllama.className = "text-[10px] px-2 py-0.5 rounded font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20";
+            badgeOllama.innerText = "Online (" + data.ollama_models.length + " models)";
+            const activeM = data.active_model && data.active_provider === 'ollama' ? data.active_model : (data.best_ollama_model || 'auto');
+            if (ollamaActive) ollamaActive.innerText = activeM;
+            if (ollamaList) {
+              ollamaList.innerHTML = data.ollama_models.map(m => {
+                const sz = m.size ? (m.size / (1024*1024*1024)).toFixed(1) + ' GB' : '';
+                const param = m.parameter_size || '';
+                const isSel = m.name === activeM ? ' <span class="text-emerald-400 text-[10px]">[active]</span>' : '';
+                return '<div class="flex justify-between items-center py-0.5"><span class="text-zinc-200">' + m.name + isSel + '</span><span class="text-zinc-500 text-[10px]">' + (param ? param + ' · ' : '') + sz + '</span></div>';
+              }).join('');
+            }
+            if (ollamaSelect) {
+              ollamaSelect.innerHTML = '<option value="">Auto-Detect (' + (data.best_ollama_model || 'auto') + ')</option>' +
+                data.ollama_models.map(m => {
+                  const param = m.parameter_size ? ' (' + m.parameter_size + ')' : '';
+                  return '<option value="' + m.name + '">' + m.name + param + '</option>';
+                }).join('');
+              if (data.active_model && data.active_provider === 'ollama') {
+                ollamaSelect.value = data.active_model;
+              }
+            }
+          } else if (data.ollama_running) {
+            badgeOllama.className = "text-[10px] px-2 py-0.5 rounded font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20";
+            badgeOllama.innerText = "Online (No Models)";
+            if (ollamaList) ollamaList.innerHTML = '<div class="text-amber-400/80">No models found. Run: ollama pull gemma3:4b</div>';
+          } else {
+            badgeOllama.className = "text-[10px] px-2 py-0.5 rounded font-semibold bg-zinc-700/30 text-zinc-400 border border-zinc-700/40";
+            badgeOllama.innerText = "Offline (ollama serve)";
+            if (ollamaList) ollamaList.innerHTML = '<div class="text-zinc-500">Daemon not running at ' + (data.ollama_url || 'http://localhost:11434') + '</div>';
+          }
+        }
+
+        if (data.api_keys) {
+          if (data.api_keys.hf) document.getElementById('keyInputHF').placeholder = data.api_keys.hf;
+          if (data.api_keys.anthropic) document.getElementById('keyInputAnthropic').placeholder = data.api_keys.anthropic;
+          if (data.api_keys.openai) document.getElementById('keyInputOpenAI').placeholder = data.api_keys.openai;
+          if (data.api_keys.gemini) document.getElementById('keyInputGemini').placeholder = data.api_keys.gemini;
+          if (data.api_keys.deepl) document.getElementById('keyInputDeepL').placeholder = data.api_keys.deepl;
+          if (data.api_keys.custom_url) document.getElementById('keyInputCustomURL').value = data.api_keys.custom_url;
+        }
 
         if (data.exclude_files) document.getElementById('settingsExcludesInput').value = data.exclude_files.join(', ');
+        if (data.custom_install_cmd && document.getElementById('settingsCustomInstallCmd')) {
+          document.getElementById('settingsCustomInstallCmd').value = data.custom_install_cmd;
+        }
+        if (data.custom_build_cmd && document.getElementById('settingsCustomBuildCmd')) {
+          document.getElementById('settingsCustomBuildCmd').value = data.custom_build_cmd;
+        }
+        if (data.chunk_word_budget !== undefined && document.getElementById('settingsChunkWordBudget')) {
+          document.getElementById('settingsChunkWordBudget').value = data.chunk_word_budget || '';
+        }
+        if (data.chunk_key_ceiling !== undefined && document.getElementById('settingsChunkKeyCeiling')) {
+          document.getElementById('settingsChunkKeyCeiling').value = data.chunk_key_ceiling || '';
+        }
+        if (data.concurrency !== undefined && document.getElementById('settingsConcurrency')) {
+          document.getElementById('settingsConcurrency').value = data.concurrency || '';
+        }
+        if (data.existing_translations_mode) {
+          if (document.getElementById('settingsExistingTranslationsMode')) {
+            document.getElementById('settingsExistingTranslationsMode').value = data.existing_translations_mode;
+          }
+          if (document.getElementById('runnerExistingModeSelector')) {
+            document.getElementById('runnerExistingModeSelector').value = data.existing_translations_mode === 'replace' ? 'replace' : 'skip';
+          }
+        }
       } catch (err) {}
     }
 
-    function setBadge(id, active) {
-      const el = document.getElementById(id);
-      if (!el) return;
-      if (active) {
-        el.className = "text-[10px] px-2 py-0.5 rounded font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20";
-        el.innerText = "Configured ✓";
-      } else {
-        el.className = "text-[10px] px-2 py-0.5 rounded font-semibold bg-zinc-800 text-zinc-500";
-        el.innerText = "Not Set (Offline)";
+    function handleProviderChange() {
+      const prov = document.getElementById('settingsActiveProvider').value;
+      if (prov === 'ollama') {
+        showToast('Ollama selected (100% Offline GPU Engine)', 'info');
+      } else if (prov === 'nllb-cloud') {
+        showToast('Meta NLLB-200 Cloud selected (HF Serverless API)', 'info');
+      } else if (prov === 'claude') {
+        showToast('Anthropic Claude selected', 'info');
+      } else if (prov === 'openai') {
+        showToast('OpenAI selected', 'info');
+      } else if (prov === 'gemini') {
+        showToast('Google Gemini selected', 'info');
       }
     }
 
     async function saveProjectSettings() {
-      const brand = document.getElementById('settingsBrandInput').value;
+      const prov = document.getElementById('settingsActiveProvider').value;
+      const tone = document.getElementById('settingsToneStyle').value;
       const excludes = document.getElementById('settingsExcludesInput').value.split(',').map(s => s.trim()).filter(Boolean);
+      const customInstall = document.getElementById('settingsCustomInstallCmd')?.value?.trim() || '';
+      const customBuild = document.getElementById('settingsCustomBuildCmd')?.value?.trim() || '';
+      const existingMode = document.getElementById('settingsExistingTranslationsMode')?.value || 'skip';
+      const chunkWordBudget = parseInt(document.getElementById('settingsChunkWordBudget')?.value || '0', 10) || 0;
+      const chunkKeyCeiling = parseInt(document.getElementById('settingsChunkKeyCeiling')?.value || '0', 10) || 0;
+      const concurrency = parseInt(document.getElementById('settingsConcurrency')?.value || '0', 10) || 0;
+
+      const apiKeys = {};
+      const hf = document.getElementById('keyInputHF').value.trim();
+      const anthropic = document.getElementById('keyInputAnthropic').value.trim();
+      const openai = document.getElementById('keyInputOpenAI').value.trim();
+      const gemini = document.getElementById('keyInputGemini').value.trim();
+      const deepl = document.getElementById('keyInputDeepL').value.trim();
+      const customUrl = document.getElementById('keyInputCustomURL').value.trim();
+
+      if (hf) apiKeys['HF_TOKEN'] = hf;
+      if (anthropic) apiKeys['ANTHROPIC_API_KEY'] = anthropic;
+      if (openai) apiKeys['OPENAI_API_KEY'] = openai;
+      if (gemini) apiKeys['GEMINI_API_KEY'] = gemini;
+      if (deepl) apiKeys['DEEPL_API_KEY'] = deepl;
+      if (customUrl) apiKeys['OPENAI_BASE_URL'] = customUrl;
+
+      let modelName = "claude-sonnet-5";
+      if (prov === 'ollama') {
+        const selMod = document.getElementById('settingsOllamaModelSelect') ? document.getElementById('settingsOllamaModelSelect').value : '';
+        modelName = selMod || "auto-detect";
+      } else if (prov === 'nllb-cloud') modelName = "facebook/nllb-200-distilled-600M";
+      else if (prov === 'openai') modelName = "gpt-5.4-mini-2026-03-17";
+      else if (prov === 'gemini') modelName = "gemini-3.5-flash";
+      else if (prov === 'deepl') modelName = "deepl-v2";
+      else if (prov === 'custom') modelName = customUrl || "localhost:11434";
+      else if (prov === 'local') modelName = "Deterministic ICU Engine";
+
       try {
         await fetch('/api/settings/save', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
+            active_provider: prov,
+            active_model: modelName,
+            style: tone,
+            chunk_word_budget: chunkWordBudget,
+            chunk_key_ceiling: chunkKeyCeiling,
+            concurrency: concurrency,
+            custom_install_cmd: customInstall,
+            custom_build_cmd: customBuild,
+            existing_translations_mode: existingMode,
+            api_keys: apiKeys,
             exclude_files: excludes
           })
         });
-        showToast('Project preferences saved to .langpeanut.json', 'success');
+        showToast('Settings & Credentials saved successfully to config.json!', 'success');
+        loadSettings();
       } catch (err) {
-        showToast('Failed to save preferences', 'error');
+        showToast('Failed to save settings', 'error');
+      }
+    }
+
+    async function runModelConnectivityTest() {
+      const btn = document.getElementById('btnRunModelTest');
+      const box = document.getElementById('testProbeResultBox');
+      const badge = document.getElementById('badgeTestStatus');
+      const text = document.getElementById('testProbeInput').value.trim();
+      const target = document.getElementById('testProbeTargetLang').value;
+      const provider = document.getElementById('settingsActiveProvider').value;
+      let probeModel = "";
+      if (provider === 'ollama') {
+        const sel = document.getElementById('settingsOllamaModelSelect');
+        if (sel) probeModel = sel.value;
+      }
+
+      btn.disabled = true;
+      btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Probing...';
+      badge.textContent = 'Probing...';
+      badge.className = 'text-[10px] px-2 py-0.5 rounded font-mono bg-violet-900/60 text-violet-300 border border-violet-700';
+      box.classList.remove('hidden');
+      box.innerHTML = '<div class="text-zinc-400">Sending test translation request to ' + provider + (probeModel ? ' (' + probeModel + ')' : '') + '...</div>';
+
+      try {
+        const res = await fetch('/api/models/test', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            provider: provider,
+            model: probeModel,
+            target_lang: target,
+            sample_text: text
+          })
+        });
+        const data = await res.json();
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fa-solid fa-play"></i> Test Model';
+
+        if (data.success) {
+          badge.textContent = 'HEALTHY (' + data.latency_ms + 'ms)';
+          badge.className = 'text-[10px] px-2 py-0.5 rounded font-mono bg-emerald-900/60 text-emerald-300 border border-emerald-700';
+          const costStr = data.estimated_cost ? data.estimated_cost.toFixed(5) : '0.00';
+          box.innerHTML = '<div class="flex items-center justify-between text-emerald-400 font-bold mb-1">' +
+            '<span><i class="fa-solid fa-circle-check"></i> Probe Passed (200 OK)</span>' +
+            '<span class="font-mono text-zinc-400">' + data.latency_ms + ' ms</span>' +
+            '</div>' +
+            '<div class="text-zinc-300 mb-1"><strong>Output [' + data.target_lang + ']:</strong> <span class="text-sky-300 font-mono font-medium">' + (data.translated_text || '') + '</span></div>' +
+            '<div class="text-[11px] text-zinc-400 flex gap-4">' +
+            '<span>Tokens: ' + (data.input_tokens || 0) + ' in / ' + (data.output_tokens || 0) + ' out</span>' +
+            '<span>Est. Cost: $' + costStr + '</span>' +
+            '</div>';
+        } else {
+          badge.textContent = 'PROBE FAILED';
+          badge.className = 'text-[10px] px-2 py-0.5 rounded font-mono bg-red-900/60 text-red-300 border border-red-700';
+          let diagHTML = '';
+          if (data.diagnostic) {
+            let steps = '';
+            if (data.diagnostic.action_steps && data.diagnostic.action_steps.length > 0) {
+              steps = '<ul class="list-disc pl-4 text-zinc-300">' + data.diagnostic.action_steps.map(function(s) { return '<li>' + s + '</li>'; }).join('') + '</ul>';
+            }
+            diagHTML = '<div class="mt-2 p-2 rounded bg-red-950/40 border border-red-800/40 text-[11px] text-zinc-300 space-y-1">' +
+              '<div class="font-bold text-red-400">⚠️ ' + data.diagnostic.title + '</div>' +
+              '<div class="text-zinc-400">Cause: ' + data.diagnostic.root_cause + '</div>' +
+              steps +
+              '</div>';
+          }
+          box.innerHTML = '<div class="text-red-400 font-bold">❌ Error: ' + (data.error_message || 'Probe failed') + '</div>' + diagHTML;
+        }
+      } catch (err) {
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fa-solid fa-play"></i> Test Model';
+        badge.textContent = 'ERROR';
+        badge.className = 'text-[10px] px-2 py-0.5 rounded font-mono bg-red-900/60 text-red-300 border border-red-700';
+        box.innerHTML = '<div class="text-red-400 font-bold">❌ Connection Error: ' + err.message + '</div>';
       }
     }
 
@@ -2709,6 +3597,7 @@ const InteractiveAppHTML = `<!DOCTYPE html>
       if (screenId === 'simulator') updateSimLocale();
       if (screenId === 'diff') loadTuiDiff();
       if (screenId === 'critic') loadCritic();
+      if (screenId === 'runner') renderRunnerLanguages();
       if (screenId === 'checkpoints') loadCheckpoints();
       if (screenId === 'stats') loadStats();
       if (screenId === 'settings') loadSettings();

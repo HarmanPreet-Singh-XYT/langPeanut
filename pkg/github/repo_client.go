@@ -8,6 +8,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/langPeanut/langPeanut/pkg/memory"
 )
 
 // RepoClient drives git operations for one job against one cloned repo,
@@ -34,6 +36,9 @@ func CloneForJob(ctx context.Context, baseDir, owner, repo, installationToken st
 		os.RemoveAll(workDir)
 		return nil, fmt.Errorf("git clone failed: %w: %s", err, redactToken(string(out), installationToken))
 	}
+
+	// Ensure .langPeanut/ runtime cache and trajectories/ directories are ignored
+	_ = memory.EnsureGitignore(workDir)
 
 	return &RepoClient{WorkDir: workDir}, nil
 }

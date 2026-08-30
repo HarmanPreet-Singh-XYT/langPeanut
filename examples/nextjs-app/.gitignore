@@ -1,0 +1,7 @@
+
+# langPeanut localization runtime state & telemetry
+.langPeanut/
+.langpeanut/
+trajectories/
+.langPeanut-snapshots/
+.langpeanut.lock

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/langPeanut/langPeanut/pkg/llm"
+	"github.com/langPeanut/langPeanut/pkg/logger"
 	"github.com/langPeanut/langPeanut/pkg/platforms"
 	"github.com/langPeanut/langPeanut/pkg/types"
 )
@@ -68,13 +69,15 @@ func (cra *CodeRepairAgent) RepairFile(ctx context.Context, projectRoot, filePat
 		currentContent = healed
 	}
 
-	// If live LLM is available, perform AI-powered surgical code repair
+	// If live LLM is available, perform AI-powered surgical code repair with strict circuit breaker (max 2 attempts per file)
 	if cra.LLM != nil && cra.LLM.Name() != llm.ProviderLocal {
-		for attempt := 1; attempt <= 2; attempt++ {
+		const maxAttempts = 2
+		for attempt := 1; attempt <= maxAttempts; attempt++ {
 			result.Attempts = attempt
 
 			repairedCode, repairErr := cra.callLLMRepair(ctx, fullPath, currentContent, errors, framework)
 			if repairErr != nil {
+				logger.Get().Warn("CODE_REPAIR", fmt.Sprintf("Repair attempt %d/%d failed for %s: %v", attempt, maxAttempts, filepath.Base(filePath), repairErr))
 				continue
 			}
 
@@ -85,10 +88,10 @@ func (cra *CodeRepairAgent) RepairFile(ctx context.Context, projectRoot, filePat
 				remainingDiags, _ := platforms.RunDiagnostics(projectRoot, []string{filePath})
 				if len(remainingDiags) == 0 {
 					result.Repaired = true
-					result.Explanation = fmt.Sprintf("AI Code Repair Agent successfully healed %d compiler error(s)", len(errors))
+					result.Explanation = fmt.Sprintf("AI Code Repair Agent successfully healed %d compiler error(s) on attempt %d", len(errors), attempt)
 					return result, nil
 				}
-				// Update currentContent for second attempt if partial progress made
+				// Update currentContent for next attempt if partial progress made
 				currentContent = repairedCode
 				errors = remainingDiags
 			}
@@ -102,6 +105,8 @@ func (cra *CodeRepairAgent) RepairFile(ctx context.Context, projectRoot, filePat
 	} else {
 		result.RemainingErrors = finalDiags
 		result.Repaired = false
+		result.Explanation = fmt.Sprintf("Cost circuit breaker triggered: Ceased repair after %d attempts (%d diagnostic(s) flagged for human review)", result.Attempts, len(finalDiags))
+		logger.Get().Warn("CODE_REPAIR", fmt.Sprintf("Ceased repair after %d attempts for %s to prevent cost spikes (%d error(s) flagged for developer)", result.Attempts, filepath.Base(filePath), len(finalDiags)))
 	}
 
 	return result, nil
@@ -192,6 +197,22 @@ func tryHeuristicRepair(content string, errors []types.CompilerDiagnostic, frame
 				} else {
 					result = importStmt + result
 				}
+				modified = true
+			}
+		}
+
+		// 3. Next.js App Router RSC createContext / "use client" error
+		// Detects: "createContext only works in Client Components. Add the "use client" directive at the top of the file to use it"
+		if (framework == types.FrameworkReact || framework == types.FrameworkNextJS) &&
+			(strings.Contains(msg, "createcontext only works in client components") ||
+				strings.Contains(msg, "add the \"use client\" directive") ||
+				strings.Contains(msg, "add the 'use client' directive") ||
+				strings.Contains(msg, "context-in-server-component") ||
+				strings.Contains(msg, "you're importing a component that needs usestate") ||
+				strings.Contains(msg, "client components")) {
+			repaired := EnsureUseClientDirective(result)
+			if repaired != result {
+				result = repaired
 				modified = true
 			}
 		}

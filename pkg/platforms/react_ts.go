@@ -3,6 +3,7 @@ package platforms
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -64,11 +65,89 @@ func (p *ReactPlatform) DefaultLocaleDir(projectRoot string) string {
 	if DirExists(projectRoot, "locales") {
 		return "locales"
 	}
-	return "src/locales"
+	if DirExists(projectRoot, "src") {
+		return "src/locales"
+	}
+	return "locales"
 }
 
 func (p *ReactPlatform) DefaultSourceFile(projectRoot string, sourceLocale string) string {
-	return filepath.Join(p.DefaultLocaleDir(projectRoot), sourceLocale+".json")
+	dir := p.DefaultLocaleDir(projectRoot)
+	// i18next convention: public/locales/{lang}/common.json (a per-locale
+	// subdirectory holding one or more namespace files) rather than a single
+	// flat {lang}.json. Detect it from whatever locale dirs already exist.
+	if ns := i18nextNamespaceFile(projectRoot, dir); ns != "" {
+		return filepath.Join(dir, sourceLocale, ns)
+	}
+	return filepath.Join(dir, sourceLocale+".json")
+}
+
+// i18nextNamespaceFile inspects an existing locale directory to see whether it
+// already follows the i18next "{localeDir}/{lang}/{namespace}.json" layout,
+// returning the namespace filename in use (e.g. "common.json") if so, or ""
+// if the project uses flat "{localeDir}/{lang}.json" files (or has no locale
+// files yet, in which case flat files are the default for a new project).
+func i18nextNamespaceFile(projectRoot, localeDir string) string {
+	absDir := localeDir
+	if !filepath.IsAbs(absDir) {
+		absDir = filepath.Join(projectRoot, localeDir)
+	}
+	entries, err := os.ReadDir(absDir)
+	if err != nil {
+		return ""
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		sub, err := os.ReadDir(filepath.Join(absDir, e.Name()))
+		if err != nil {
+			continue
+		}
+		for _, f := range sub {
+			if !f.IsDir() && strings.HasSuffix(f.Name(), ".json") {
+				return f.Name()
+			}
+		}
+	}
+	return ""
+}
+
+// DiscoverExistingLocales scans the locale directory for already-translated
+// locales in either the flat "{lang}.json" layout or the i18next
+// "{lang}/{namespace}.json" subdirectory layout.
+func (p *ReactPlatform) DiscoverExistingLocales(projectRoot string) (map[string]string, error) {
+	rawDir := p.DefaultLocaleDir(projectRoot)
+	dir := rawDir
+	if !filepath.IsAbs(dir) {
+		dir = filepath.Join(projectRoot, rawDir)
+	}
+
+	found := make(map[string]string)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return found, nil
+	}
+
+	for _, e := range entries {
+		if e.IsDir() {
+			// {lang}/{namespace}.json layout
+			sub, err := os.ReadDir(filepath.Join(dir, e.Name()))
+			if err != nil {
+				continue
+			}
+			for _, f := range sub {
+				if !f.IsDir() && strings.HasSuffix(f.Name(), ".json") {
+					found[e.Name()] = filepath.Join(dir, e.Name(), f.Name())
+					break
+				}
+			}
+		} else if strings.HasSuffix(e.Name(), ".json") {
+			locale := strings.TrimSuffix(e.Name(), ".json")
+			found[locale] = filepath.Join(dir, e.Name())
+		}
+	}
+	return found, nil
 }
 
 var (
@@ -140,9 +219,10 @@ func (p *ReactPlatform) ExtractCandidates(filePath string, content []byte) ([]ty
 	lines := strings.Split(string(content), "\n")
 
 	ex := &reactExtractor{
-		filePath: filePath,
-		src:      src,
-		lines:    lines,
+		filePath:   filePath,
+		src:        src,
+		lines:      lines,
+		seenRanges: make(map[string]bool),
 	}
 	ex.walk(root)
 	return ex.candidates, nil
@@ -153,6 +233,16 @@ type reactExtractor struct {
 	src        []byte
 	lines      []string
 	candidates []types.StringCandidate
+	seenRanges map[string]bool
+}
+
+func (ex *reactExtractor) addCandidate(c types.StringCandidate) {
+	rangeKey := fmt.Sprintf("%d:%d", c.StartByte, c.EndByte)
+	if ex.seenRanges[rangeKey] {
+		return
+	}
+	ex.seenRanges[rangeKey] = true
+	ex.candidates = append(ex.candidates, c)
 }
 
 func (ex *reactExtractor) walk(n *sitter.Node) {
@@ -166,22 +256,50 @@ func (ex *reactExtractor) walk(n *sitter.Node) {
 	case "jsx_attribute":
 		ex.extractJSXAttribute(n)
 	case "template_string":
-		if ex.isInsideJSX(n) && !ex.isInsideSkippedCall(n) && !ex.isInsideJSXAttribute(n) {
+		if (ex.isInsideJSX(n) || ex.isInsideComponent(n)) && !ex.isInsideSkippedCall(n) && !ex.isInsideJSXAttribute(n) {
 			ex.extractTemplateString(n)
 		}
 	case "string":
-		if ex.isInsideJSXExpression(n) && !ex.isInsideSkippedCall(n) && !ex.isInsideJSXAttribute(n) {
+		if ex.isInsideJSXExpression(n) && !ex.isInsideSkippedCall(n) && !ex.isInsideJSXAttribute(n) && !ex.isInsideObjectPair(n) && !ex.isInsideCallArgs(n) {
 			ex.extractJSXExpressionString(n)
 		}
 	case "pair":
-		ex.extractObjectPair(n)
+		if (ex.isInsideJSX(n) || ex.isInsideComponent(n)) && !ex.isInsideSkippedCall(n) {
+			ex.extractObjectPair(n)
+		}
 	case "call_expression":
-		ex.extractUICall(n)
+		if (ex.isInsideJSX(n) || ex.isInsideComponent(n)) && !ex.isInsideSkippedCall(n) {
+			ex.extractUICall(n)
+		}
 	}
 
 	for i := uint(0); i < n.NamedChildCount(); i++ {
 		ex.walk(n.NamedChild(i))
 	}
+}
+
+func (ex *reactExtractor) isInsideObjectPair(n *sitter.Node) bool {
+	p := n.Parent()
+	return p != nil && p.Kind() == "pair"
+}
+
+func (ex *reactExtractor) isInsideCallArgs(n *sitter.Node) bool {
+	p := n.Parent()
+	return p != nil && p.Kind() == "arguments"
+}
+
+func (ex *reactExtractor) isInsideComponent(n *sitter.Node) bool {
+	p := n.Parent()
+	for p != nil {
+		if p.Kind() == "function_declaration" || p.Kind() == "arrow_function" || p.Kind() == "function_expression" {
+			body := p.ChildByFieldName("body")
+			if body != nil && hasJSX(body) {
+				return true
+			}
+		}
+		p = p.Parent()
+	}
+	return false
 }
 
 func (ex *reactExtractor) isInsideJSX(n *sitter.Node) bool {
@@ -314,7 +432,7 @@ func (ex *reactExtractor) emitJSXRun(res jsxRunResult) {
 		confidence = 0.93
 	}
 
-	ex.candidates = append(ex.candidates, types.StringCandidate{
+	ex.addCandidate(types.StringCandidate{
 		ID:             fmt.Sprintf("%s:%d:%d", filepath.Base(ex.filePath), startLine, startCol),
 		FilePath:       ex.filePath,
 		StartByte:      res.rawStart,
@@ -366,7 +484,7 @@ func (ex *reactExtractor) extractJSXAttribute(n *sitter.Node) {
 	startLine, startCol := getLineAndCol(ex.src, startByte)
 	endLine, endCol := getLineAndCol(ex.src, endByte)
 
-	ex.candidates = append(ex.candidates, types.StringCandidate{
+	ex.addCandidate(types.StringCandidate{
 		ID:             fmt.Sprintf("%s:%d:%d", filepath.Base(ex.filePath), startLine, startCol),
 		FilePath:       ex.filePath,
 		StartByte:      startByte,
@@ -418,7 +536,7 @@ func (ex *reactExtractor) extractTemplateString(n *sitter.Node) {
 	startLine, startCol := getLineAndCol(ex.src, startByte)
 	endLine, endCol := getLineAndCol(ex.src, endByte)
 
-	ex.candidates = append(ex.candidates, types.StringCandidate{
+	ex.addCandidate(types.StringCandidate{
 		ID:             fmt.Sprintf("%s:%d:%d", filepath.Base(ex.filePath), startLine, startCol),
 		FilePath:       ex.filePath,
 		StartByte:      startByte,
@@ -491,7 +609,7 @@ func (ex *reactExtractor) extractJSXExpressionString(n *sitter.Node) {
 		parentKind = "TernaryBranch"
 	}
 
-	ex.candidates = append(ex.candidates, types.StringCandidate{
+	ex.addCandidate(types.StringCandidate{
 		ID:             fmt.Sprintf("%s:%d:%d", filepath.Base(ex.filePath), startLine, startCol),
 		FilePath:       ex.filePath,
 		StartByte:      startByte,
@@ -540,7 +658,7 @@ func (ex *reactExtractor) extractObjectPair(n *sitter.Node) {
 	startLine, startCol := getLineAndCol(ex.src, startByte)
 	endLine, endCol := getLineAndCol(ex.src, endByte)
 
-	ex.candidates = append(ex.candidates, types.StringCandidate{
+	ex.addCandidate(types.StringCandidate{
 		ID:             fmt.Sprintf("%s:%d:%d", filepath.Base(ex.filePath), startLine, startCol),
 		FilePath:       ex.filePath,
 		StartByte:      startByte,
@@ -594,7 +712,7 @@ func (ex *reactExtractor) extractUICall(n *sitter.Node) {
 	startLine, startCol := getLineAndCol(ex.src, startByte)
 	endLine, endCol := getLineAndCol(ex.src, endByte)
 
-	ex.candidates = append(ex.candidates, types.StringCandidate{
+	ex.addCandidate(types.StringCandidate{
 		ID:             fmt.Sprintf("%s:%d:%d", filepath.Base(ex.filePath), startLine, startCol),
 		FilePath:       ex.filePath,
 		StartByte:      startByte,
@@ -703,6 +821,9 @@ func (p *ReactPlatform) GenerateRefactorPlan(filePath string, content []byte, ca
 }
 
 func injectComponentHooks(content []byte, patches []types.ByteRangePatch) []types.ByteRangePatch {
+	if len(patches) == 0 {
+		return patches
+	}
 	srcStr := string(content)
 	if strings.Contains(srcStr, "useTranslation()") || strings.Contains(srcStr, "useTranslation(") {
 		return patches
@@ -717,44 +838,91 @@ func injectComponentHooks(content []byte, patches []types.ByteRangePatch) []type
 	defer tree.Close()
 
 	root := tree.RootNode()
-	var hookPatch *types.ByteRangePatch
+	injectedPositions := make(map[int]bool)
 
-	var findComponent func(n *sitter.Node)
-	findComponent = func(n *sitter.Node) {
-		if n == nil || hookPatch != nil {
-			return
-		}
-
-		if n.Kind() == "function_declaration" || n.Kind() == "arrow_function" || n.Kind() == "function_expression" {
-			body := n.ChildByFieldName("body")
+	for _, pt := range patches {
+		targetNode := findEnclosingComponent(root, uint(pt.StartByte), uint(pt.EndByte), content)
+		if targetNode != nil {
+			body := targetNode.ChildByFieldName("body")
 			if body != nil && body.Kind() == "statement_block" {
-				if hasJSX(body) {
-					openBrace := body.Child(0)
-					if openBrace != nil && openBrace.Utf8Text(content) == "{" {
-						insertPos := int(openBrace.EndByte())
-						hookPatch = &types.ByteRangePatch{
+				openBrace := body.Child(0)
+				if openBrace != nil && openBrace.Utf8Text(content) == "{" {
+					insertPos := int(openBrace.EndByte())
+					if !injectedPositions[insertPos] {
+						injectedPositions[insertPos] = true
+						patches = append(patches, types.ByteRangePatch{
 							StartByte:       insertPos,
 							EndByte:         insertPos,
 							ReplacementText: "\n  const { t } = useTranslation();",
-							Description:     "Inject useTranslation hook",
-						}
-						return
+							Description:     "Inject useTranslation hook into component",
+						})
 					}
 				}
 			}
 		}
+	}
 
-		for i := uint(0); i < n.NamedChildCount(); i++ {
-			findComponent(n.NamedChild(i))
+	// Fallback: If no enclosing component was identified, inject into the first component with JSX
+	if len(injectedPositions) == 0 {
+		var firstComp *sitter.Node
+		var findFirst func(n *sitter.Node)
+		findFirst = func(n *sitter.Node) {
+			if n == nil || firstComp != nil {
+				return
+			}
+			if n.Kind() == "function_declaration" || n.Kind() == "arrow_function" || n.Kind() == "function_expression" {
+				body := n.ChildByFieldName("body")
+				if body != nil && body.Kind() == "statement_block" && hasJSX(body) {
+					firstComp = n
+					return
+				}
+			}
+			for i := uint(0); i < n.NamedChildCount(); i++ {
+				findFirst(n.NamedChild(i))
+			}
+		}
+		findFirst(root)
+		if firstComp != nil {
+			body := firstComp.ChildByFieldName("body")
+			if body != nil {
+				openBrace := body.Child(0)
+				if openBrace != nil && openBrace.Utf8Text(content) == "{" {
+					insertPos := int(openBrace.EndByte())
+					patches = append(patches, types.ByteRangePatch{
+						StartByte:       insertPos,
+						EndByte:         insertPos,
+						ReplacementText: "\n  const { t } = useTranslation();",
+						Description:     "Inject useTranslation hook into first component",
+					})
+				}
+			}
 		}
 	}
 
-	findComponent(root)
-	if hookPatch != nil {
-		patches = append(patches, *hookPatch)
-	}
-
 	return patches
+}
+
+func findEnclosingComponent(root *sitter.Node, startByte, endByte uint, content []byte) *sitter.Node {
+	var enclosing *sitter.Node
+	var walk func(n *sitter.Node)
+	walk = func(n *sitter.Node) {
+		if n == nil {
+			return
+		}
+		if n.StartByte() <= startByte && n.EndByte() >= endByte {
+			if n.Kind() == "function_declaration" || n.Kind() == "arrow_function" || n.Kind() == "function_expression" {
+				body := n.ChildByFieldName("body")
+				if body != nil && body.Kind() == "statement_block" && hasJSX(body) {
+					enclosing = n
+				}
+			}
+			for i := uint(0); i < n.NamedChildCount(); i++ {
+				walk(n.NamedChild(i))
+			}
+		}
+	}
+	walk(root)
+	return enclosing
 }
 
 func hasJSX(n *sitter.Node) bool {
@@ -785,6 +953,12 @@ func (p *ReactPlatform) ParseLocaleFile(raw []byte, format string) (*types.Local
 		Format:  "json_i18next",
 		Entries: entries,
 	}, nil
+}
+
+// ParseLocaleFileForLocale is equivalent to ParseLocaleFile, since each
+// locale already lives in its own JSON file (flat or i18next-namespaced).
+func (p *ReactPlatform) ParseLocaleFileForLocale(raw []byte, locale string) (*types.LocaleData, error) {
+	return p.ParseLocaleFile(raw, "")
 }
 
 // Helpers
@@ -906,3 +1080,12 @@ func formatTSXVars(vars []string) string {
 	}
 	return fmt.Sprintf("{ %s }", strings.Join(pairs, ", "))
 }
+
+func (p *ReactPlatform) CheckDependencies(projectRoot string) (*types.DependencyStatus, error) {
+	return ReactCheckDependencies(projectRoot)
+}
+
+func (p *ReactPlatform) EnsureDependencies(projectRoot string, autoInstall bool) (*types.DependencyStatus, error) {
+	return ReactEnsureDependencies(projectRoot, autoInstall)
+}
+

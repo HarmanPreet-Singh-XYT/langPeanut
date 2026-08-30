@@ -254,7 +254,10 @@ func estimateCost(model string, inputTokens, outputTokens int64) float64 {
 
 	m := strings.ToLower(model)
 	switch {
-	case strings.Contains(m, "gpt-5.4-mini") || strings.Contains(m, "gpt-4o-mini"):
+	case strings.Contains(m, "gpt-5.4-mini"):
+		inputCostPerMillion = 0.75
+		outputCostPerMillion = 4.50
+	case strings.Contains(m, "gpt-4o-mini"):
 		inputCostPerMillion = 0.15
 		outputCostPerMillion = 0.60
 	case strings.Contains(m, "gpt-4o"):
@@ -263,12 +266,18 @@ func estimateCost(model string, inputTokens, outputTokens int64) float64 {
 	case strings.Contains(m, "gpt-4.5") || strings.Contains(m, "o1"):
 		inputCostPerMillion = 15.00
 		outputCostPerMillion = 60.00
+	case strings.Contains(m, "claude-sonnet-5") || strings.Contains(m, "claude-5-sonnet") || strings.Contains(m, "sonnet-5"):
+		inputCostPerMillion = 2.00
+		outputCostPerMillion = 10.00
 	case strings.Contains(m, "claude-3-7-sonnet") || strings.Contains(m, "claude-3-5-sonnet"):
 		inputCostPerMillion = 3.00
 		outputCostPerMillion = 15.00
 	case strings.Contains(m, "claude-3-5-haiku"):
 		inputCostPerMillion = 0.80
 		outputCostPerMillion = 4.00
+	case strings.Contains(m, "gemini-3.5-flash"):
+		inputCostPerMillion = 1.50
+		outputCostPerMillion = 9.00
 	case strings.Contains(m, "gemini-2.5-flash") || strings.Contains(m, "gemini-1.5-flash"):
 		inputCostPerMillion = 0.075
 		outputCostPerMillion = 0.30

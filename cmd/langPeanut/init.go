@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
+	"github.com/langPeanut/langPeanut/pkg/memory"
 	"github.com/langPeanut/langPeanut/pkg/platforms"
 	"github.com/spf13/cobra"
 )
@@ -55,7 +55,8 @@ strict_dedup: true
 		fmt.Printf("✓ Scaffolded locale directory: %s\n", platform.DefaultLocaleDir(absRoot))
 
 		// Ensure .gitignore ignores CLI runtime cache
-		ensureGitignore(absRoot)
+		_ = memory.EnsureGitignore(absRoot)
+		fmt.Println("✓ Verified .gitignore for .langPeanut/ and trajectories/")
 		fmt.Println()
 
 		fmt.Println("Ready! Next steps:")
@@ -65,34 +66,6 @@ strict_dedup: true
 		fmt.Println("  langPeanut translate   → auto-translate to target locales")
 		return nil
 	},
-}
-
-func ensureGitignore(projectRoot string) {
-	gitignorePath := filepath.Join(projectRoot, ".gitignore")
-	var content string
-	if data, err := os.ReadFile(gitignorePath); err == nil {
-		content = string(data)
-	}
-
-	entriesToAdd := []string{".langPeanut/", ".langpeanut/"}
-	var toAppend []string
-	for _, entry := range entriesToAdd {
-		if !strings.Contains(content, entry) {
-			toAppend = append(toAppend, entry)
-		}
-	}
-
-	if len(toAppend) > 0 {
-		var newContent string
-		if content != "" && !strings.HasSuffix(content, "\n") {
-			newContent = content + "\n"
-		} else {
-			newContent = content
-		}
-		newContent += "\n# langPeanut CLI Runtime State\n" + strings.Join(toAppend, "\n") + "\n"
-		_ = os.WriteFile(gitignorePath, []byte(newContent), 0644)
-		fmt.Printf("✓ Added %s to .gitignore\n", strings.Join(toAppend, ", "))
-	}
 }
 
 func init() {
