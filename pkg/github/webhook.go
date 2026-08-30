@@ -105,33 +105,43 @@ type IssueCommentEvent struct {
 
 // BotCommand represents a parsed @langpeanut interactive command in PR comments
 type BotCommand struct {
-	Action     string   `json:"action"` // "translate", "audit", "review", "help"
+	Action     string   `json:"action"` // "translate", "audit", "review", "prune", "doctor", "directive", "help"
 	Locales    []string `json:"locales,omitempty"`
 	Tone       string   `json:"tone,omitempty"`
 	Provider   string   `json:"provider,omitempty"`
+	Directive  string   `json:"directive,omitempty"`
 	RawCommand string   `json:"raw_command"`
 }
 
-// ParseBotCommand inspects a comment body for @langpeanut or /langpeanut commands
+// ParseBotCommand inspects a comment body for @langpeanut or /langpeanut commands or natural language directives
 func ParseBotCommand(body string) (*BotCommand, bool) {
 	lines := strings.Split(body, "\n")
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		if !strings.HasPrefix(trimmed, "@langpeanut") && !strings.HasPrefix(trimmed, "/langpeanut") && !strings.HasPrefix(trimmed, "@langPeanut") {
+		var prefix string
+		if strings.HasPrefix(strings.ToLower(trimmed), "@langpeanut") {
+			prefix = "@langpeanut"
+		} else if strings.HasPrefix(strings.ToLower(trimmed), "/langpeanut") {
+			prefix = "/langpeanut"
+		} else {
 			continue
 		}
 
-		parts := strings.Fields(trimmed)
-		if len(parts) < 2 {
+		cleanInstruction := strings.TrimSpace(trimmed[len(prefix):])
+		if cleanInstruction == "" {
 			return &BotCommand{Action: "translate", RawCommand: trimmed}, true
 		}
 
+		parts := strings.Fields(trimmed)
+		firstWord := strings.ToLower(parts[1])
+
 		cmd := &BotCommand{
-			Action:     strings.ToLower(parts[1]),
+			Action:     firstWord,
+			Directive:  cleanInstruction,
 			RawCommand: trimmed,
 		}
 
-		// Parse flags: --locales/-l es,ja --tone/-t formal --provider/-p claude
+		// 1. Structured CLI flag parsing: --locales/-l es,ja --tone/-t formal --provider/-p claude
 		for i := 2; i < len(parts); i++ {
 			p := parts[i]
 			if (p == "--locales" || p == "-l") && i+1 < len(parts) {
@@ -148,6 +158,32 @@ func ParseBotCommand(body string) (*BotCommand, bool) {
 			} else if (p == "--provider" || p == "-p") && i+1 < len(parts) {
 				cmd.Provider = strings.TrimSpace(parts[i+1])
 				i++
+			}
+		}
+
+		// 2. Natural Language Conversational Extraction:
+		lowerInstr := strings.ToLower(cleanInstruction)
+		if cmd.Tone == "" {
+			if strings.Contains(lowerInstr, "casual") || strings.Contains(lowerInstr, "friendly") {
+				cmd.Tone = "casual"
+			} else if strings.Contains(lowerInstr, "formal") || strings.Contains(lowerInstr, "corporate") {
+				cmd.Tone = "corporate"
+			} else if strings.Contains(lowerInstr, "pirate") {
+				cmd.Tone = "pirate"
+			} else if strings.Contains(lowerInstr, "genz") || strings.Contains(lowerInstr, "gen-z") {
+				cmd.Tone = "genz"
+			}
+		}
+
+		if len(cmd.Locales) == 0 {
+			langMap := map[string]string{
+				"spanish": "es", "french": "fr", "german": "de", "japanese": "ja",
+				"italian": "it", "portuguese": "pt", "chinese": "zh", "korean": "ko",
+			}
+			for name, code := range langMap {
+				if strings.Contains(lowerInstr, name) {
+					cmd.Locales = append(cmd.Locales, code)
+				}
 			}
 		}
 
