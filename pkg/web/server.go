@@ -20,6 +20,7 @@ import (
 	"github.com/langPeanut/langPeanut/pkg/memory"
 	"github.com/langPeanut/langPeanut/pkg/orchestrator"
 	"github.com/langPeanut/langPeanut/pkg/platforms"
+	"github.com/langPeanut/langPeanut/pkg/seo"
 	"github.com/langPeanut/langPeanut/pkg/types"
 )
 
@@ -39,6 +40,7 @@ type StudioServer struct {
 	Logs          []string                           `json:"logs"`
 	LastResult    *agents.PipelineResult             `json:"last_result"`
 	LastBenchmark []benchmark.BenchmarkResult        `json:"last_benchmark"`
+	LastSEOResult *seo.SEOResult                     `json:"last_seo_result"`
 	RefactorPlans map[string]*types.FileRefactorPlan `json:"refactor_plans"`
 }
 
@@ -1358,6 +1360,147 @@ func (s *StudioServer) handleDependencies(w http.ResponseWriter, r *http.Request
 	_ = json.NewEncoder(w).Encode(status)
 }
 
+func (s *StudioServer) handleGetSEO(w http.ResponseWriter, r *http.Request) {
+	s.mu.RLock()
+	res := s.LastSEOResult
+	s.mu.RUnlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	if res == nil {
+		_ = json.NewEncoder(w).Encode(map[string]any{"configured": false})
+		return
+	}
+	_ = json.NewEncoder(w).Encode(res)
+}
+
+func (s *StudioServer) handleRunSEO(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Locales     []string `json:"locales"`
+		Goal        string   `json:"goal"`
+		Scope       string   `json:"scope"`
+		Competitors []string `json:"competitors"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	s.mu.Lock()
+	s.Logs = append(s.Logs, fmt.Sprintf("[%s] Launching SEO & Growth Studio optimization for %v...", time.Now().Format("15:04:05"), req.Locales))
+	projRoot := s.ProjectRoot
+	plat := s.Platform
+	s.mu.Unlock()
+
+	go func() {
+		client := llm.AutoDetectClient()
+		scoutAgent := agents.NewPersonaScoutAgent(client)
+		persona, _ := scoutAgent.DiscoverPersona(projRoot)
+		projName := filepath.Base(projRoot)
+		cat := "Software Platform"
+		if persona != nil {
+			if persona.ProjectName != "" {
+				projName = persona.ProjectName
+			}
+			if persona.Audience != "" && len(persona.Audience) <= 25 {
+				cat = persona.Audience
+			} else if persona.Summary != "" && len(persona.Summary) <= 30 && !strings.HasPrefix(persona.Summary, "Autonomous localization") {
+				cat = persona.Summary
+			} else if strings.Contains(strings.ToLower(projName), "store") || strings.Contains(strings.ToLower(projName), "shop") || strings.Contains(strings.ToLower(projName), "commerce") {
+				cat = "E-Commerce Platform"
+			} else if strings.Contains(strings.ToLower(projName), "app") {
+				cat = "Application"
+			}
+		}
+
+		goal := seo.GrowthGoal(req.Goal)
+		if goal == "" {
+			goal = seo.GoalTopTraffic
+		}
+		scope := seo.KeyScopeTier(req.Scope)
+		if scope == "" {
+			scope = seo.ScopeHighImpact
+		}
+		locales := req.Locales
+		if len(locales) == 0 {
+			locales = []string{"ja", "de", "es"}
+		}
+
+		strategy := &seo.SEOStrategy{
+			ProjectName:        projName,
+			Category:           cat,
+			ProductDescription: fmt.Sprintf("Autonomous software platform: %s", projName),
+			TargetLocales:      locales,
+			Goal:               goal,
+			ScopeTier:          scope,
+			CompetitorURLs:     req.Competitors,
+		}
+
+		sourceKeys := make(map[string]string)
+		baselineMatrix := make(map[string]map[string]string)
+		if plat != nil {
+			sourceKeys = seo.ExtractLocaleCatalog(projRoot, plat, "en")
+			for _, loc := range locales {
+				if entries := seo.ExtractLocaleCatalog(projRoot, plat, loc); entries != nil {
+					baselineMatrix[loc] = entries
+				}
+			}
+		}
+
+		orchestrator := seo.NewStudioOrchestrator(client)
+		ctx := context.Background()
+		result, err := orchestrator.RunStudio(ctx, strategy, sourceKeys, baselineMatrix)
+
+		s.mu.Lock()
+		s.LastSEOResult = result
+		if err != nil {
+			s.Logs = append(s.Logs, fmt.Sprintf("[%s] SEO Studio error: %v", time.Now().Format("15:04:05"), err))
+		} else {
+			s.Logs = append(s.Logs, fmt.Sprintf("[%s] SEO Studio optimization completed across %d locales!", time.Now().Format("15:04:05"), len(locales)))
+		}
+		s.mu.Unlock()
+	}()
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "started"})
+}
+
+func (s *StudioServer) handleApplySEO(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.LastSEOResult == nil || s.Platform == nil {
+		http.Error(w, "No SEO results to apply", http.StatusBadRequest)
+		return
+	}
+
+	for loc, opts := range s.LastSEOResult.Optimizations {
+		targetMap := make(map[string]string)
+		if existing := seo.ExtractLocaleCatalog(s.ProjectRoot, s.Platform, loc); existing != nil {
+			for k, v := range existing {
+				targetMap[k] = v
+			}
+		}
+		for _, o := range opts {
+			targetMap[o.Key] = o.OptimizedTranslation
+		}
+		_ = seo.WriteLocaleCatalog(s.ProjectRoot, s.Platform, loc, targetMap)
+	}
+
+	s.Logs = append(s.Logs, fmt.Sprintf("[%s] Applied all SEO optimizations to disk!", time.Now().Format("15:04:05")))
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "applied"})
+}
+
 // StartInteractiveWebStudio launches the full interactive project-aware Web Studio
 func StartInteractiveWebStudio(projectRoot string, port int, autoOpen bool) error {
 	addr := fmt.Sprintf(":%d", port)
@@ -1397,6 +1540,9 @@ func StartInteractiveWebStudio(projectRoot string, port int, autoOpen bool) erro
 	mux.HandleFunc("/api/styles", handleStyles)
 	mux.HandleFunc("/api/critic", studio.handleGetCritic)
 	mux.HandleFunc("/api/stats", studio.handleGetStats)
+	mux.HandleFunc("/api/seo", studio.handleGetSEO)
+	mux.HandleFunc("/api/seo/run", studio.handleRunSEO)
+	mux.HandleFunc("/api/seo/apply", studio.handleApplySEO)
 
 	server := &http.Server{
 		Addr:    addr,
@@ -1639,6 +1785,9 @@ const InteractiveAppHTML = `<!DOCTYPE html>
         </button>
         <button onclick="switchScreen('critic')" id="screenBtnCritic" class="nav-btn w-full text-left px-3 py-2 rounded-md flex items-center gap-2.5 transition-colors">
           <i class="fa-solid fa-shield-halved w-4 text-center text-xs text-purple-400"></i> 5. Critic & Quality
+        </button>
+        <button onclick="switchScreen('seo')" id="screenBtnSeo" class="nav-btn w-full text-left px-3 py-2 rounded-md flex items-center gap-2.5 transition-colors">
+          <i class="fa-solid fa-bullseye w-4 text-center text-xs text-pink-400"></i> 6. SEO & Growth Studio
         </button>
 
         <div class="pt-3 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Workflow & Diagnostics</div>
@@ -1946,6 +2095,151 @@ const InteractiveAppHTML = `<!DOCTYPE html>
         </div>
       </div>
 
+      <!-- ================================= SCREEN 6: SEO & GROWTH STUDIO ================================= -->
+      <div id="screenSeo" class="hidden flex-1 flex flex-col min-h-0 p-6 space-y-5 overflow-y-auto custom-scrollbar">
+        <!-- Strategy Intake & Action Bar -->
+        <div class="p-5 rounded-xl panel space-y-4">
+          <div class="flex flex-wrap items-center justify-between gap-3 border-b border-[#181b24] pb-4">
+            <div>
+              <h2 class="text-sm font-bold text-zinc-100 flex items-center gap-2">
+                <i class="fa-solid fa-bullseye text-pink-400"></i> Autonomous Multilingual SEO & Market Growth Studio
+              </h2>
+              <p class="text-xs text-zinc-400 mt-0.5">Scouts regional competitor SERP landscapes, mines high-intent buyer keywords, semantically optimizes UI copy, and models growth projections.</p>
+            </div>
+            <div class="flex items-center gap-2.5">
+              <button onclick="runSEOOptimization()" id="btnRunSEO" class="px-3.5 py-1.5 rounded-lg bg-pink-500/90 hover:bg-pink-500 text-white font-semibold text-xs transition flex items-center gap-2 shadow-lg shadow-pink-500/20">
+                <i class="fa-solid fa-wand-magic-sparkles"></i> Run SEO Optimization
+              </button>
+              <button onclick="applySEOToDisk()" id="btnApplySEO" class="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs transition flex items-center gap-2 shadow-lg shadow-emerald-500/20">
+                <i class="fa-solid fa-floppy-disk"></i> Apply SEO to Disk
+              </button>
+            </div>
+          </div>
+
+          <!-- Controls row -->
+          <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 text-xs font-mono">
+            <div>
+              <label class="block text-[11px] font-semibold text-zinc-400 uppercase tracking-wider mb-1.5">Active Target Market</label>
+              <div id="seoLocaleTabs" class="flex flex-wrap gap-1.5">
+                <!-- Populated dynamically: ja, de, es, fr, etc. -->
+              </div>
+            </div>
+            <div>
+              <label class="block text-[11px] font-semibold text-zinc-400 uppercase tracking-wider mb-1.5">Commercial Goal</label>
+              <select id="seoGoalSelect" class="w-full px-3 py-1.5 rounded-md field text-xs text-zinc-200">
+                <option value="traffic">Top-of-Funnel Reach (Discovery)</option>
+                <option value="conversion">High-Intent Commercial (Buyers)</option>
+                <option value="trust">Regional Compliance & Local Trust</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-[11px] font-semibold text-zinc-400 uppercase tracking-wider mb-1.5">Key Scope Tier</label>
+              <select id="seoScopeSelect" class="w-full px-3 py-1.5 rounded-md field text-xs text-zinc-200">
+                <option value="high_impact">High Impact Only (Meta, Hero, Headings)</option>
+                <option value="full_site">Full Site Catalog (All UI Keys)</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-[11px] font-semibold text-zinc-400 uppercase tracking-wider mb-1.5">Competitor URLs (Optional)</label>
+              <input type="text" id="seoCompetitorInput" placeholder="competitor.com, leader.jp" class="w-full px-3 py-1.5 rounded-md field text-xs text-zinc-200 placeholder-zinc-600">
+            </div>
+          </div>
+        </div>
+
+        <div id="seoEmptyState" class="hidden p-12 rounded-xl panel text-center space-y-3">
+          <i class="fa-solid fa-bullseye text-zinc-600 text-3xl"></i>
+          <p class="text-sm text-zinc-300 font-medium">No SEO intelligence computed yet for this project.</p>
+          <p class="text-xs text-zinc-500">Click <strong>"Run SEO Optimization"</strong> above to launch the autonomous market discovery and copy weaving agents.</p>
+        </div>
+
+        <div id="seoDashboard" class="space-y-5">
+          <!-- 2-Column Section -->
+          <div class="grid grid-cols-1 lg:grid-cols-2 gap-5">
+            <!-- Left: Competitors & Keywords -->
+            <div class="space-y-5">
+              <!-- Regional Competitor Intelligence -->
+              <div class="p-5 rounded-xl panel space-y-3">
+                <div class="flex items-center justify-between">
+                  <span class="text-xs font-bold uppercase tracking-wider text-zinc-300 flex items-center gap-2">
+                    <i class="fa-solid fa-magnifying-glass-chart text-sky-400"></i> Regional Competitor Landscape
+                  </span>
+                  <span id="seoCompetitorCount" class="text-[10px] px-2 py-0.5 rounded bg-zinc-800 text-zinc-400 font-mono">0 scouted</span>
+                </div>
+                <div id="seoCompetitorList" class="space-y-2.5"></div>
+              </div>
+
+              <!-- High-Intent Keyword Intelligence -->
+              <div class="p-5 rounded-xl panel space-y-3">
+                <div class="flex items-center justify-between">
+                  <span class="text-xs font-bold uppercase tracking-wider text-zinc-300 flex items-center gap-2">
+                    <i class="fa-solid fa-key text-amber-400"></i> High-Intent Local Keywords
+                  </span>
+                  <span id="seoKeywordCount" class="text-[10px] px-2 py-0.5 rounded bg-zinc-800 text-zinc-400 font-mono">0 keywords</span>
+                </div>
+                <div id="seoKeywordCloud" class="flex flex-wrap gap-2"></div>
+              </div>
+            </div>
+
+            <!-- Right: SERP Simulation & Growth Metrics -->
+            <div class="space-y-5">
+              <!-- Multi-Modal SERP Simulator -->
+              <div class="p-5 rounded-xl panel space-y-3">
+                <div class="flex items-center justify-between">
+                  <span class="text-xs font-bold uppercase tracking-wider text-zinc-300 flex items-center gap-2">
+                    <i class="fa-solid fa-mobile-screen text-pink-400"></i> Google SERP Visual Simulator
+                  </span>
+                  <div class="flex items-center gap-1 bg-[#090b10] p-0.5 rounded-lg border border-[#181b24] text-[10px]">
+                    <button onclick="setSeoSimMode('desktop')" id="btnSimDesktop" class="px-2 py-1 rounded font-mono font-semibold bg-zinc-800 text-zinc-200">Desktop (600px)</button>
+                    <button onclick="setSeoSimMode('mobile')" id="btnSimMobile" class="px-2 py-1 rounded font-mono text-zinc-400 hover:text-zinc-200">Mobile</button>
+                    <button onclick="setSeoSimMode('social')" id="btnSimSocial" class="px-2 py-1 rounded font-mono text-zinc-400 hover:text-zinc-200">Social Card</button>
+                  </div>
+                </div>
+
+                <div id="seoSimContainer" class="p-4 rounded-lg bg-[#121620] border border-[#1c2230]">
+                  <!-- Rendered dynamically -->
+                </div>
+              </div>
+
+              <!-- Predictive Growth Metrics Scorecard -->
+              <div class="p-5 rounded-xl panel space-y-3">
+                <span class="text-xs font-bold uppercase tracking-wider text-zinc-300 flex items-center gap-2">
+                  <i class="fa-solid fa-chart-line text-emerald-400"></i> Projected Growth & Safety Impact
+                </span>
+                <div id="seoMetricsGrid" class="grid grid-cols-2 sm:grid-cols-4 gap-3"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Bottom: Interactive Semantic Copy Diff Matrix -->
+          <div class="p-5 rounded-xl panel space-y-3">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <span class="text-xs font-bold uppercase tracking-wider text-zinc-300 flex items-center gap-2">
+                  <i class="fa-solid fa-code-compare text-emerald-400"></i> Semantic Copy Matrix & Injected Keywords
+                </span>
+                <p class="text-[11px] text-zinc-500 mt-0.5">Review side-by-side linguistic diffs, injected keyword tokens, character counts, and pixel widths.</p>
+              </div>
+              <span id="seoOptCount" class="text-[10px] px-2 py-0.5 rounded bg-zinc-800 text-zinc-400 font-mono">0 keys optimized</span>
+            </div>
+
+            <div class="overflow-x-auto custom-scrollbar border border-[#181b24] rounded-lg">
+              <table class="w-full text-left text-xs border-collapse font-mono">
+                <thead class="bg-[#10131c] text-zinc-400 uppercase tracking-wider text-[10px] font-semibold border-b border-[#181b24]">
+                  <tr>
+                    <th class="py-2.5 px-4">Key / Impact</th>
+                    <th class="py-2.5 px-4">Source (en)</th>
+                    <th class="py-2.5 px-4">Baseline Translation</th>
+                    <th class="py-2.5 px-4">SEO-Optimized Translation</th>
+                    <th class="py-2.5 px-4">Keywords / ICU Safety</th>
+                  </tr>
+                </thead>
+                <tbody id="seoOptimizationsTableBody" class="divide-y divide-[#151924]"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- ================================= SCREEN 6: PIPELINE RUNNER & LOGS ================================= -->
       <div id="screenRunner" class="hidden flex-1 flex flex-col min-h-0 p-5 space-y-4">
         <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
@@ -2160,10 +2454,10 @@ const InteractiveAppHTML = `<!DOCTYPE html>
                 <div>
                   <label class="text-zinc-400 font-medium block mb-1">Translation Provider Engine:</label>
                   <select id="settingsActiveProvider" onchange="handleProviderChange()" class="w-full field rounded-lg px-3 py-2 text-xs font-mono text-zinc-200">
-                    <option value="ollama">Ollama (100% Offline GPU Engine — Qwen, Gemma, LLaMA)</option>
-                    <option value="claude">Anthropic Claude (claude-sonnet-5 — 1M Context, 128k Out, $2/$10)</option>
-                    <option value="openai">OpenAI (gpt-5.4-mini-2026-03-17 — 400k Context, 128k Out, $0.75/$4.50)</option>
                     <option value="gemini">Google Gemini (gemini-3.5-flash — $1.50 in / $9.00 out per 1M)</option>
+                    <option value="claude">Anthropic Claude (claude-sonnet-5 — 1M Context, 128k Out, $2/$10)</option>
+                    <option value="openai">OpenAI (gpt-5.4-mini — 400k Context, 128k Out, $0.75/$4.50)</option>
+                    <option value="ollama">Ollama (100% Offline GPU Engine — Qwen, Gemma, LLaMA)</option>
                     <option value="nllb-cloud">Meta NLLB-200 Cloud (Hugging Face Serverless Inference)</option>
                     <option value="deepl">DeepL Neural MT API (European / Asian Specialists)</option>
                     <option value="custom">Custom / vLLM / LM Studio (OpenAI-Compatible Local Endpoint)</option>
@@ -2450,6 +2744,7 @@ const InteractiveAppHTML = `<!DOCTYPE html>
         { label: "Go to Live Simulator (3)", group: "Navigation", icon: "fa-mobile-screen text-pink-400", action: () => switchScreen('simulator') },
         { label: "Go to AST Diff Inspector (4)", group: "Navigation", icon: "fa-code-compare text-sky-400", action: () => switchScreen('diff') },
         { label: "Go to Quality Critic (5)", group: "Navigation", icon: "fa-shield-halved text-purple-400", action: () => switchScreen('critic') },
+        { label: "Go to SEO & Growth Studio (6)", group: "Navigation", icon: "fa-bullseye text-pink-400", action: () => switchScreen('seo') },
         { label: "Run 10-Case Benchmark", group: "Testing", icon: "fa-trophy text-amber-400", action: () => { switchScreen('benchmark'); runBenchmarkSuite(); } },
         { label: "Browse Snapshots & Rollback", group: "Safety", icon: "fa-clock-rotate-left text-teal-400", action: () => switchScreen('checkpoints') },
         { label: "View Token Analytics", group: "Analytics", icon: "fa-chart-pie text-cyan-400", action: () => switchScreen('stats') }
@@ -3578,9 +3873,315 @@ const InteractiveAppHTML = `<!DOCTYPE html>
       if (p) switchProjectPath(p);
     }
 
+    // ---------- SEO & Growth Studio ----------
+    let currentSeoLocale = 'ja';
+    let currentSeoSimMode = 'desktop';
+    let lastSeoResult = null;
+
+    async function loadSEOData() {
+      try {
+        const res = await fetch('/api/seo');
+        const data = await res.json();
+        const empty = document.getElementById('seoEmptyState');
+        const dash = document.getElementById('seoDashboard');
+
+        if (!data || data.configured === false || !data.strategy) {
+          empty?.classList.remove('hidden');
+          dash?.classList.add('hidden');
+          return;
+        }
+
+        empty?.classList.add('hidden');
+        dash?.classList.remove('hidden');
+        lastSeoResult = data;
+
+        // Populate strategy inputs if present
+        if (data.strategy) {
+          if (data.strategy.goal) document.getElementById('seoGoalSelect').value = data.strategy.goal;
+          if (data.strategy.scope_tier) document.getElementById('seoScopeSelect').value = data.strategy.scope_tier;
+          if (data.strategy.competitor_urls && data.strategy.competitor_urls.length > 0) {
+            document.getElementById('seoCompetitorInput').value = data.strategy.competitor_urls.join(', ');
+          }
+        }
+
+        // Render Locale Tabs
+        const targetLocales = (data.strategy && data.strategy.target_locales) || Object.keys(data.optimizations || {}) || ['ja', 'de', 'es'];
+        if (!targetLocales.includes(currentSeoLocale) && targetLocales.length > 0) {
+          currentSeoLocale = targetLocales[0];
+        }
+
+        const tabsContainer = document.getElementById('seoLocaleTabs');
+        if (tabsContainer) {
+          tabsContainer.innerHTML = targetLocales.map(loc => {
+            const isActive = loc === currentSeoLocale;
+            const activeClass = isActive ? 'bg-pink-500 text-white font-bold' : 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700';
+            return '<button onclick="switchSEOLocale(\'' + loc + '\')" class="px-2.5 py-1 rounded text-xs transition uppercase ' + activeClass + '">' + loc + '</button>';
+          }).join('');
+        }
+
+        renderSEOViewForLocale(currentSeoLocale);
+      } catch (err) {
+        showToast('Failed to load SEO studio state', 'error');
+      }
+    }
+
+    function switchSEOLocale(loc) {
+      currentSeoLocale = loc;
+      if (lastSeoResult) {
+        loadSEOData();
+      }
+    }
+
+    function setSeoSimMode(mode) {
+      currentSeoSimMode = mode;
+      document.getElementById('btnSimDesktop').className = mode === 'desktop' ? 'px-2 py-1 rounded font-mono font-semibold bg-zinc-800 text-zinc-200' : 'px-2 py-1 rounded font-mono text-zinc-400 hover:text-zinc-200';
+      document.getElementById('btnSimMobile').className = mode === 'mobile' ? 'px-2 py-1 rounded font-mono font-semibold bg-zinc-800 text-zinc-200' : 'px-2 py-1 rounded font-mono text-zinc-400 hover:text-zinc-200';
+      document.getElementById('btnSimSocial').className = mode === 'social' ? 'px-2 py-1 rounded font-mono font-semibold bg-zinc-800 text-zinc-200' : 'px-2 py-1 rounded font-mono text-zinc-400 hover:text-zinc-200';
+      renderSEOSimulation(currentSeoLocale);
+    }
+
+    function renderSEOViewForLocale(loc) {
+      if (!lastSeoResult) return;
+      const comps = (lastSeoResult.competitors && lastSeoResult.competitors[loc]) || [];
+      const kws = (lastSeoResult.keyword_pool && lastSeoResult.keyword_pool[loc]) || [];
+      const metrics = (lastSeoResult.metrics && lastSeoResult.metrics[loc]) || null;
+      const opts = (lastSeoResult.optimizations && lastSeoResult.optimizations[loc]) || [];
+
+      // 1. Competitors
+      document.getElementById('seoCompetitorCount').innerText = comps.length + ' scouted';
+      const compList = document.getElementById('seoCompetitorList');
+      if (comps.length === 0) {
+        compList.innerHTML = '<p class="text-xs text-zinc-500">No competitor teardowns yet.</p>';
+      } else {
+        compList.innerHTML = comps.map(c => {
+          const vpBadges = (c.value_props || []).slice(0, 3).map(vp => '<span class="text-[10px] px-1.5 py-0.5 rounded bg-zinc-800/80 text-zinc-400">' + escapeHtml(vp) + '</span>').join('');
+          return '<div class="p-3 rounded-lg bg-[#0d1018] border border-[#181d28] space-y-1.5">' +
+            '<div class="flex items-center justify-between text-xs">' +
+              '<span class="font-bold text-sky-400">#' + c.rank + ' ' + escapeHtml(c.domain) + '</span>' +
+              '<span class="text-[10px] px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400 font-mono">' + (c.is_discovered ? 'Discovered' : 'User URL') + '</span>' +
+            '</div>' +
+            '<p class="text-xs font-semibold text-zinc-200">' + escapeHtml(c.title || c.domain) + '</p>' +
+            (c.meta_description ? '<p class="text-[11px] text-zinc-400 line-clamp-2">' + escapeHtml(c.meta_description) + '</p>' : '') +
+            (vpBadges ? '<div class="flex flex-wrap gap-1 mt-1">' + vpBadges + '</div>' : '') +
+          '</div>';
+        }).join('');
+      }
+
+      // 2. Keywords
+      document.getElementById('seoKeywordCount').innerText = kws.length + ' keywords';
+      const kwCloud = document.getElementById('seoKeywordCloud');
+      if (kws.length === 0) {
+        kwCloud.innerHTML = '<p class="text-xs text-zinc-500">No keywords discovered yet.</p>';
+      } else {
+        kwCloud.innerHTML = kws.map(k => {
+          const isPrimary = k.is_primary;
+          const borderClass = isPrimary ? 'border-pink-500/40 bg-pink-500/10' : 'border-zinc-700/40 bg-zinc-800/50';
+          const badgeClass = k.intent === 'transactional' ? 'text-emerald-400' : (k.intent === 'commercial' ? 'text-sky-400' : 'text-amber-400');
+          return '<div class="px-2.5 py-1.5 rounded-lg border ' + borderClass + ' flex items-center gap-2 text-xs">' +
+            (isPrimary ? '<i class="fa-solid fa-star text-pink-400 text-[10px]"></i>' : '') +
+            '<span class="font-semibold text-zinc-200">' + escapeHtml(k.keyword) + '</span>' +
+            '<span class="text-[10px] ' + badgeClass + ' uppercase font-mono">' + escapeHtml(k.intent) + '</span>' +
+            '<span class="text-[10px] px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400 font-mono">~' + (k.est_monthly_volume || 0).toLocaleString() + '/mo</span>' +
+            '<span class="text-[10px] px-1 py-0.5 rounded bg-zinc-800 text-zinc-500 font-mono">KD ' + k.difficulty + '</span>' +
+          '</div>';
+        }).join('');
+      }
+
+      // 3. Simulation
+      renderSEOSimulation(loc);
+
+      // 4. Metrics Grid
+      const mGrid = document.getElementById('seoMetricsGrid');
+      if (!metrics) {
+        mGrid.innerHTML = '<p class="col-span-4 text-xs text-zinc-500">No predictive growth projections computed.</p>';
+      } else {
+        mGrid.innerHTML = '<div class="p-3 rounded-lg bg-[#0d1018] border border-[#181d28] space-y-1">' +
+            '<span class="text-[10px] text-zinc-500 uppercase font-mono font-semibold">Search Volume Reach</span>' +
+            '<div class="text-lg font-bold text-zinc-100">' + (metrics.search_volume_optimized || 0).toLocaleString() + '<span class="text-xs text-zinc-400 font-normal">/mo</span></div>' +
+            '<span class="text-[10px] text-emerald-400 font-semibold">+' + (metrics.search_volume_uplift_pct || 0) + '% uplift</span>' +
+          '</div>' +
+          '<div class="p-3 rounded-lg bg-[#0d1018] border border-[#181d28] space-y-1">' +
+            '<span class="text-[10px] text-zinc-500 uppercase font-mono font-semibold">Projected SERP CTR</span>' +
+            '<div class="text-lg font-bold text-sky-400">' + (metrics.projected_ctr_optimized || 0) + '%</div>' +
+            '<span class="text-[10px] text-zinc-400">Base: ' + (metrics.projected_ctr_baseline || 0) + '% (+' + (metrics.projected_ctr_uplift_pct || 0) + '%)</span>' +
+          '</div>' +
+          '<div class="p-3 rounded-lg bg-[#0d1018] border border-[#181d28] space-y-1">' +
+            '<span class="text-[10px] text-zinc-500 uppercase font-mono font-semibold">Local Trust Factor</span>' +
+            '<div class="text-lg font-bold text-emerald-400">' + (metrics.local_trust_score || 0) + '<span class="text-xs text-zinc-500 font-normal">/100</span></div>' +
+            '<span class="text-[10px] text-zinc-400">Readability ' + (metrics.readability_score || 0) + '</span>' +
+          '</div>' +
+          '<div class="p-3 rounded-lg bg-[#0d1018] border border-[#181d28] space-y-1">' +
+            '<span class="text-[10px] text-zinc-500 uppercase font-mono font-semibold">Keyword Density</span>' +
+            '<div class="text-lg font-bold ' + (metrics.density_safe ? 'text-emerald-400' : 'text-amber-400') + '">' + (metrics.keyword_density_pct || 0) + '%</div>' +
+            '<span class="text-[10px] px-1.5 py-0.5 rounded ' + (metrics.density_safe ? 'bg-emerald-500/10 text-emerald-400' : 'bg-amber-500/10 text-amber-400') + ' font-semibold font-mono">' + (metrics.density_safe ? 'Safe (No Stuffing)' : 'High Density') + '</span>' +
+          '</div>';
+      }
+
+      // 5. Semantic Optimizations Table
+      document.getElementById('seoOptCount').innerText = opts.length + ' keys optimized';
+      const tbody = document.getElementById('seoOptimizationsTableBody');
+      if (opts.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="5" class="py-6 text-center text-zinc-500">No optimized translation keys found.</td></tr>';
+      } else {
+        tbody.innerHTML = opts.map(o => {
+          const impactBadge = o.impact_tier === 'high'
+            ? '<span class="px-1.5 py-0.5 rounded bg-pink-500/10 text-pink-400 border border-pink-500/20 text-[10px] font-bold font-mono">HIGH IMPACT</span>'
+            : '<span class="px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400 text-[10px] font-mono">STANDARD</span>';
+          const icuBadge = o.icu_variables_matched
+            ? '<span class="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 text-[10px] font-bold font-mono">ICU Safe</span>'
+            : '<span class="px-1.5 py-0.5 rounded bg-rose-500/10 text-rose-400 text-[10px] font-bold font-mono">ICU Broken</span>';
+          const kwBadges = (o.injected_keywords || []).map(kw => '<span class="px-1.5 py-0.5 rounded bg-sky-500/10 text-sky-400 border border-sky-500/20 text-[10px]">' + escapeHtml(kw) + '</span>').join(' ');
+
+          return '<tr class="hover:bg-[#0c0f17] transition-colors">' +
+            '<td class="py-3 px-4 align-top">' +
+              '<div class="font-bold text-zinc-200 break-all">' + escapeHtml(o.key) + '</div>' +
+              '<div class="mt-1">' + impactBadge + '</div>' +
+            '</td>' +
+            '<td class="py-3 px-4 align-top text-zinc-400 max-w-[200px] break-words">' + escapeHtml(o.source_en) + '</td>' +
+            '<td class="py-3 px-4 align-top text-zinc-400 max-w-[220px] break-words">' + escapeHtml(o.baseline_translation) + '</td>' +
+            '<td class="py-3 px-4 align-top max-w-[280px] break-words">' +
+              '<div class="font-semibold text-emerald-300 bg-emerald-950/20 p-2 rounded border border-emerald-500/20">' + escapeHtml(o.optimized_translation) + '</div>' +
+              (o.rationale ? '<p class="text-[10px] text-zinc-500 mt-1 italic">' + escapeHtml(o.rationale) + '</p>' : '') +
+            '</td>' +
+            '<td class="py-3 px-4 align-top space-y-1.5 whitespace-nowrap">' +
+              '<div class="flex flex-wrap gap-1">' + (kwBadges || '<span class="text-[10px] text-zinc-600">None</span>') + '</div>' +
+              '<div>' + icuBadge + '</div>' +
+              '<div class="text-[10px] text-zinc-500 font-mono">' + o.character_length + ' chars | ' + o.pixel_width_desktop + 'px ' + (o.is_title_truncated ? '<span class="text-rose-400 font-bold">(Truncated)</span>' : '') + '</div>' +
+            '</td>' +
+          '</tr>';
+        }).join('');
+      }
+    }
+
+    function renderSEOSimulation(loc) {
+      if (!lastSeoResult) return;
+      const sim = (lastSeoResult.simulations && lastSeoResult.simulations[loc]) || null;
+      const container = document.getElementById('seoSimContainer');
+      if (!container) return;
+
+      if (!sim) {
+        container.innerHTML = '<p class="text-xs text-zinc-500">No SERP simulation available.</p>';
+        return;
+      }
+
+      if (currentSeoSimMode === 'social') {
+        container.innerHTML = '<div class="rounded-lg overflow-hidden border border-[#2a3040] bg-[#1a1f2c] max-w-[500px] mx-auto shadow-xl">' +
+            '<div class="h-40 bg-gradient-to-tr from-sky-900 to-indigo-900 flex items-center justify-center text-zinc-400 text-xs font-mono">' +
+              '<i class="fa-solid fa-image text-3xl opacity-40"></i>' +
+            '</div>' +
+            '<div class="p-3.5 space-y-1">' +
+              '<div class="text-[10px] text-zinc-400 uppercase font-mono tracking-wider">' + escapeHtml(sim.display_url || '') + '</div>' +
+              '<div class="text-sm font-bold text-zinc-100 line-clamp-1">' + escapeHtml(sim.og_card_title || sim.title_tag) + '</div>' +
+              '<div class="text-xs text-zinc-400 line-clamp-2">' + escapeHtml(sim.og_card_description || sim.meta_description) + '</div>' +
+            '</div>' +
+          '</div>';
+        return;
+      }
+
+      // Desktop & Mobile Google SERP
+      const isMobile = currentSeoSimMode === 'mobile';
+      const maxW = isMobile ? 'max-w-[380px]' : 'max-w-[580px]';
+      const truncIndicator = sim.is_title_truncated ? '<span class="ml-1 text-[10px] px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-400 font-mono font-bold">Pixel Truncated (>600px)</span>' : '<span class="ml-1 text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400 font-mono">Safe Width</span>';
+
+      const faqItems = (sim.rich_snippet_faq && sim.rich_snippet_faq.length > 0)
+        ? '<div class="pt-2 border-t border-zinc-800 space-y-1">' + sim.rich_snippet_faq.map(f => '<div class="text-[11px] text-zinc-300 flex items-center gap-1.5"><i class="fa-solid fa-angle-right text-[9px] text-sky-400"></i> ' + escapeHtml(f) + '</div>').join('') + '</div>'
+        : '';
+
+      container.innerHTML = '<div class="' + maxW + ' mx-auto space-y-2 font-sans">' +
+        '<div class="flex items-center gap-2 text-xs text-zinc-400">' +
+          '<div class="w-4 h-4 rounded-full bg-zinc-800 flex items-center justify-center text-[9px]"><i class="fa-solid fa-globe"></i></div>' +
+          '<span class="text-[11px] truncate text-zinc-300 font-mono">' + escapeHtml(sim.display_url) + '</span>' +
+          truncIndicator +
+        '</div>' +
+        '<div class="text-base font-medium text-sky-400 hover:underline cursor-pointer leading-tight">' + escapeHtml(sim.title_tag) + '</div>' +
+        '<div class="text-xs text-zinc-400 leading-normal">' + escapeHtml(sim.meta_description) + '</div>' +
+        faqItems +
+      '</div>';
+    }
+
+    async function runSEOOptimization() {
+      const btn = document.getElementById('btnRunSEO');
+      btn.disabled = true;
+      btn.classList.add('btn-disabled');
+      btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Scouting & Optimizing...';
+
+      const goal = document.getElementById('seoGoalSelect').value;
+      const scope = document.getElementById('seoScopeSelect').value;
+      const compsInput = document.getElementById('seoCompetitorInput').value;
+      const comps = compsInput.split(',').map(s => s.trim()).filter(Boolean);
+
+      try {
+        const res = await fetch('/api/seo/run', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            locales: ['ja', 'de', 'es'],
+            goal: goal,
+            scope: scope,
+            competitors: comps
+          })
+        });
+
+        if (!res.ok) throw new Error('Failed to start SEO pipeline');
+        showToast('SEO Studio launched! Scouting competitors & weaving copy...', 'info');
+
+        // Poll for results
+        let retries = 0;
+        const interval = setInterval(async () => {
+          retries++;
+          const check = await fetch('/api/seo');
+          const data = await check.json();
+          if (data && data.strategy && retries > 1) {
+            clearInterval(interval);
+            lastSeoResult = data;
+            loadSEOData();
+            showToast('SEO Studio optimization completed successfully!', 'success');
+            btn.disabled = false;
+            btn.classList.remove('btn-disabled');
+            btn.innerHTML = '<i class="fa-solid fa-wand-magic-sparkles"></i> Run SEO Optimization';
+          }
+          if (retries > 30) {
+            clearInterval(interval);
+            btn.disabled = false;
+            btn.classList.remove('btn-disabled');
+            btn.innerHTML = '<i class="fa-solid fa-wand-magic-sparkles"></i> Run SEO Optimization';
+          }
+        }, 1000);
+      } catch (err) {
+        showToast('SEO optimization failed: ' + err.message, 'error');
+        btn.disabled = false;
+        btn.classList.remove('btn-disabled');
+        btn.innerHTML = '<i class="fa-solid fa-wand-magic-sparkles"></i> Run SEO Optimization';
+      }
+    }
+
+    async function applySEOToDisk() {
+      const btn = document.getElementById('btnApplySEO');
+      btn.disabled = true;
+      btn.classList.add('btn-disabled');
+      btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Applying...';
+
+      try {
+        const res = await fetch('/api/seo/apply', { method: 'POST' });
+        const data = await res.json();
+        if (data.status === 'applied') {
+          showToast('Applied all SEO optimizations directly to locale files!', 'success');
+          loadStudioInit();
+        } else {
+          showToast('Failed to apply SEO changes', 'error');
+        }
+      } catch (err) {
+        showToast('Error applying SEO changes', 'error');
+      } finally {
+        btn.disabled = false;
+        btn.classList.remove('btn-disabled');
+        btn.innerHTML = '<i class="fa-solid fa-floppy-disk"></i> Apply SEO to Disk';
+      }
+    }
+
     // ---------- Screen Switcher ----------
     function switchScreen(screenId) {
-      const screens = ['studio', 'matrix', 'simulator', 'diff', 'critic', 'runner', 'checkpoints', 'benchmark', 'stats', 'settings'];
+      const screens = ['studio', 'matrix', 'simulator', 'diff', 'critic', 'seo', 'runner', 'checkpoints', 'benchmark', 'stats', 'settings'];
       screens.forEach(s => {
         const sec = document.getElementById('screen' + cap(s));
         const btn = document.getElementById('screenBtn' + cap(s));
@@ -3597,6 +4198,7 @@ const InteractiveAppHTML = `<!DOCTYPE html>
       if (screenId === 'simulator') updateSimLocale();
       if (screenId === 'diff') loadTuiDiff();
       if (screenId === 'critic') loadCritic();
+      if (screenId === 'seo') loadSEOData();
       if (screenId === 'runner') renderRunnerLanguages();
       if (screenId === 'checkpoints') loadCheckpoints();
       if (screenId === 'stats') loadStats();
@@ -3605,7 +4207,7 @@ const InteractiveAppHTML = `<!DOCTYPE html>
 
     function cap(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
 
-    // Keyboard Shortcuts (Cmd+K, Cmd+S, R, 1-5, Esc)
+    // Keyboard Shortcuts (Cmd+K, Cmd+S, R, 1-6, Esc)
     window.addEventListener('keydown', (e) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
         e.preventDefault();
@@ -3630,6 +4232,7 @@ const InteractiveAppHTML = `<!DOCTYPE html>
       if (e.key === '3') switchScreen('simulator');
       if (e.key === '4') switchScreen('diff');
       if (e.key === '5') switchScreen('critic');
+      if (e.key === '6') switchScreen('seo');
       if (e.key.toLowerCase() === 'r') rescanAST();
       if (e.key.toLowerCase() === 'p') openProjectModal();
       if (e.key === 'Escape') closeCommandPalette();

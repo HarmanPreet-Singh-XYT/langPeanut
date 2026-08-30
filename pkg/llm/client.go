@@ -80,7 +80,7 @@ func NewClientWithConfig(provider ProviderType, model string, customDescription 
 	case ProviderOpenAI:
 		apiKey = os.Getenv("OPENAI_API_KEY")
 		if model == "" {
-			model = "gpt-5.4-mini-2026-03-17"
+			model = "gpt-5.4-mini"
 		}
 		if desc == "" {
 			desc = fmt.Sprintf("OpenAI (%s) — High-speed multilingual translation", model)
@@ -94,7 +94,7 @@ func NewClientWithConfig(provider ProviderType, model string, customDescription 
 			model = "gemini-3.5-flash"
 		}
 		if desc == "" {
-			desc = fmt.Sprintf("Custom Gemini (%s) — Ultra-low latency & token efficiency", model)
+			desc = fmt.Sprintf("Google Gemini (%s) — Ultra-low latency & token efficiency", model)
 		}
 	case ProviderNLLB, ProviderNLLBCloud:
 		apiKey = os.Getenv("HF_TOKEN")

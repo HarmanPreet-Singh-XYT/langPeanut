@@ -659,7 +659,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				switch m.cursor {
 				case 0:
 					m.editingKey = "CLAUDE_MODEL"
-					m.textInput.Placeholder = "e.g. claude-sonnet-5 or claude-3-5-haiku"
+					m.textInput.Placeholder = "e.g. claude-sonnet-5, claude-opus-5, or claude-haiku-4.5"
 					m.textInput.SetValue(m.activeModel)
 					m.inputMode = true
 					m.textInput.Focus()
@@ -667,7 +667,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				case 1:
 					m.editingKey = "OPENAI_MODEL"
-					m.textInput.Placeholder = "e.g. gpt-5.4-mini-2026-03-17 or gpt-4o"
+					m.textInput.Placeholder = "e.g. gpt-5.6-sol, gpt-5.6-terra, or gpt-5.4-mini"
 					m.textInput.SetValue(m.activeModel)
 					m.inputMode = true
 					m.textInput.Focus()
@@ -675,7 +675,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				case 2:
 					m.editingKey = "GEMINI_MODEL"
-					m.textInput.Placeholder = "e.g. gemini-3.5-flash or gemini-1.5-pro"
+					m.textInput.Placeholder = "e.g. gemini-3.7-flash, gemini-3.5-flash, or gemini-3.1-pro-preview"
 					m.textInput.SetValue(m.activeModel)
 					m.inputMode = true
 					m.textInput.Focus()

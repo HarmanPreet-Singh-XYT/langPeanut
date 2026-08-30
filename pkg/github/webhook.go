@@ -48,6 +48,7 @@ const (
 type PushEvent struct {
 	Ref        string `json:"ref"`
 	After      string `json:"after"` // new HEAD commit SHA after the push
+	Deleted    bool   `json:"deleted"`
 	Repository struct {
 		Name          string `json:"name"`
 		FullName      string `json:"full_name"`
