@@ -1,9 +1,6 @@
 # Caddyfile — langpeanut-cloud reverse proxy
-# Default binds to HTTP :80 for immediate VPS/staging testing.
-# To enable automatic Let's Encrypt HTTPS, replace `:80` with your domain:
-#   e.g. `langpeanut.example.com { ... }`
-
-:80 {
+# Automatic HTTPS via sslip.io generated domain or custom domain
+{$DOMAIN:34.135.83.146.sslip.io}, :80 {
     reverse_proxy app:8080
 
     header {
