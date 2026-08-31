@@ -30,6 +30,7 @@ if [ -s /tmp/local_github_app.pem ]; then
 fi
 
 echo "==> 6. Launching pre-built Docker containers..."
+docker build -f Dockerfile.runner -t langpeanut-runner:latest .
 if [ "${ENABLE_CADDY}" = "yes" ]; then
   docker compose --profile caddy up -d --build
 else
