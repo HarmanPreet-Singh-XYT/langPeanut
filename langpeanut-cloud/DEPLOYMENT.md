@@ -51,7 +51,8 @@
 2. Fill in the basic details:
    - **GitHub App name**: `langPeanut Localization Bot` (or your preferred name).
    - **Homepage URL**: `https://yourdomain.com` (or `http://your-vps-ip`).
-   - **Callback URL**: `https://yourdomain.com/api/auth/github/callback` (for OAuth login).
+   - **Callback URL**: `https://yourdomain.com/api/auth/github/callback` (for OAuth web login).
+   - **Request user authorization (OAuth) during installation**: ❌ **Leave Unchecked** (Do NOT check this box; checking this causes OAuth state callback errors when users install the app).
    - **Webhook URL**: `https://yourdomain.com/api/webhook`.
    - **Webhook secret**: Generate a random string (e.g. `openssl rand -hex 16`).
 3. Set **Permissions**:
@@ -61,9 +62,12 @@
      - *Metadata*: **Read-only** (default).
 4. Set **Subscribe to events**:
    - Check **Push** and **Installation**.
-5. Click **Create GitHub App**.
-6. Under **General Settings**:
+5. Scroll to **Where can this GitHub App be installed?**:
+   - Select **"Any account"** (Public).
+6. Click **Create GitHub App**.
+7. Under **General Settings**:
    - Copy your numeric **App ID**.
+   - Copy your **Client ID** and generate a **Client Secret** (for web login).
    - Scroll down to **Private keys** and click **Generate a private key**. Save the downloaded `.pem` file.
 
 ---
