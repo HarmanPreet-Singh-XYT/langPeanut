@@ -1,0 +1,9 @@
+data/
+web/node_modules/
+web/.next/
+web/out/
+.git
+*.db
+*.db-wal
+*.db-shm
+*.log

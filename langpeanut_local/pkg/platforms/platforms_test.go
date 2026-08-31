@@ -2,6 +2,7 @@ package platforms
 
 import (
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/langPeanut/langPeanut/pkg/types"
@@ -581,6 +582,57 @@ func TestSwiftPlatform_MergePreservesOtherLocales(t *testing.T) {
 		if ld.Entries["greeting"] != want {
 			t.Errorf("locale %q: expected %q, got %q (merge overwrote existing catalog)", locale, want, ld.Entries["greeting"])
 		}
+	}
+}
+
+// TestReactPlatform_ModuleScopeConstantGuard asserts that string literals declared inside
+// top-level module constants outside React components are NOT patched with bare t(...) calls,
+// preventing "Cannot find name 't'" compile errors.
+func TestReactPlatform_ModuleScopeConstantGuard(t *testing.T) {
+	p := NewReactPlatform()
+	src := []byte(`import React from 'react';
+
+const ways = [
+	{
+		title: "Code Contributions",
+		gettingStarted: <p>Fork and clone the repo</p>
+	}
+];
+
+export default function CommunityPage() {
+	return (
+		<div>
+			<h1>Community</h1>
+			<p>Welcome to our community</p>
+		</div>
+	);
+}
+`)
+
+	cands, err := p.ExtractCandidates("Community.tsx", src)
+	if err != nil {
+		t.Fatalf("ExtractCandidates failed: %v", err)
+	}
+
+	plan, err := p.GenerateRefactorPlan("Community.tsx", src, cands)
+	if err != nil {
+		t.Fatalf("GenerateRefactorPlan failed: %v", err)
+	}
+
+	// Verify that patches inside CommunityPage exist and module-level constants are guarded
+	hasCommunityPatch := false
+	for _, patch := range plan.Patches {
+		if strings.Contains(patch.ReplacementText, "Community") || strings.Contains(patch.ReplacementText, "Welcome") {
+			hasCommunityPatch = true
+		}
+		// Module-level string (startByte < 100) must not have t(...) replacement
+		if patch.StartByte < 100 && patch.ReplacementText != "\n  const { t } = useTranslation();" {
+			t.Errorf("unexpected patch in module-level constant: %q at offset %d", patch.ReplacementText, patch.StartByte)
+		}
+	}
+
+	if !hasCommunityPatch {
+		t.Errorf("expected patches for strings inside CommunityPage component")
 	}
 }
 

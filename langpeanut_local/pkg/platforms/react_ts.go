@@ -774,9 +774,30 @@ func (p *ReactPlatform) GenerateRefactorPlan(filePath string, content []byte, ca
 		RequiredHooks:   []string{"const { t } = useTranslation();"},
 	}
 
+	var root *sitter.Node
+	parser := newTSXParser()
+	defer parser.Close()
+	tree := parser.Parse(content, nil)
+	if tree != nil {
+		defer tree.Close()
+		root = tree.RootNode()
+	}
+
+	hasComponents := root != nil && hasAnyComponent(root, content)
+
 	for _, c := range candidates {
 		if !c.Approved || c.Classification != types.ClassLocalizable {
 			continue
+		}
+
+		// Scope Guard: If the file defines React components/hooks, only replace strings
+		// located INSIDE a component function or hook. Top-level/module-scope constants (e.g. `const ways = [...]`)
+		// cannot call the `useTranslation()` hook at module evaluation time.
+		if hasComponents {
+			enclosing := findEnclosingComponent(root, uint(c.StartByte), uint(c.EndByte), content)
+			if enclosing == nil {
+				continue
+			}
 		}
 
 		var replacement string
@@ -902,6 +923,48 @@ func injectComponentHooks(content []byte, patches []types.ByteRangePatch) []type
 	return patches
 }
 
+func isComponentOrHook(n *sitter.Node, content []byte) bool {
+	if n == nil {
+		return false
+	}
+	if n.Kind() != "function_declaration" && n.Kind() != "arrow_function" && n.Kind() != "function_expression" {
+		return false
+	}
+	if hasJSX(n) {
+		return true
+	}
+	nameNode := n.ChildByFieldName("name")
+	if nameNode == nil && n.Parent() != nil && n.Parent().Kind() == "variable_declarator" {
+		nameNode = n.Parent().ChildByFieldName("name")
+	}
+	if nameNode != nil {
+		name := nameNode.Utf8Text(content)
+		if strings.HasPrefix(name, "use") && len(name) > 3 && name[3] >= 'A' && name[3] <= 'Z' {
+			return true
+		}
+	}
+	return false
+}
+
+func hasAnyComponent(root *sitter.Node, content []byte) bool {
+	var found bool
+	var walk func(n *sitter.Node)
+	walk = func(n *sitter.Node) {
+		if n == nil || found {
+			return
+		}
+		if isComponentOrHook(n, content) {
+			found = true
+			return
+		}
+		for i := uint(0); i < n.NamedChildCount(); i++ {
+			walk(n.NamedChild(i))
+		}
+	}
+	walk(root)
+	return found
+}
+
 func findEnclosingComponent(root *sitter.Node, startByte, endByte uint, content []byte) *sitter.Node {
 	var enclosing *sitter.Node
 	var walk func(n *sitter.Node)
@@ -910,11 +973,8 @@ func findEnclosingComponent(root *sitter.Node, startByte, endByte uint, content 
 			return
 		}
 		if n.StartByte() <= startByte && n.EndByte() >= endByte {
-			if n.Kind() == "function_declaration" || n.Kind() == "arrow_function" || n.Kind() == "function_expression" {
-				body := n.ChildByFieldName("body")
-				if body != nil && body.Kind() == "statement_block" && hasJSX(body) {
-					enclosing = n
-				}
+			if isComponentOrHook(n, content) {
+				enclosing = n
 			}
 			for i := uint(0); i < n.NamedChildCount(); i++ {
 				walk(n.NamedChild(i))
