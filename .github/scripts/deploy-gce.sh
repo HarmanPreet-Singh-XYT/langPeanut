@@ -25,7 +25,8 @@ chmod 600 .env
 if [ -s /tmp/local_github_app.pem ]; then
   echo "==> 5. Deploying GitHub App private key..."
   cp /tmp/local_github_app.pem data/github-app.pem
-  chmod 600 data/github-app.pem
+  chmod 644 data/github-app.pem
+  chmod -R 777 data/
 fi
 
 echo "==> 6. Launching pre-built Docker containers..."
