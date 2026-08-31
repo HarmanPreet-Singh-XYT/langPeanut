@@ -99,8 +99,9 @@ langPeanut run ./examples/nextjs-app   # 1-click localization on a bundled demo 
 ### 1.8 Uninstall
 
 ```bash
-rm "$(command -v langPeanut)"
-rm -rf langpeanut_local/.langPeanut/   # local cache, checkpoints, session state (per project)
+cd langpeanut/langpeanut_local
+./uninstall.sh           # removes system binaries and local build outputs
+./uninstall.sh --purge   # also cleans user configuration directory
 ```
 
 ---

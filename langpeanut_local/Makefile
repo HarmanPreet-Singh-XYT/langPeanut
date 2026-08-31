@@ -11,6 +11,9 @@ build:
 install:
 	@./install.sh
 
+uninstall:
+	@./uninstall.sh
+
 test:
 	go test -v ./...
 
