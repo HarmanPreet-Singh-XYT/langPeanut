@@ -25,9 +25,9 @@ RUN go mod download
 
 COPY . .
 
-RUN CGO_ENABLED=1 GOOS=linux go build -trimpath -ldflags="-s -w" \
+RUN CGO_ENABLED=1 CGO_CFLAGS="-O0" GOOS=linux go build -trimpath -ldflags="-s -w" \
     -o /out/langpeanut-cloud ./cmd/server && \
-    CGO_ENABLED=1 GOOS=linux go build -trimpath -ldflags="-s -w" \
+    CGO_ENABLED=1 CGO_CFLAGS="-O0" GOOS=linux go build -trimpath -ldflags="-s -w" \
     -o /out/langpeanut-runner ./cmd/runner
 
 # ── Stage 2: Runtime (server + runner fallback) ───────────────────────────────
