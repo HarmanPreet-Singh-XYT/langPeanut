@@ -57,6 +57,16 @@ Or in the browser, with zero build step (surfaces all three systems in one UI):
 
 ---
 
+### 🌐 Live Cloud Bot & Verified Real-World Test Repository (Zero Setup)
+For judges evaluating the **langPeanut Cloud** GitHub Bot & Web Dashboard live:
+1. **Live Hosted Dashboard**: [https://34.135.83.146.sslip.io](https://34.135.83.146.sslip.io)
+2. **Installable Public GitHub App**: [https://github.com/apps/langpeanut-localization-bot](https://github.com/apps/langpeanut-localization-bot)
+3. **Verified Real-World Test Repository**: [https://github.com/HarmanPreet-Singh-XYT/pingroute-web](https://github.com/HarmanPreet-Singh-XYT/pingroute-web)
+   - `pingroute-web` is a production Next.js 15 / React (TypeScript/Tailwind) codebase calibrated and verified end-to-end with `langPeanut`.
+   - You can fork or import this repository on the live cloud dashboard to test automated AST string extraction, multi-locale matrix generation (`ja`, `es`, `de`, `fr`), and automated GitHub Pull Request creation in under 30 seconds!
+
+---
+
 ## 3. What to look for (mapped to typical judging criteria)
 
 | Criterion | Where the evidence is |

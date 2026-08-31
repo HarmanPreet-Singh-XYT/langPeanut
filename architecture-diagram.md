@@ -533,6 +533,7 @@ While `langPeanut` contains full platform adapters for Flutter (Dart), SwiftUI (
 3. **Dual Router & Framework Support**: Fully calibrated for both Next.js App Router (`next-intl`) and Pages Router (`react-i18next` / `next-i18next`), generating standardized JSON locale catalogs under `public/locales/{locale}/common.json` or `messages/{locale}.json`.
 4. **Adversarial Benchmark Harness**: 5 of the 10 benchmark cases in `benchmark/cases/` specifically test adversarial React/Next.js patterns (`01_react_nested_jsx.tsx`, `02_react_ambiguous_verbs.tsx`, `03_react_ternary_plurals.tsx`, `09_massive_analytics_dashboard.tsx`, `10_adversarial_code_trap.tsx`), verifying a **100.0% AST compilation pass rate** and **0.0% formatting drift** via real `tsc --noEmit` validation.
 5. **Bundled Reference App**: Ships with a complete, production-structured Next.js demo application (`langpeanut_local/examples/nextjs-app`) used for live evaluation and test reproduction.
+6. **Real-World Live Benchmark Repository**: Calibrated and tested end-to-end against [`HarmanPreet-Singh-XYT/pingroute-web`](https://github.com/HarmanPreet-Singh-XYT/pingroute-web), a real-world, production Next.js 15 App Router codebase with Tailwind CSS, Lucide icons, complex component hierarchies, and interactive animations.
 
 ---
 

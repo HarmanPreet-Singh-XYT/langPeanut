@@ -309,6 +309,11 @@ Run `./langPeanut benchmark` yourself — the LLM baseline column is genuinely n
 - Single-VPS deployment: one `docker compose up`, SQLite (WAL mode) as the only datastore, the `jobs` table doubling as the queue, Caddy for automatic HTTPS.
 - The `langpeanut-cloud/web` dashboard (Next.js 15 + Tailwind) adds its own agentic **copilot chat** (multi-turn memory, 19+ platform tools, live model/provider switching), the SEO studio, and settings UI on top of the same engine — this is the same System B copilot described in §5, reachable over HTTP instead of the terminal.
 
+#### 🌐 Live Hosted Instance & Tested Sample Project
+- **Live Cloud Dashboard**: [https://34.135.83.146.sslip.io](https://34.135.83.146.sslip.io)
+- **Public GitHub App**: [https://github.com/apps/langpeanut-localization-bot](https://github.com/apps/langpeanut-localization-bot)
+- **Verified Production Test Repository**: [https://github.com/HarmanPreet-Singh-XYT/pingroute-web](https://github.com/HarmanPreet-Singh-XYT/pingroute-web) (Real-world Next.js 15 / React app tested and calibrated end-to-end).
+
 See [`langpeanut-cloud/README.md`](langpeanut-cloud/README.md) and [`langpeanut-cloud/DEPLOYMENT.md`](langpeanut-cloud/DEPLOYMENT.md) for the full architecture and VPS setup.
 
 ---

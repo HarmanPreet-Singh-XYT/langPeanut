@@ -142,7 +142,14 @@ Verify:
 curl -i http://localhost:8080/health   # {"status":"ok"}
 ```
 
-### 2.3 Full guide
+### 2.3 Live Hosted Cloud Testing (No Server Needed)
+
+If you want to test the full cloud service and GitHub bot without running Docker or a VPS:
+- **Live Cloud Dashboard**: [https://34.135.83.146.sslip.io](https://34.135.83.146.sslip.io)
+- **Public GitHub App**: [https://github.com/apps/langpeanut-localization-bot](https://github.com/apps/langpeanut-localization-bot)
+- **Verified Production Test Repository**: [https://github.com/HarmanPreet-Singh-XYT/pingroute-web](https://github.com/HarmanPreet-Singh-XYT/pingroute-web) (Full Next.js 15 / React project tested and calibrated end-to-end).
+
+### 2.4 Full guide
 
 The complete step-by-step — creating the GitHub App, permission scopes, domain/SSL options (bundled Caddy vs. an existing nginx), backups, and the one-command update flow — is in [`langpeanut-cloud/DEPLOYMENT.md`](langpeanut-cloud/DEPLOYMENT.md).
 
