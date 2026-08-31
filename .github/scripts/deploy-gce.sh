@@ -7,7 +7,8 @@ echo "==> 1. Preparing deployment directory at ${DEPLOY_PATH}..."
 sudo mkdir -p "${DEPLOY_PATH}"
 sudo chown -R "$(whoami):$(whoami)" "${DEPLOY_PATH}"
 sudo chmod -R 775 "${DEPLOY_PATH}"
-git config --global --add safe.directory "${DEPLOY_PATH}"
+sudo git config --system --add safe.directory '*' || true
+git config --global --add safe.directory '*' || true
 
 cd "${DEPLOY_PATH}"
 
@@ -16,10 +17,11 @@ if [ ! -d .git ]; then
   git clone "${REPO_URL}" .
 else
   git remote set-url origin "${REPO_URL}"
-  git fetch origin
+  git fetch origin "${TARGET_BRANCH}"
+  git checkout -f "${TARGET_BRANCH}"
+  git reset --hard "origin/${TARGET_BRANCH}"
+  git clean -fd
 fi
-git checkout "${TARGET_BRANCH}"
-git pull origin "${TARGET_BRANCH}"
 
 cd "${DEPLOY_PATH}/langpeanut-cloud"
 
