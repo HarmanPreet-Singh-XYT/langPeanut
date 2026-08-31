@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/langPeanut/langPeanut/pkg/logger"
+	"google.golang.org/genai"
 )
 
 // ProviderType represents supported LLM providers
@@ -543,67 +544,106 @@ func (c *MultiProviderClient) callOpenAI(ctx context.Context, system, user strin
 	return content, nil
 }
 
+// callGemini uses the official Google GenAI SDK (google.golang.org/genai)
+// rather than a raw REST call, so the request/response shape and auth are
+// maintained by Google, not hand-rolled JSON.
 func (c *MultiProviderClient) callGemini(ctx context.Context, system, user string) (string, error) {
-	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", c.model, c.apiKey)
-
-	reqBody := map[string]any{
-		"contents": []map[string]any{
-			{
-				"parts": []map[string]string{
-					{"text": system + "\n\n" + user},
-				},
-			},
-		},
-		"generationConfig": map[string]any{
-			"maxOutputTokens":  16384,
-			"responseMimeType": "application/json",
-		},
-	}
-
-	data, _ := json.Marshal(reqBody)
-	makeReq := func() (*http.Request, error) {
-		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(data))
-		if err != nil {
-			return nil, err
-		}
-		req.Header.Set("Content-Type", "application/json")
-		return req, nil
-	}
-
-	body, err := c.executeHTTPRequestWithRetry(ctx, makeReq)
+	client, err := genai.NewClient(ctx, &genai.ClientConfig{
+		APIKey:  c.apiKey,
+		Backend: genai.BackendGeminiAPI,
+	})
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to init Gemini GenAI client: %w", err)
 	}
 
-	var res struct {
-		Candidates []struct {
-			Content struct {
-				Parts []struct {
-					Text string `json:"text"`
-				} `json:"parts"`
-			} `json:"content"`
-		} `json:"candidates"`
-		UsageMetadata struct {
-			PromptTokenCount     int64 `json:"promptTokenCount"`
-			CandidatesTokenCount int64 `json:"candidatesTokenCount"`
-		} `json:"usageMetadata"`
-	}
-	if err := json.Unmarshal(body, &res); err != nil || len(res.Candidates) == 0 || len(res.Candidates[0].Content.Parts) == 0 {
-		return "", fmt.Errorf("failed to parse gemini response: %w", err)
+	config := &genai.GenerateContentConfig{
+		MaxOutputTokens:  16384,
+		ResponseMIMEType: "application/json",
+		SystemInstruction: &genai.Content{
+			Parts: []*genai.Part{{Text: system}},
+		},
 	}
 
-	content := res.Candidates[0].Content.Parts[0].Text
-	inTokens := res.UsageMetadata.PromptTokenCount
-	outTokens := res.UsageMetadata.CandidatesTokenCount
-	if inTokens == 0 {
-		inTokens = EstimateTokens(system + " " + user)
-	}
-	if outTokens == 0 {
-		outTokens = EstimateTokens(content)
-	}
-	RecordUsage(string(c.provider), c.model, inTokens, outTokens)
+	var lastErr error
+	const maxAttempts = 3
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		startT := time.Now()
+		result, err := client.Models.GenerateContent(ctx, c.model, genai.Text(user), config)
+		if err == nil {
+			content := result.Text()
+			if content == "" {
+				lastErr = fmt.Errorf("empty response from Gemini")
+			} else {
+				logger.Get().Debug("MODEL:LLM", fmt.Sprintf("Gemini GenAI SDK response in %v", time.Since(startT)))
 
-	return content, nil
+				inTokens := int64(0)
+				outTokens := int64(0)
+				if result.UsageMetadata != nil {
+					inTokens = int64(result.UsageMetadata.PromptTokenCount)
+					outTokens = int64(result.UsageMetadata.CandidatesTokenCount)
+				}
+				if inTokens == 0 {
+					inTokens = EstimateTokens(system + " " + user)
+				}
+				if outTokens == 0 {
+					outTokens = EstimateTokens(content)
+				}
+				RecordUsage(string(c.provider), c.model, inTokens, outTokens)
+
+				return content, nil
+			}
+		} else {
+			lastErr = formatGeminiSDKError(err)
+			if isNonRetriableGeminiError(err) {
+				logger.Get().Error("MODEL:LLM", "Non-retriable Gemini API error", lastErr)
+				return "", lastErr
+			}
+			logger.Get().Warn("MODEL:LLM", fmt.Sprintf("Gemini API error on attempt %d/%d: %v", attempt+1, maxAttempts, lastErr))
+		}
+
+		if attempt < maxAttempts-1 {
+			backoff := time.Duration(500*(1<<attempt)) * time.Millisecond
+			select {
+			case <-ctx.Done():
+				return "", ctx.Err()
+			case <-time.After(backoff):
+			}
+		}
+	}
+
+	logger.Get().Error("MODEL:LLM", fmt.Sprintf("All %d Gemini API attempts failed", maxAttempts), lastErr)
+	return "", fmt.Errorf("request failed after %d attempts: %w", maxAttempts, lastErr)
+}
+
+func isNonRetriableGeminiError(err error) bool {
+	var apiErr genai.APIError
+	if ok := extractGenaiAPIError(err, &apiErr); ok {
+		return apiErr.Code == http.StatusUnauthorized || apiErr.Code == http.StatusForbidden || apiErr.Code == http.StatusBadRequest
+	}
+	return false
+}
+
+func formatGeminiSDKError(err error) error {
+	var apiErr genai.APIError
+	if ok := extractGenaiAPIError(err, &apiErr); ok {
+		if apiErr.Code == http.StatusBadRequest || apiErr.Code == http.StatusForbidden {
+			return fmt.Errorf("Google Gemini API Error (%d): Invalid GEMINI_API_KEY. %s", apiErr.Code, apiErr.Message)
+		}
+		return fmt.Errorf("Google Gemini API Error (%d): %s", apiErr.Code, apiErr.Message)
+	}
+	return fmt.Errorf("Google Gemini API Error: %w", err)
+}
+
+func extractGenaiAPIError(err error, target *genai.APIError) bool {
+	if apiErr, ok := err.(genai.APIError); ok {
+		*target = apiErr
+		return true
+	}
+	if apiErr, ok := err.(*genai.APIError); ok {
+		*target = *apiErr
+		return true
+	}
+	return false
 }
 
 func (c *MultiProviderClient) callNLLB(ctx context.Context, system, user string) (string, error) {
