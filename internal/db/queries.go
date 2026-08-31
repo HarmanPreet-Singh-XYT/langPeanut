@@ -50,6 +50,13 @@ type RepoSettings struct {
 	ExistingTranslationsMode string // "skip" (default), "replace" (regenerate all), "prompt"
 	EncryptedAPIKeyOverride  []byte // Optional per-repo API key override (AES-256-GCM encrypted); falls back to global team credential if empty
 	UserDirective            string // UI Integration Directive / Custom instruction
+	WebhookPushEnabled       bool   // Autopilot trigger on git push webhook
+	WebhookBranchFilter      string // "default_branch" (default), "all", "custom"
+	WebhookCustomBranches    string // Comma-separated branch patterns e.g. "main, dev, release/*"
+	WebhookAction            string // "auto_pr" (default), "direct_commit", "draft_pr"
+	WebhookPRCommentsEnabled bool   // Whether @langpeanut PR comment commands are active
+	WebhookCustomBranchPrefix string // Custom PR branch prefix e.g. "langpeanut/i18n-"
+	WebhookPathFilter        string // Optional file path filter/glob e.g. "src/**, app/**"
 	UpdatedAt                time.Time
 }
 
@@ -293,13 +300,40 @@ func (db *DB) UpsertRepoSettings(s *RepoSettings) error {
 	if s.SafetyMode {
 		safetyInt = 1
 	}
+	pushEnabledInt := 0
+	if s.WebhookPushEnabled {
+		pushEnabledInt = 1
+	}
+	prCommentsInt := 0
+	if s.WebhookPRCommentsEnabled {
+		prCommentsInt = 1
+	}
+	branchFilter := s.WebhookBranchFilter
+	if branchFilter == "" {
+		branchFilter = "default_branch"
+	}
+	action := s.WebhookAction
+	if action == "" {
+		action = "auto_pr"
+	}
+	prefix := s.WebhookCustomBranchPrefix
+	if prefix == "" {
+		prefix = "langpeanut/i18n-"
+	}
 	existingMode := s.ExistingTranslationsMode
 	if existingMode == "" {
 		existingMode = "skip"
 	}
 	_, err = db.Exec(`
-		INSERT INTO repo_settings(repo_id, locales_json, tone_preset, provider, model, safety_mode, chunk_word_budget, chunk_key_ceiling, custom_install_cmd, custom_build_cmd, root_dir, existing_translations_mode, encrypted_api_key_override, user_directive, updated_at)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?, strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+		INSERT INTO repo_settings(
+			repo_id, locales_json, tone_preset, provider, model, safety_mode,
+			chunk_word_budget, chunk_key_ceiling, custom_install_cmd, custom_build_cmd,
+			root_dir, existing_translations_mode, encrypted_api_key_override, user_directive,
+			webhook_push_enabled, webhook_branch_filter, webhook_custom_branches, webhook_action,
+			webhook_pr_comments_enabled, webhook_custom_branch_prefix, webhook_path_filter,
+			updated_at
+		)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, strftime('%Y-%m-%dT%H:%M:%SZ','now'))
 		ON CONFLICT(repo_id) DO UPDATE SET
 			locales_json=excluded.locales_json,
 			tone_preset=excluded.tone_preset,
@@ -314,20 +348,46 @@ func (db *DB) UpsertRepoSettings(s *RepoSettings) error {
 			existing_translations_mode=excluded.existing_translations_mode,
 			encrypted_api_key_override=excluded.encrypted_api_key_override,
 			user_directive=excluded.user_directive,
+			webhook_push_enabled=excluded.webhook_push_enabled,
+			webhook_branch_filter=excluded.webhook_branch_filter,
+			webhook_custom_branches=excluded.webhook_custom_branches,
+			webhook_action=excluded.webhook_action,
+			webhook_pr_comments_enabled=excluded.webhook_pr_comments_enabled,
+			webhook_custom_branch_prefix=excluded.webhook_custom_branch_prefix,
+			webhook_path_filter=excluded.webhook_path_filter,
 			updated_at=excluded.updated_at`,
 		s.RepoID, string(localesJSON), s.TonePreset, s.Provider, s.Model,
-		safetyInt, s.ChunkWordBudget, s.ChunkKeyCeiling, s.CustomInstallCmd, s.CustomBuildCmd, s.RootDir, existingMode, s.EncryptedAPIKeyOverride, s.UserDirective)
+		safetyInt, s.ChunkWordBudget, s.ChunkKeyCeiling, s.CustomInstallCmd, s.CustomBuildCmd,
+		s.RootDir, existingMode, s.EncryptedAPIKeyOverride, s.UserDirective,
+		pushEnabledInt, branchFilter, s.WebhookCustomBranches, action,
+		prCommentsInt, prefix, s.WebhookPathFilter)
 	return err
 }
 
 func (db *DB) GetRepoSettings(repoID int64) (*RepoSettings, error) {
 	var localesJSON string
-	var safetyInt int
+	var safetyInt, pushEnabledInt, prCommentsInt int
 	var overrideBlob []byte
 	s := &RepoSettings{RepoID: repoID}
-	err := db.QueryRow(`SELECT locales_json, tone_preset, provider, model, safety_mode, chunk_word_budget, chunk_key_ceiling, COALESCE(custom_install_cmd, ''), COALESCE(custom_build_cmd, ''), COALESCE(root_dir, ''), COALESCE(existing_translations_mode, 'skip'), COALESCE(encrypted_api_key_override, X''), COALESCE(user_directive, ''), updated_at
+	err := db.QueryRow(`SELECT locales_json, tone_preset, provider, model, safety_mode,
+		chunk_word_budget, chunk_key_ceiling, COALESCE(custom_install_cmd, ''),
+		COALESCE(custom_build_cmd, ''), COALESCE(root_dir, ''), COALESCE(existing_translations_mode, 'skip'),
+		COALESCE(encrypted_api_key_override, X''), COALESCE(user_directive, ''),
+		COALESCE(webhook_push_enabled, 1), COALESCE(webhook_branch_filter, 'default_branch'),
+		COALESCE(webhook_custom_branches, ''), COALESCE(webhook_action, 'auto_pr'),
+		COALESCE(webhook_pr_comments_enabled, 1), COALESCE(webhook_custom_branch_prefix, 'langpeanut/i18n-'),
+		COALESCE(webhook_path_filter, ''), updated_at
 		FROM repo_settings WHERE repo_id=?`, repoID).
-		Scan(&localesJSON, &s.TonePreset, &s.Provider, &s.Model, &safetyInt, &s.ChunkWordBudget, &s.ChunkKeyCeiling, &s.CustomInstallCmd, &s.CustomBuildCmd, &s.RootDir, &s.ExistingTranslationsMode, &overrideBlob, &s.UserDirective, &s.UpdatedAt)
+		Scan(
+			&localesJSON, &s.TonePreset, &s.Provider, &s.Model, &safetyInt,
+			&s.ChunkWordBudget, &s.ChunkKeyCeiling, &s.CustomInstallCmd,
+			&s.CustomBuildCmd, &s.RootDir, &s.ExistingTranslationsMode,
+			&overrideBlob, &s.UserDirective,
+			&pushEnabledInt, &s.WebhookBranchFilter,
+			&s.WebhookCustomBranches, &s.WebhookAction,
+			&prCommentsInt, &s.WebhookCustomBranchPrefix,
+			&s.WebhookPathFilter, &s.UpdatedAt,
+		)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -335,6 +395,8 @@ func (db *DB) GetRepoSettings(repoID int64) (*RepoSettings, error) {
 		return nil, err
 	}
 	s.SafetyMode = safetyInt == 1
+	s.WebhookPushEnabled = pushEnabledInt == 1
+	s.WebhookPRCommentsEnabled = prCommentsInt == 1
 	if len(overrideBlob) > 0 {
 		s.EncryptedAPIKeyOverride = overrideBlob
 	}

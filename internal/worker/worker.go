@@ -184,17 +184,30 @@ func runJob(ctx context.Context, cfg Config, job *db.Job) error {
 
 	settingsHash := computeSettingsHash(settings)
 
-	dup, err := cfg.DB.HasDuplicateSuccessfulJob(job.RepoID, headSHA, settingsHash)
-	if err != nil {
-		return fmt.Errorf("dedupe check: %w", err)
-	}
-	if dup {
-		slog.Info("worker: skipping — already processed", "job_id", job.ID, "sha", headSHA[:8])
-		return cfg.DB.UpdateJobStatus(job.ID, "skipped_no_changes", "", headSHA, settingsHash, "", "")
+	// ── Step 5: Deduplication check ──────────────────────────────────────────
+	// Deduplication only applies to automated background webhook push events.
+	// Manual user runs, on-demand bot commands, or runs with updated translation matrix
+	// overrides MUST ALWAYS execute and create/update PRs.
+	if job.TriggerType == "webhook_push" {
+		dup, err := cfg.DB.HasDuplicateSuccessfulJob(job.RepoID, headSHA, settingsHash)
+		if err != nil {
+			return fmt.Errorf("dedupe check: %w", err)
+		}
+		if dup {
+			slog.Info("worker: skipping automated webhook push — already processed", "job_id", job.ID, "sha", headSHA[:8])
+			return cfg.DB.UpdateJobStatus(job.ID, "skipped_no_changes", "", headSHA, settingsHash, "", "")
+		}
 	}
 
 	// ── Step 5 cont: clone working copy from mirror ──────────────────────────
-	branch := fmt.Sprintf("langpeanut/i18n-%d-%s", time.Now().Unix(), headSHA[:7])
+	prefix := settings.WebhookCustomBranchPrefix
+	if prefix == "" {
+		prefix = "langpeanut/i18n-"
+	}
+	if !strings.HasSuffix(prefix, "-") && !strings.HasSuffix(prefix, "/") {
+		prefix = prefix + "-"
+	}
+	branch := fmt.Sprintf("%s%d-%s", prefix, time.Now().Unix(), headSHA[:7])
 	scratchDir := filepath.Join(cfg.JobsDir, strconv.FormatInt(job.ID, 10))
 	defer os.RemoveAll(scratchDir) // unconditional cleanup per §6.3
 
@@ -205,8 +218,9 @@ func runJob(ctx context.Context, cfg Config, job *db.Job) error {
 
 	// ── Step 6: launch sandboxed runner container ────────────────────────────
 	resultPath := filepath.Join(scratchDir, "result.json")
+	matrix, _ := cfg.DB.GetTranslationMatrix(repo.ID)
 	sandboxErr := launchSandbox(ctx, cfg, job, scratchDir, resultPath,
-		apiKey, settings, branch, baseBranch, authURL)
+		apiKey, settings, matrix, branch, baseBranch, authURL)
 
 	// ── Step 10–11: read result, open PR, persist usage ─────────────────────
 	// We always attempt a PR even after sandbox error — partial results still have value.
@@ -268,6 +282,7 @@ func runJob(ctx context.Context, cfg Config, job *db.Job) error {
 	}
 	errMsg := ""
 	if prErr != nil {
+		finalStatus = "failed"
 		advice := logger.ExplainError(prErr)
 		if advice != nil {
 			errMsg = fmt.Sprintf("[%s] %s — %s", advice.Subsystem, advice.Title, advice.RootCause)
@@ -290,9 +305,11 @@ func runJob(ctx context.Context, cfg Config, job *db.Job) error {
 // launchSandbox spawns a langpeanut-runner container per §6.3 or falls back to runner binary.
 func launchSandbox(ctx context.Context, cfg Config, job *db.Job,
 	scratchDir, resultPath, apiKey string,
-	settings *db.RepoSettings, branch, baseBranch, authURL string,
+	settings *db.RepoSettings, matrix map[string]map[string]string,
+	branch, baseBranch, authURL string,
 ) error {
 	localesJSON, _ := json.Marshal(settings.Locales)
+	matrixJSON, _ := json.Marshal(matrix)
 	hostJobsDir := os.Getenv("HOST_JOBS_DIR")
 	hostScratchDir := scratchDir
 	if hostJobsDir != "" {
@@ -327,6 +344,7 @@ func launchSandbox(ctx context.Context, cfg Config, job *db.Job,
 			"-e", "CUSTOM_BUILD_CMD=" + settings.CustomBuildCmd,
 			"-e", "ROOT_DIR=" + settings.RootDir,
 			"-e", "EXISTING_TRANSLATIONS_MODE=" + settings.ExistingTranslationsMode,
+			"-e", "TRANSLATION_MATRIX=" + string(matrixJSON),
 			"-e", "RESULT_PATH=/work/result.json",
 			"-e", "WORK_DIR=/work/repo",
 			cfg.RunnerImage,
@@ -338,7 +356,8 @@ func launchSandbox(ctx context.Context, cfg Config, job *db.Job,
 			slog.Info("worker: sandbox completed via docker", "job_id", job.ID)
 			return nil
 		}
-		slog.Warn("worker: docker run failed, attempting runner binary fallback", "job_id", job.ID, "err", err, "out", strings.TrimSpace(string(out)))
+		dockerOutStr := strings.TrimSpace(string(out))
+		slog.Warn("worker: docker run failed, attempting runner binary fallback", "job_id", job.ID, "err", err, "out", dockerOutStr)
 	}
 
 	// 2. Direct runner binary execution fallback
@@ -362,7 +381,7 @@ func launchSandbox(ctx context.Context, cfg Config, job *db.Job,
 	}
 	if err != nil || runnerPath == "" {
 		if dockerErr == nil {
-			return fmt.Errorf("docker sandbox failed and langpeanut-runner binary not found")
+			return fmt.Errorf("docker sandbox execution failed: %w", err)
 		}
 		return fmt.Errorf("neither docker nor langpeanut-runner binary found on system")
 	}
@@ -384,6 +403,7 @@ func launchSandbox(ctx context.Context, cfg Config, job *db.Job,
 		"CUSTOM_BUILD_CMD="+settings.CustomBuildCmd,
 		"ROOT_DIR="+settings.RootDir,
 		"EXISTING_TRANSLATIONS_MODE="+settings.ExistingTranslationsMode,
+		"TRANSLATION_MATRIX="+string(matrixJSON),
 	)
 	out, err := cmd.CombinedOutput()
 	if err != nil {

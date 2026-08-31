@@ -1,7 +1,7 @@
 'use client'
 
 import useSWR from 'swr'
-import { useState, useEffect, Suspense } from 'react'
+import { useState, useEffect, useRef, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -14,6 +14,10 @@ import {
   DialogTitle,
   DialogDescription,
 } from '@/components/ui/dialog'
+import { cn } from '@/lib/utils'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
+import { toast } from 'sonner'
 import {
   Tool,
   PromptInput,
@@ -58,6 +62,22 @@ interface RepoSettings {
   ExistingTranslationsMode?: string
   existing_translations_mode?: string
   has_api_key_override?: boolean
+  user_directive?: string
+  UserDirective?: string
+  webhook_push_enabled?: boolean
+  WebhookPushEnabled?: boolean
+  webhook_branch_filter?: string
+  WebhookBranchFilter?: string
+  webhook_custom_branches?: string
+  WebhookCustomBranches?: string
+  webhook_action?: string
+  WebhookAction?: string
+  webhook_pr_comments_enabled?: boolean
+  WebhookPRCommentsEnabled?: boolean
+  webhook_custom_branch_prefix?: string
+  WebhookCustomBranchPrefix?: string
+  webhook_path_filter?: string
+  WebhookPathFilter?: string
 }
 
 interface ProviderCredential {
@@ -80,6 +100,7 @@ interface Job {
 }
 
 const AVAILABLE_LANGUAGES = [
+  { code: 'en', label: 'English', native: 'Global / US / UK', tag: 'EN', region: 'americas' },
   { code: 'es', label: 'Spanish', native: 'Español', tag: 'ES', region: 'eu' },
   { code: 'fr', label: 'French', native: 'Français', tag: 'FR', region: 'eu' },
   { code: 'de', label: 'German', native: 'Deutsch', tag: 'DE', region: 'eu' },
@@ -321,6 +342,23 @@ function RepoDetailsContent() {
   const [savingSettings, setSavingSettings] = useState(false)
   const [settingsFeedback, setSettingsFeedback] = useState<string>('')
 
+  // Webhook Autopilot & PR Bot Settings State
+  const [webhookPushEnabled, setWebhookPushEnabled] = useState<boolean>(true)
+  const [webhookBranchFilter, setWebhookBranchFilter] = useState<'default_branch' | 'all' | 'custom'>('default_branch')
+  const [webhookCustomBranches, setWebhookCustomBranches] = useState<string>('')
+  const [webhookAction, setWebhookAction] = useState<'auto_pr' | 'direct_commit' | 'draft_pr'>('auto_pr')
+  const [webhookPRCommentsEnabled, setWebhookPRCommentsEnabled] = useState<boolean>(true)
+  const [webhookCustomBranchPrefix, setWebhookCustomBranchPrefix] = useState<string>('langpeanut/i18n-')
+  const [webhookPathFilter, setWebhookPathFilter] = useState<string>('')
+
+  // Webhook Simulator & Testing State (Tab 5)
+  const [simulatingPush, setSimulatingPush] = useState(false)
+  const [pushSimResult, setPushSimResult] = useState<any>(null)
+  const [simulatingBot, setSimulatingBot] = useState(false)
+  const [botSimInput, setBotSimInput] = useState<string>('@langpeanut translate --locales es,ja --tone formal')
+  const [botSimResult, setBotSimResult] = useState<any>(null)
+  const [copiedWebhookURL, setCopiedWebhookURL] = useState(false)
+
   // Translation Matrix State (Real from DB / Repo)
   const { data: rawMatrix, mutate: mutateMatrix } = useSWR<Record<string, Record<string, string>>>(
     authed && repo ? `/api/repos/${repo.ID}/matrix` : null,
@@ -336,7 +374,9 @@ function RepoDetailsContent() {
     authed && repo ? `/api/repos/${repo.ID}/seo` : null,
     fetcher
   )
-  const [seoLocale, setSeoLocale] = useState<string>('ja')
+  const [seoLocale, setSeoLocale] = useState<string>('en')
+  const [seoCategory, setSeoCategory] = useState<string>('')
+  const [seoDescription, setSeoDescription] = useState<string>('')
   const [seoGoal, setSeoGoal] = useState<string>('traffic')
   const [seoScope, setSeoScope] = useState<string>('high_impact')
   const [seoCompetitorInput, setSeoCompetitorInput] = useState<string>('')
@@ -344,6 +384,8 @@ function RepoDetailsContent() {
   const [scoutingSEO, setScoutingSEO] = useState(false)
   const [optimizingSEO, setOptimizingSEO] = useState(false)
   const [applyingSEO, setApplyingSEO] = useState(false)
+  const [analyzingDomain, setAnalyzingDomain] = useState(false)
+  const [isModelDropdownOpen, setIsModelDropdownOpen] = useState(false)
   const [resettingData, setResettingData] = useState(false)
   const [deletingRepo, setDeletingRepo] = useState(false)
 
@@ -397,19 +439,34 @@ function RepoDetailsContent() {
   const [doctorReport, setDoctorReport] = useState<any>(null)
   const [pruningKeys, setPruningKeys] = useState(false)
 
-  // Central Agent Copilot State
+  // Central Agent Copilot State (Powered by Google Genkit Go)
   const [centralCanvasTab, setCentralCanvasTab] = useState<'matrix' | 'diff' | 'critic' | 'serp' | 'cost'>('matrix')
   const [lastCopilotCards, setLastCopilotCards] = useState<any[]>([])
   const [centralCopilotMessages, setCentralCopilotMessages] = useState<
-    Array<{ role: 'user' | 'assistant'; content: string; tool_calls?: any[]; cards?: any[] }>
+    Array<{ role: 'user' | 'assistant'; content: string; reasoning?: string; tool_calls?: any[]; cards?: any[] }>
   >([
     {
       role: 'assistant',
-      content: 'Autonomous Multi-Agent Orchestrator initialized. Instruct the underlying supervisor to audit AST strings, execute translation batches, verify ICU variable integrity with 4-tier critics, or simulate Google SERP rankings.',
+      content: 'I am your langPeanut Copilot. I can inspect your AST for hardcoded UI strings, translate missing keys into target locales, run 4-tier ICU verification critics, simulate Google SERP previews, and modify repository settings. How can I help you today?',
     },
   ])
   const [centralCopilotInput, setCentralCopilotInput] = useState('')
   const [centralCopilotThinking, setCentralCopilotThinking] = useState(false)
+  const [showBrowsePromptsModal, setShowBrowsePromptsModal] = useState(false)
+  const [showDirectiveModal, setShowDirectiveModal] = useState(false)
+  const [showAttachModal, setShowAttachModal] = useState(false)
+  const [customDirectiveText, setCustomDirectiveText] = useState('')
+  const chatContainerRef = useRef<HTMLDivElement>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+
+  useEffect(() => {
+    if (chatContainerRef.current) {
+      chatContainerRef.current.scrollTo({
+        top: chatContainerRef.current.scrollHeight,
+        behavior: 'smooth',
+      })
+    }
+  }, [centralCopilotMessages, centralCopilotThinking])
 
   const sendCentralCopilotMessage = async (promptText: string) => {
     if (!promptText.trim() || !repo || centralCopilotThinking) return
@@ -417,13 +474,26 @@ function RepoDetailsContent() {
     setCentralCopilotInput('')
     setCentralCopilotThinking(true)
 
-    setCentralCopilotMessages((prev) => [...prev, { role: 'user', content: text }])
+    setCentralCopilotMessages((prev) => [
+      ...prev,
+      { role: 'user', content: text },
+      { role: 'assistant', content: '', reasoning: '', tool_calls: [], cards: [] },
+    ])
+
+    const previousHistory = centralCopilotMessages
+      .filter((m) => m.content && m.content.trim())
+      .map((m) => ({ role: m.role, content: m.content }))
 
     try {
       const res = await fetch(`/api/repos/${repo.ID}/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text }),
+        body: JSON.stringify({
+          message: text,
+          provider: selectedProvider,
+          model: selectedModel,
+          history: previousHistory,
+        }),
       })
 
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
@@ -431,9 +501,10 @@ function RepoDetailsContent() {
       const reader = res.body?.getReader()
       const decoder = new TextDecoder()
       let buffer = ''
-      let assistantMsg: { role: 'assistant'; content: string; tool_calls: any[]; cards: any[] } = {
+      let assistantMsg: { role: 'assistant'; content: string; reasoning?: string; tool_calls: any[]; cards: any[] } = {
         role: 'assistant',
         content: '',
+        reasoning: '',
         tool_calls: [],
         cards: [],
       }
@@ -445,12 +516,24 @@ function RepoDetailsContent() {
         const lines = buffer.split('\n\n')
         buffer = lines.pop() || ''
 
+        let hasNewData = false
         for (const line of lines) {
           if (line.startsWith('data: ')) {
             try {
               const ev = JSON.parse(line.slice(6))
-              if (ev.type === 'tool_start' && ev.tool_call) {
+              if (ev.type === 'thought' || ev.type === 'reasoning') {
+                assistantMsg.reasoning = (assistantMsg.reasoning ? assistantMsg.reasoning + '\n' : '') + (ev.reasoning || ev.content)
+                hasNewData = true
+              } else if (ev.type === 'tool_start' && ev.tool_call) {
                 assistantMsg.tool_calls.push(ev.tool_call)
+                hasNewData = true
+              } else if (ev.type === 'tool_end' && ev.tool_call) {
+                const existing = assistantMsg.tool_calls.find((tc: any) => tc.id === ev.tool_call.id)
+                if (existing) {
+                  existing.result = ev.tool_result?.output
+                  existing.error = ev.tool_result?.error
+                }
+                hasNewData = true
               } else if (ev.type === 'card' && ev.card) {
                 assistantMsg.cards.push(ev.card)
                 setLastCopilotCards((prev) => [...prev, ev.card])
@@ -459,25 +542,52 @@ function RepoDetailsContent() {
                 if (ev.card.type === 'critic') setCentralCanvasTab('critic')
                 if (ev.card.type === 'serp') setCentralCanvasTab('serp')
                 if (ev.card.type === 'cost') setCentralCanvasTab('cost')
+                hasNewData = true
               } else if (ev.type === 'chunk' && ev.content) {
                 assistantMsg.content += ev.content
+                hasNewData = true
               } else if (ev.type === 'done' && ev.content) {
                 assistantMsg.content = ev.content
+                hasNewData = true
               }
             } catch (e) {}
           }
         }
-      }
 
-      setCentralCopilotMessages((prev) => [...prev, assistantMsg])
+        if (hasNewData) {
+          setCentralCopilotMessages((prev) => {
+            const next = [...prev]
+            if (next.length > 0 && next[next.length - 1].role === 'assistant') {
+              next[next.length - 1] = {
+                ...assistantMsg,
+                tool_calls: [...assistantMsg.tool_calls],
+                cards: [...assistantMsg.cards],
+              }
+            }
+            return next
+          })
+        }
+      }
     } catch (err: any) {
-      setCentralCopilotMessages((prev) => [
-        ...prev,
-        {
-          role: 'assistant',
-          content: `Error communicating with orchestrator: ${err.message}`,
-        },
-      ])
+      setCentralCopilotMessages((prev) => {
+        const next = [...prev]
+        if (next.length > 0 && next[next.length - 1].role === 'assistant') {
+          next[next.length - 1] = {
+            role: 'assistant',
+            content: `Error communicating with Genkit orchestrator: ${err.message}`,
+            tool_calls: [],
+            cards: [],
+          }
+        } else {
+          next.push({
+            role: 'assistant',
+            content: `Error communicating with Genkit orchestrator: ${err.message}`,
+            tool_calls: [],
+            cards: [],
+          })
+        }
+        return next
+      })
     } finally {
       setCentralCopilotThinking(false)
     }
@@ -520,21 +630,55 @@ function RepoDetailsContent() {
       )
       setGlossaryInput(repo.settings.GlossaryTerms?.join(', ') || 'langPeanut, Superwall, Workspace')
       setKeyConvention(repo.settings.KeyConvention || 'camelCase')
+
+      const s = repo.settings as any
+      setWebhookPushEnabled(
+        s.webhook_push_enabled !== undefined
+          ? s.webhook_push_enabled
+          : s.WebhookPushEnabled !== undefined
+          ? s.WebhookPushEnabled
+          : true
+      )
+      setWebhookBranchFilter(
+        (s.webhook_branch_filter || s.WebhookBranchFilter || 'default_branch') as any
+      )
+      setWebhookCustomBranches(
+        s.webhook_custom_branches || s.WebhookCustomBranches || ''
+      )
+      setWebhookAction(
+        (s.webhook_action || s.WebhookAction || 'auto_pr') as any
+      )
+      setWebhookPRCommentsEnabled(
+        s.webhook_pr_comments_enabled !== undefined
+          ? s.webhook_pr_comments_enabled
+          : s.WebhookPRCommentsEnabled !== undefined
+          ? s.WebhookPRCommentsEnabled
+          : true
+      )
+      setWebhookCustomBranchPrefix(
+        s.webhook_custom_branch_prefix ||
+          s.WebhookCustomBranchPrefix ||
+          'langpeanut/i18n-'
+      )
+      setWebhookPathFilter(
+        s.webhook_path_filter || s.WebhookPathFilter || ''
+      )
     }
   }, [repo])
 
   // Sync SEO Strategy & Locales when seoData loads
   useEffect(() => {
     if (seoData?.strategy) {
+      if (seoData.strategy.category) setSeoCategory(seoData.strategy.category)
+      if (seoData.strategy.product_description) setSeoDescription(seoData.strategy.product_description)
       if (seoData.strategy.goal) setSeoGoal(seoData.strategy.goal)
       if (seoData.strategy.scope_tier) setSeoScope(seoData.strategy.scope_tier)
       if (seoData.strategy.competitor_urls && seoData.strategy.competitor_urls.length > 0) {
         setSeoCompetitorInput(seoData.strategy.competitor_urls.join(', '))
       }
-      if (seoData.strategy.target_locales && seoData.strategy.target_locales.length > 0) {
-        if (!seoData.strategy.target_locales.includes(seoLocale)) {
-          setSeoLocale(seoData.strategy.target_locales[0])
-        }
+      const validLocales = Array.from(new Set(['en', ...(seoData.strategy.target_locales || []), ...selectedLocales]))
+      if (!validLocales.includes(seoLocale)) {
+        setSeoLocale('en')
       }
     }
   }, [seoData])
@@ -572,6 +716,13 @@ function RepoDetailsContent() {
         root_dir: rootDirInput.trim(),
         existing_translations_mode: existingMode,
         user_directive: userDirective.trim(),
+        webhook_push_enabled: webhookPushEnabled,
+        webhook_branch_filter: webhookBranchFilter,
+        webhook_custom_branches: webhookCustomBranches.trim(),
+        webhook_action: webhookAction,
+        webhook_pr_comments_enabled: webhookPRCommentsEnabled,
+        webhook_custom_branch_prefix: webhookCustomBranchPrefix.trim(),
+        webhook_path_filter: webhookPathFilter.trim(),
       }
       if (apiKeyInput.trim()) {
         payload.api_key_override = apiKeyInput.trim()
@@ -597,6 +748,69 @@ function RepoDetailsContent() {
       setSettingsFeedback(e instanceof Error ? e.message : 'Error saving settings')
     } finally {
       setSavingSettings(false)
+    }
+  }
+
+  async function simulateWebhookPush(dryRun = true) {
+    if (!repo) return
+    setSimulatingPush(true)
+    setPushSimResult(null)
+    try {
+      const res = await fetch(`/api/repos/${repo.ID}/webhook/test-push`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          branch: selectedBranch || repo.DefaultBranch || 'main',
+          dry_run: dryRun,
+        }),
+      })
+      const data = await res.json()
+      setPushSimResult(data)
+      if (res.ok && data.matched) {
+        if (dryRun) {
+          toast.success(data.message || 'Push webhook simulation matched criteria!')
+        } else {
+          toast.success(data.message || 'Real push webhook job queued!')
+          mutateJobs()
+        }
+      } else if (res.ok) {
+        toast.warning(data.message || 'Push webhook skipped based on rules.')
+      } else {
+        toast.error(data.error || 'Webhook test failed')
+      }
+    } catch (e: any) {
+      setPushSimResult({ error: e.message })
+      toast.error(`Error simulating webhook: ${e.message}`)
+    } finally {
+      setSimulatingPush(false)
+    }
+  }
+
+  async function simulateBotCommand() {
+    if (!repo) return
+    if (!botSimInput.trim()) return
+    setSimulatingBot(true)
+    setBotSimResult(null)
+    try {
+      const res = await fetch(`/api/repos/${repo.ID}/webhook/test-bot`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ command: botSimInput.trim() }),
+      })
+      const data = await res.json()
+      setBotSimResult(data)
+      if (data.valid) {
+        toast.success(data.message || 'Bot command parsed successfully!')
+      } else {
+        toast.error(data.message || 'Invalid bot command')
+      }
+    } catch (e: any) {
+      setBotSimResult({ error: e.message })
+      toast.error(`Error testing bot command: ${e.message}`)
+    } finally {
+      setSimulatingBot(false)
     }
   }
 
@@ -633,6 +847,29 @@ function RepoDetailsContent() {
       showToast(e instanceof Error ? e.message : 'Failed to clear override', 'error')
     } finally {
       setSavingSettings(false)
+    }
+  }
+
+  async function handleQuickSwitchModel(newProvider: string, newModel: string) {
+    if (!repo) return
+    setSelectedProvider(newProvider)
+    setSelectedModel(newModel)
+    try {
+      const res = await fetch(`/api/repos/${repo.ID}/model`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ provider: newProvider, model: newModel }),
+      })
+      if (res.ok) {
+        const provLabel = PROVIDER_MODELS[newProvider]?.label || newProvider
+        showToast(`✓ Active model switched to ${newModel} (${provLabel})`)
+        mutateRepos()
+      } else {
+        showToast('Failed to update active model on server', 'error')
+      }
+    } catch {
+      showToast('Network error updating active model', 'error')
     }
   }
 
@@ -806,6 +1043,8 @@ function RepoDetailsContent() {
         credentials: 'include',
         body: JSON.stringify({
           project_name: repo.Name,
+          category: seoCategory,
+          product_description: seoDescription,
           goal: seoGoal,
           scope_tier: seoScope,
           target_locales: selectedLocales,
@@ -813,13 +1052,38 @@ function RepoDetailsContent() {
         }),
       })
       if (res.ok) {
-        showToast('SEO strategy and market targets saved')
+        showToast('SEO product domain & market settings saved')
         mutateSEO()
       } else {
         showToast('Failed to save SEO strategy', 'error')
       }
     } catch {
       showToast('Network error saving SEO strategy', 'error')
+    }
+  }
+
+  async function handleTriggerAnalyzeDomain() {
+    if (!repo) return
+    setAnalyzingDomain(true)
+    try {
+      const res = await fetch(`/api/repos/${repo.ID}/seo/analyze-domain`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+      })
+      const data = await res.json()
+      if (res.ok) {
+        setSeoCategory(data.category)
+        setSeoDescription(data.product_description)
+        showToast(`AI analyzed ${data.extracted_keys_count} strings: Domain set to "${data.category}"`)
+        mutateSEO()
+      } else {
+        showToast(data.error || 'AI domain analysis failed', 'error')
+      }
+    } catch {
+      showToast('Network error during AI domain analysis', 'error')
+    } finally {
+      setAnalyzingDomain(false)
     }
   }
 
@@ -837,6 +1101,8 @@ function RepoDetailsContent() {
         credentials: 'include',
         body: JSON.stringify({
           project_name: repo.Name,
+          category: seoCategory,
+          product_description: seoDescription,
           goal: seoGoal,
           scope_tier: seoScope,
           target_locales: selectedLocales,
@@ -922,7 +1188,7 @@ function RepoDetailsContent() {
       const data = await res.json()
       if (res.ok) {
         setDoctorReport(data)
-        showToast(`🩺 Doctor audit: Health score ${data.health_score}/100 (${data.status})`)
+        showToast(`Doctor audit: Health score ${data.health_score}/100 (${data.status})`)
       } else {
         showToast(data.error || 'Failed to run doctor audit', 'error')
       }
@@ -945,9 +1211,9 @@ function RepoDetailsContent() {
       if (res.ok) {
         mutateMatrix()
         if (data.total_dead_keys > 0) {
-          showToast(`🧹 Pruned ${data.total_dead_keys} stale keys across ${data.pruned_locales?.join(', ') || 'locale files'}`)
+          showToast(`Pruned ${data.total_dead_keys} stale keys across ${data.pruned_locales?.join(', ') || 'locale files'}`)
         } else {
-          showToast('✓ 100% Clean! No orphaned translation keys found.')
+          showToast('Clean. No orphaned translation keys found.')
         }
       } else {
         showToast(data.error || 'Failed to prune dead keys', 'error')
@@ -1294,7 +1560,7 @@ jobs:
         </div>
 
         {/* Tab Navigation */}
-        <div className="flex items-center gap-1.5 pt-2 border-t border-white/[0.05]">
+        <div className="flex items-center gap-1.5 pt-2 border-t border-white/[0.05] overflow-x-auto whitespace-nowrap pb-1">
           {[
             { id: 'copilot', label: 'Autonomous Copilot', badge: 'CORE' },
             { id: 'overview', label: 'Overview' },
@@ -1309,7 +1575,7 @@ jobs:
               variant="ghost"
               size="sm"
               onClick={() => setTab(t.id as any)}
-              className={`px-4 py-2 rounded-xl text-xs font-semibold h-auto flex items-center gap-2 ${
+              className={`px-4 py-2 rounded-xl text-xs font-semibold h-auto shrink-0 flex items-center gap-2 ${
                 activeTab === t.id
                   ? 'bg-blue-600/15 border border-blue-500/30 text-sky-300 shadow-md shadow-sky-950/50 hover:bg-blue-600/20 hover:text-sky-200'
                   : 'text-slate-400 hover:text-white hover:bg-white/[0.03]'
@@ -1327,161 +1593,647 @@ jobs:
       </div>
 
       {/* ─── TAB 0: AUTONOMOUS COPILOT WORKSPACE (DEDICATED CHAT PAGE) ───────────────────────────── */}
+      {/* ─── TAB 0: AUTONOMOUS COPILOT WORKSPACE (MODERN AI CHAT INTERFACE) ───────────────────────────── */}
       {activeTab === 'copilot' && (
-        <div className="max-w-4xl mx-auto w-full glass-panel rounded-2xl flex flex-col overflow-hidden border border-white/10 bg-[#080a0f] shadow-2xl min-h-[720px]">
-          {/* Header */}
-          <div className="p-4 border-b border-white/10 bg-[#0b0e14] flex items-center justify-between">
-            <div className="flex items-center gap-2.5">
-              <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
-              <div>
-                <h3 className="text-xs font-bold text-white font-mono uppercase tracking-wider">
-                  AUTONOMOUS MULTI-AGENT ORCHESTRATOR
-                </h3>
-                <p className="text-[11px] text-zinc-400 font-mono">
-                  Universal localization & growth engine for {repo.Owner}/{repo.Name}
-                </p>
+        <div className="w-full flex flex-col lg:flex-row gap-6 h-[calc(100vh-190px)] min-h-[640px]">
+          {/* Main Chat Canvas (Spacious Center Column) */}
+          <div className="flex-1 glass-panel rounded-2xl flex flex-col overflow-hidden border border-white/10 bg-[#090c13] shadow-2xl h-full">
+            {/* Top Bar matching reference */}
+            <div className="px-6 py-4 border-b border-white/[0.08] bg-[#0c1018] flex items-center justify-between shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-sky-500/20 to-indigo-500/20 border border-sky-500/30 flex items-center justify-center text-sky-400 font-bold text-xs">
+                  <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 2a10 10 0 0 1 10 10c0 5.523-4.477 10-10 10S2 17.523 2 12 6.477 2 12 2z"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><path d="M9 9h.01"/><path d="M15 9h.01"/></svg>
+                </div>
+                <div>
+                  <h2 className="text-sm font-bold text-white tracking-tight">AI Chat</h2>
+                  <p className="text-[11px] text-zinc-400 font-mono">
+                    Autonomous Multi-Agent Localization Copilot
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setActiveTab('settings')}
+                  className="px-3 py-1.5 rounded-lg bg-gradient-to-r from-amber-500/10 to-orange-500/10 border border-amber-500/30 hover:border-amber-500/50 text-amber-400 text-xs font-medium flex items-center gap-1.5 transition-all cursor-pointer shadow-xs"
+                >
+                  <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+                  <span>Vault Keys</span>
+                </button>
+
+                {/* Interactive Model & Provider Switcher Popover */}
+                <div className="relative">
+                  <button
+                    type="button"
+                    onClick={() => setIsModelDropdownOpen(!isModelDropdownOpen)}
+                    className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-zinc-900/90 hover:bg-zinc-800 border border-sky-500/30 hover:border-sky-500/60 text-zinc-200 text-xs font-mono transition-all cursor-pointer shadow-sm"
+                    title="Click to switch active AI model & provider"
+                  >
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                    <span className="font-semibold text-sky-300">{selectedModel}</span>
+                    <span className="text-[10px] text-zinc-400">({PROVIDER_MODELS[selectedProvider]?.label || selectedProvider})</span>
+                    <svg className="w-3 h-3 text-zinc-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                      <polyline points="6 9 12 15 18 9" />
+                    </svg>
+                  </button>
+
+                  {isModelDropdownOpen && (
+                    <div className="absolute right-0 mt-2 w-80 rounded-2xl bg-zinc-950/95 border border-white/15 shadow-2xl p-3.5 z-50 space-y-3 backdrop-blur-xl">
+                      <div className="flex items-center justify-between pb-2 border-b border-white/10">
+                        <span className="text-[11px] font-bold uppercase tracking-wider text-slate-300">
+                          Active Model & Provider
+                        </span>
+                        <span className="text-[10px] font-mono text-emerald-400">
+                          Instant Switch
+                        </span>
+                      </div>
+
+                      <div className="space-y-3 max-h-80 overflow-y-auto custom-scrollbar pr-1">
+                        {Object.entries(PROVIDER_MODELS).map(([provKey, prov]) => {
+                          const isCurProv = selectedProvider === provKey
+                          return (
+                            <div key={provKey} className="space-y-1.5">
+                              <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-wider text-zinc-400 px-1">
+                                <span>{prov.label}</span>
+                                <span className="font-mono text-zinc-500">[{prov.tag}]</span>
+                              </div>
+                              <div className="grid grid-cols-1 gap-1">
+                                {prov.models.map((m) => {
+                                  const isCurModel = isCurProv && selectedModel === m
+                                  const d = prov.details?.[m]
+                                  return (
+                                    <button
+                                      key={m}
+                                      type="button"
+                                      onClick={() => {
+                                        handleQuickSwitchModel(provKey, m)
+                                        setIsModelDropdownOpen(false)
+                                      }}
+                                      className={`w-full text-left px-2.5 py-1.5 rounded-xl text-xs flex items-center justify-between cursor-pointer transition-all ${
+                                        isCurModel
+                                          ? 'bg-sky-500/20 text-sky-300 font-semibold border border-sky-500/40'
+                                          : 'text-zinc-300 hover:bg-white/5 hover:text-white border border-transparent'
+                                      }`}
+                                    >
+                                      <div className="min-w-0 pr-2">
+                                        <div className="font-mono text-[11px] truncate flex items-center gap-1.5">
+                                          {isCurModel && <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />}
+                                          <span>{d?.name || m}</span>
+                                        </div>
+                                        {d && (
+                                          <div className="text-[10px] text-zinc-500 truncate">
+                                            {d.inputPrice} in • {d.outputPrice} out
+                                          </div>
+                                        )}
+                                      </div>
+                                      {isCurModel && <span className="text-sky-400 font-bold text-xs shrink-0">✓</span>}
+                                    </button>
+                                  )
+                                })}
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <button
+                  onClick={() =>
+                    setCentralCopilotMessages([
+                      {
+                        role: 'assistant',
+                        content: 'I am your langPeanut Copilot. I can inspect your AST for hardcoded UI strings, translate missing keys into target locales, run 4-tier ICU verification critics, simulate Google SERP previews, and modify repository settings. How can I help you today?',
+                      },
+                    ])
+                  }
+                  title="Reset conversation"
+                  className="p-2 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors text-xs cursor-pointer border border-transparent hover:border-white/10"
+                >
+                  <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" /><path d="M3 3v5h5" /></svg>
+                </button>
               </div>
             </div>
-            <div className="flex items-center gap-2">
-              <span className="text-[10px] font-mono px-2.5 py-1 rounded-md bg-zinc-800 text-zinc-300 border border-zinc-700">
-                {repo.settings?.Model || selectedModel || 'claude-sonnet-5'}
-              </span>
-              <button
-                onClick={() =>
-                  setCentralCopilotMessages([
-                    {
-                      role: 'assistant',
-                      content: 'Autonomous Multi-Agent Orchestrator initialized. Instruct the underlying supervisor to audit AST strings, execute translation batches, verify ICU variable integrity with 4-tier critics, or simulate Google SERP rankings.',
-                    },
-                  ])
-                }
-                title="Reset conversation"
-                className="p-1.5 rounded-md text-slate-400 hover:text-white hover:bg-zinc-800 transition-colors text-xs"
-              >
-                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" /><path d="M3 3v5h5" /></svg>
-              </button>
-            </div>
-          </div>
 
-          {/* Conversation Messages with Prompt-Kit Tool & Card UI */}
-          <div className="flex-1 p-6 overflow-y-auto space-y-4 text-xs custom-scrollbar min-h-[460px] max-h-[620px]">
-            {centralCopilotMessages.map((msg, idx) => (
-              <div
-                key={idx}
-                className={msg.role === 'user' ? 'flex justify-end' : 'flex justify-start gap-2.5 items-start'}
-              >
-                {msg.role === 'user' ? (
-                  <div className="max-w-[80%] bg-[#121622] border border-sky-500/40 text-zinc-100 rounded-2xl px-4 py-2.5 text-xs font-mono shadow-sm">
-                    <div className="text-[10px] uppercase text-sky-400 font-bold mb-1">User Directive</div>
-                    {msg.content}
-                  </div>
-                ) : (
-                  <>
-                    <div className="w-7 h-7 rounded-lg bg-sky-500/10 border border-sky-500/30 flex items-center justify-center text-sky-400 font-mono font-bold text-[11px] shrink-0 mt-0.5 shadow-xs">
-                      LP
+            {/* Conversation Messages with Modern Styled Cards */}
+            <div ref={chatContainerRef} className="flex-1 p-6 overflow-y-auto space-y-6 text-sm custom-scrollbar">
+              {centralCopilotMessages.map((msg, idx) => (
+                <div key={idx} className="space-y-3">
+                  {msg.role === 'user' ? (
+                    <div className="flex items-start gap-3 justify-end">
+                      <div className="max-w-[78%] bg-zinc-900 border border-white/10 text-zinc-100 rounded-2xl rounded-tr-xs px-4.5 py-3 text-sm shadow-sm leading-relaxed">
+                        {msg.content}
+                      </div>
+                      <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-sky-500 to-indigo-600 flex items-center justify-center text-white text-xs font-bold shrink-0 shadow-sm">
+                        U
+                      </div>
                     </div>
-                    <div className="max-w-[92%] space-y-2.5 flex-1 min-w-0">
-                      {msg.tool_calls && msg.tool_calls.length > 0 && (
-                        <div className="space-y-1.5">
-                          {msg.tool_calls.map((tc: any, tIdx: number) => (
-                            <Tool
-                              key={tIdx}
-                              toolPart={{
-                                type: tc.name || 'tool_invocation',
-                                state: tc.error ? 'output-error' : tc.result ? 'output-available' : 'output-available',
-                                input: tc.args,
-                                output: tc.result,
-                                toolCallId: tc.id,
-                                errorText: tc.error,
-                              }}
-                            />
-                          ))}
+                  ) : (
+                    <div className="flex items-start gap-3 justify-start">
+                      <div className="w-8 h-8 rounded-full bg-zinc-800 border border-white/10 flex items-center justify-center text-sky-400 font-bold text-xs shrink-0 mt-0.5 shadow-sm">
+                        <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4"/><line x1="8" y1="16" x2="8" y2="16"/><line x1="16" y1="16" x2="16" y2="16"/></svg>
+                      </div>
+                      <div className="flex-1 min-w-0 max-w-[92%] space-y-3">
+                        {msg.reasoning && (
+                          <Reasoning defaultOpen={false}>
+                            <div className="font-mono text-xs text-zinc-400 whitespace-pre-wrap">{msg.reasoning}</div>
+                          </Reasoning>
+                        )}
+
+                        {msg.tool_calls && msg.tool_calls.length > 0 && (
+                          <div className="space-y-2">
+                            {msg.tool_calls.map((tc: any, tIdx: number) => (
+                              <Tool
+                                key={tIdx}
+                                toolPart={{
+                                  type: tc.name || 'tool_invocation',
+                                  state: tc.error ? 'output-error' : tc.result ? 'output-available' : 'output-available',
+                                  input: tc.args,
+                                  output: tc.result,
+                                  toolCallId: tc.id,
+                                  errorText: tc.error,
+                                }}
+                              />
+                            ))}
+                          </div>
+                        )}
+
+                        {msg.cards && msg.cards.length > 0 && (
+                          <div className="space-y-2">
+                            {msg.cards.map((c: any, cIdx: number) => (
+                              <div key={cIdx} className="rounded-xl border border-white/10 bg-[#06080d] p-3 text-xs font-mono text-zinc-300">
+                                {c.rendered_text && (
+                                  <pre className="whitespace-pre overflow-x-auto custom-scrollbar">{c.rendered_text}</pre>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+
+                        {/* Assistant Message Bubble */}
+                        <div className="bg-[#10141d]/90 border border-white/[0.08] rounded-2xl rounded-tl-xs p-5 text-sm text-zinc-200 shadow-md space-y-3 font-sans leading-relaxed">
+                          <ReactMarkdown
+                            remarkPlugins={[remarkGfm]}
+                            components={{
+                              code({ className, children, ...props }) {
+                                const match = /language-(\w+)/.exec(className || '')
+                                const isInline = !match && !String(children).includes('\n')
+                                return isInline ? (
+                                  <code className="rounded bg-zinc-800/90 px-1.5 py-0.5 font-mono text-xs text-sky-300 border border-white/5" {...props}>
+                                    {children}
+                                  </code>
+                                ) : (
+                                  <pre className="rounded-xl bg-zinc-950 p-3.5 overflow-x-auto border border-white/10 font-mono text-xs custom-scrollbar my-2 text-zinc-200">
+                                    <code className={className} {...props}>
+                                      {children}
+                                    </code>
+                                  </pre>
+                                )
+                              },
+                              ul: ({ children }) => <ul className="list-disc pl-5 space-y-1.5 my-2">{children}</ul>,
+                              ol: ({ children }) => <ol className="list-decimal pl-5 space-y-1.5 my-2">{children}</ol>,
+                              li: ({ children }) => <li className="leading-relaxed">{children}</li>,
+                              p: ({ children }) => <p className="mb-2.5 last:mb-0 leading-relaxed">{children}</p>,
+                              strong: ({ children }) => <strong className="font-semibold text-white">{children}</strong>,
+                              h1: ({ children }) => <h1 className="text-base font-bold text-white mt-3 mb-1.5">{children}</h1>,
+                              h2: ({ children }) => <h2 className="text-sm font-bold text-white mt-2.5 mb-1">{children}</h2>,
+                              h3: ({ children }) => <h3 className="text-xs font-semibold text-sky-400 mt-2 mb-1">{children}</h3>,
+                            }}
+                          >
+                            {msg.content}
+                          </ReactMarkdown>
+
+                          {/* Message Actions (Like / Copy / Share) */}
+                          <div className="pt-2 border-t border-white/5 flex items-center justify-between text-xs text-zinc-400">
+                            <div className="flex items-center gap-2">
+                              <button
+                                onClick={() => toast.success('Feedback recorded')}
+                                className="p-1 rounded hover:bg-zinc-800 hover:text-zinc-200 transition-colors cursor-pointer"
+                                title="Good response"
+                              >
+                                <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M7 10v12"/><path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h3Z"/></svg>
+                              </button>
+                              <button
+                                onClick={() => toast.info('Feedback noted')}
+                                className="p-1 rounded hover:bg-zinc-800 hover:text-zinc-200 transition-colors cursor-pointer"
+                                title="Needs improvement"
+                              >
+                                <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M17 14V2"/><path d="M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H20a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-3Z"/></svg>
+                              </button>
+                            </div>
+                            <div className="flex items-center gap-3">
+                              <button
+                                onClick={() => {
+                                  navigator.clipboard.writeText(msg.content)
+                                  toast.success('Response copied to clipboard')
+                                }}
+                                className="flex items-center gap-1.5 hover:text-white transition-colors cursor-pointer"
+                              >
+                                <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+                                <span>Copy</span>
+                              </button>
+                              <button
+                                onClick={() => {
+                                  navigator.clipboard.writeText(window.location.href)
+                                  toast.success('Workspace link copied')
+                                }}
+                                className="flex items-center gap-1.5 hover:text-white transition-colors cursor-pointer"
+                              >
+                                <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg>
+                                <span>Share</span>
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+
+              {centralCopilotThinking && (
+                <div className="flex items-start gap-3">
+                  <div className="w-8 h-8 rounded-full bg-zinc-800 border border-white/10 flex items-center justify-center text-sky-400 font-bold text-xs shrink-0 mt-0.5">
+                    <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10" strokeDasharray="32" strokeDashoffset="12"/></svg>
+                  </div>
+                  <div className="bg-[#10141d] border border-white/[0.08] rounded-2xl px-4 py-3 text-xs text-zinc-400 flex items-center gap-2 font-mono">
+                    <span className="w-1.5 h-1.5 rounded-full bg-sky-400 animate-pulse" />
+                    <span className="w-1.5 h-1.5 rounded-full bg-sky-400 animate-pulse delay-100" />
+                    <span className="w-1.5 h-1.5 rounded-full bg-sky-400 animate-pulse delay-200" />
+                    <span className="ml-1">Executing autonomous pipeline...</span>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Floating Regenerate Button */}
+            {centralCopilotMessages.length > 1 && !centralCopilotThinking && (
+              <div className="flex justify-center -mb-3 z-10">
+                <button
+                  onClick={() => {
+                    const lastUserMsg = [...centralCopilotMessages].reverse().find((m) => m.role === 'user')
+                    if (lastUserMsg) {
+                      sendCentralCopilotMessage(lastUserMsg.content)
+                    }
+                  }}
+                  className="px-3.5 py-1 rounded-full bg-zinc-900 border border-white/15 hover:bg-zinc-800 text-zinc-300 hover:text-white text-xs flex items-center gap-1.5 shadow-lg transition-all cursor-pointer font-medium"
+                >
+                  <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" /><path d="M3 3v5h5" /></svg>
+                  <span>Regenerate</span>
+                </button>
+              </div>
+            )}
+
+            {/* Bottom Floating Input Card matching reference */}
+            <div className="p-4 border-t border-white/10 bg-[#0a0d14]">
+              <div className="rounded-2xl border border-white/10 bg-[#0e121b] p-3 shadow-xl space-y-2.5">
+                <div className="flex items-center gap-2">
+                  <textarea
+                    value={centralCopilotInput}
+                    onChange={(e) => setCentralCopilotInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault()
+                        sendCentralCopilotMessage(centralCopilotInput)
+                      }
+                    }}
+                    placeholder="Send a message..."
+                    rows={1}
+                    disabled={centralCopilotThinking}
+                    className="flex-1 bg-transparent text-sm text-zinc-100 placeholder:text-zinc-500 focus:outline-none resize-none min-h-[36px] max-h-32 leading-relaxed"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => sendCentralCopilotMessage(centralCopilotInput)}
+                    disabled={centralCopilotThinking || !centralCopilotInput.trim()}
+                    className="w-8 h-8 rounded-xl bg-sky-500 hover:bg-sky-400 disabled:opacity-40 text-black flex items-center justify-center transition-all cursor-pointer shrink-0 shadow-sm"
+                  >
+                    <svg className="w-4 h-4 transform rotate-45" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+                  </button>
+                </div>
+
+                {/* Action Pills & Counter */}
+                <div className="pt-2 border-t border-white/5 flex items-center justify-between text-xs relative">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    {/* Attach Popover Button */}
+                    <div className="relative">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowAttachModal(!showAttachModal)
+                          setShowDirectiveModal(false)
+                          setShowBrowsePromptsModal(false)
+                        }}
+                        className={`px-2.5 py-1 rounded-lg text-xs flex items-center gap-1.5 border transition-colors cursor-pointer ${
+                          showAttachModal
+                            ? 'bg-sky-500/20 text-sky-300 border-sky-500/40'
+                            : 'bg-zinc-800/70 hover:bg-zinc-700/80 text-zinc-300 border-white/5'
+                        }`}
+                      >
+                        <svg className="w-3.5 h-3.5 text-zinc-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+                        <span>Attach Context</span>
+                      </button>
+
+                      {/* Attach Dropdown Menu */}
+                      {showAttachModal && (
+                        <div className="absolute bottom-full left-0 mb-2 w-72 bg-[#121622] border border-white/15 rounded-xl shadow-2xl p-3 z-50 space-y-2 animate-in fade-in slide-in-from-bottom-2 duration-150">
+                          <div className="flex items-center justify-between border-b border-white/10 pb-2">
+                            <span className="text-xs font-semibold text-white">Attach Workspace Context</span>
+                            <button
+                              onClick={() => setShowAttachModal(false)}
+                              className="text-zinc-400 hover:text-white text-xs cursor-pointer"
+                            >
+                              ✕
+                            </button>
+                          </div>
+                          <div className="space-y-1">
+                            {[
+                              { label: 'Scan Codebase AST', text: 'Scan repository AST and audit hardcoded UI strings', desc: 'Runs Tree-sitter scout on project' },
+                              { label: 'Active Translation Matrix', text: 'Inspect translation matrix status and missing keys', desc: 'Checks database key-value catalogs' },
+                              { label: 'Repository Setup & Gaps', text: 'What settings and configuration items are missing for this repo?', desc: 'Audits API keys and locales' },
+                              { label: 'Recent Job Logs & PR', text: 'Show recent platform jobs and check GitHub PR status', desc: 'Queries execution telemetry' },
+                            ].map((item, idx) => (
+                              <button
+                                key={idx}
+                                type="button"
+                                onClick={() => {
+                                  setCentralCopilotInput((prev) => prev ? `${prev} - ${item.text}` : item.text)
+                                  setShowAttachModal(false)
+                                  toast.info(`Attached: ${item.label}`)
+                                }}
+                                className="w-full text-left p-2 rounded-lg hover:bg-zinc-800/80 transition-colors cursor-pointer group"
+                              >
+                                <div className="text-xs font-medium text-zinc-200 group-hover:text-sky-300">{item.label}</div>
+                                <div className="text-[10px] text-zinc-400 truncate">{item.desc}</div>
+                              </button>
+                            ))}
+                          </div>
                         </div>
                       )}
+                    </div>
 
-                      {msg.cards && msg.cards.length > 0 && (
-                        <div className="space-y-2">
-                          {msg.cards.map((c: any, cIdx: number) => (
-                            <div key={cIdx} className="rounded-xl border border-white/10 bg-[#050609] p-3 text-xs font-mono text-zinc-300">
-                              {c.rendered_text && (
-                                <pre className="whitespace-pre overflow-x-auto custom-scrollbar">{c.rendered_text}</pre>
-                              )}
+                    {/* Directive Popover Button */}
+                    <div className="relative">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowDirectiveModal(!showDirectiveModal)
+                          setShowAttachModal(false)
+                          setShowBrowsePromptsModal(false)
+                        }}
+                        className={`px-2.5 py-1 rounded-lg text-xs flex items-center gap-1.5 border transition-colors cursor-pointer ${
+                          showDirectiveModal
+                            ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                            : 'bg-zinc-800/70 hover:bg-zinc-700/80 text-zinc-300 border-white/5'
+                        }`}
+                      >
+                        <svg className="w-3.5 h-3.5 text-zinc-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+                        <span>Directive</span>
+                      </button>
+
+                      {/* Directive Popover Menu */}
+                      {showDirectiveModal && (
+                        <div className="absolute bottom-full left-0 mb-2 w-80 bg-[#121622] border border-white/15 rounded-xl shadow-2xl p-3 z-50 space-y-3 animate-in fade-in slide-in-from-bottom-2 duration-150">
+                          <div className="flex items-center justify-between border-b border-white/10 pb-2">
+                            <span className="text-xs font-semibold text-white">Custom Translation Directive</span>
+                            <button
+                              onClick={() => setShowDirectiveModal(false)}
+                              className="text-zinc-400 hover:text-white text-xs cursor-pointer"
+                            >
+                              ✕
+                            </button>
+                          </div>
+                          <div className="space-y-1.5">
+                            <div className="text-[11px] text-zinc-400 font-medium">Quick Style Presets:</div>
+                            <div className="flex flex-wrap gap-1">
+                              {[
+                                'Friendly, casual tone',
+                                'Strict formal business tone',
+                                'Protect brand names & terms',
+                                'Short UI button labels',
+                                'Latin American Spanish vocabulary',
+                              ].map((preset, idx) => (
+                                <button
+                                  key={idx}
+                                  type="button"
+                                  onClick={() => {
+                                    setCustomDirectiveText(preset)
+                                  }}
+                                  className="text-[10px] px-2 py-0.5 rounded-md bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-white/5 cursor-pointer"
+                                >
+                                  {preset}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                          <div className="space-y-1.5">
+                            <textarea
+                              value={customDirectiveText}
+                              onChange={(e) => setCustomDirectiveText(e.target.value)}
+                              placeholder="e.g. Always translate with a casual tone, and never translate product name 'Acme'"
+                              rows={2}
+                              className="w-full bg-black/40 border border-white/10 rounded-lg p-2 text-xs text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:border-amber-500/50 resize-none"
+                            />
+                          </div>
+                          <div className="flex items-center justify-end gap-2 pt-1">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (customDirectiveText.trim()) {
+                                  setCentralCopilotInput((prev) =>
+                                    prev
+                                      ? `${prev}\n[Directive: ${customDirectiveText.trim()}]`
+                                      : `Translate with directive: ${customDirectiveText.trim()}`
+                                  )
+                                  setShowDirectiveModal(false)
+                                  toast.success('Directive inserted into prompt')
+                                }
+                              }}
+                              className="px-2.5 py-1 rounded-md bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 text-xs cursor-pointer font-medium"
+                            >
+                              Insert into Prompt
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Browse Prompts Popover Button */}
+                    <div className="relative">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowBrowsePromptsModal(!showBrowsePromptsModal)
+                          setShowAttachModal(false)
+                          setShowDirectiveModal(false)
+                        }}
+                        className={`px-2.5 py-1 rounded-lg text-xs flex items-center gap-1.5 border transition-colors cursor-pointer ${
+                          showBrowsePromptsModal
+                            ? 'bg-purple-500/20 text-purple-300 border-purple-500/40'
+                            : 'bg-zinc-800/70 hover:bg-zinc-700/80 text-zinc-300 border-white/5'
+                        }`}
+                      >
+                        <svg className="w-3.5 h-3.5 text-zinc-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="m18 15-6-6-6 6"/></svg>
+                        <span>Browse Prompts</span>
+                      </button>
+
+                      {/* Browse Prompts Library Modal/Popover */}
+                      {showBrowsePromptsModal && (
+                        <div className="absolute bottom-full left-0 mb-2 w-96 bg-[#121622] border border-white/15 rounded-xl shadow-2xl p-3 z-50 max-h-[380px] overflow-y-auto space-y-3 animate-in fade-in slide-in-from-bottom-2 duration-150 custom-scrollbar">
+                          <div className="flex items-center justify-between border-b border-white/10 pb-2 sticky top-0 bg-[#121622] z-10">
+                            <div>
+                              <span className="text-xs font-semibold text-white">Prompt Template Library</span>
+                              <p className="text-[10px] text-zinc-400">Click to insert into message box or run directly</p>
+                            </div>
+                            <button
+                              onClick={() => setShowBrowsePromptsModal(false)}
+                              className="text-zinc-400 hover:text-white text-xs cursor-pointer"
+                            >
+                              ✕
+                            </button>
+                          </div>
+
+                          {[
+                            {
+                              category: 'AST & Codebase Inspection',
+                              prompts: [
+                                { title: 'Scan Repository AST', text: 'Scan repository and audit hardcoded UI strings across all components' },
+                                { title: 'Inspect String Safety', text: 'Inspect string context and verify ICU variable placeholder safety' },
+                              ],
+                            },
+                            {
+                              category: 'Cultural Translation & Localization',
+                              prompts: [
+                                { title: 'Translate Missing Keys', text: 'Translate missing keys into Spanish, German and Japanese in a casual tone' },
+                                { title: 'Estimate Token & Pricing Plan', text: 'Plan localization token cost and batch allocation for all target locales' },
+                              ],
+                            },
+                            {
+                              category: '4-Tier Critic & Quality Gate',
+                              prompts: [
+                                { title: 'Run 4-Tier Critic Verification', text: 'Run 4-tier verification critic on all locales (AST, ICU, Expansion, Parity)' },
+                                { title: 'Prune Dead Keys', text: 'Prune dead translation keys not referenced in source code' },
+                                { title: 'Run System Diagnostics', text: 'Run Doctor system diagnostics and verify API credentials' },
+                              ],
+                            },
+                            {
+                              category: 'Global SEO & Regional Growth',
+                              prompts: [
+                                { title: 'Simulate Google SERP Previews', text: 'Simulate Google SERP desktop and mobile search previews for Japanese and Spanish' },
+                                { title: 'Weave High-Converting Keywords', text: 'Weave high-converting regional keywords into localized product copy' },
+                              ],
+                            },
+                            {
+                              category: 'Platform Execution & Setup',
+                              prompts: [
+                                { title: 'Audit Setup & Missing Config', text: 'What repository settings, keys, or information are missing?' },
+                                { title: 'Trigger Background Localization Job', text: 'Trigger platform localization job on main branch' },
+                                { title: 'Query Recent Jobs & PR Status', text: 'Show recent platform jobs and check GitHub PR status' },
+                                { title: 'Check Safety Snapshots & Rollback', text: 'Show rollback checkpoints and snapshot history' },
+                              ],
+                            },
+                          ].map((cat, catIdx) => (
+                            <div key={catIdx} className="space-y-1.5">
+                              <div className="text-[10px] font-mono uppercase text-sky-400 tracking-wider font-semibold">
+                                {cat.category}
+                              </div>
+                              <div className="space-y-1">
+                                {cat.prompts.map((p, pIdx) => (
+                                  <div
+                                    key={pIdx}
+                                    className="p-2 rounded-lg bg-zinc-900/60 border border-white/5 hover:border-white/15 transition-all flex items-center justify-between gap-2 group"
+                                  >
+                                    <div
+                                      onClick={() => {
+                                        setCentralCopilotInput(p.text)
+                                        setShowBrowsePromptsModal(false)
+                                        toast.info('Template inserted into message box')
+                                      }}
+                                      className="flex-1 cursor-pointer"
+                                    >
+                                      <div className="text-xs font-medium text-zinc-200 group-hover:text-sky-300">{p.title}</div>
+                                      <div className="text-[10px] text-zinc-400 line-clamp-1">{p.text}</div>
+                                    </div>
+                                    <div className="flex items-center gap-1 shrink-0">
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setCentralCopilotInput(p.text)
+                                          setShowBrowsePromptsModal(false)
+                                          toast.info('Template inserted')
+                                        }}
+                                        className="px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-[10px] cursor-pointer"
+                                        title="Insert into input"
+                                      >
+                                        Insert
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setShowBrowsePromptsModal(false)
+                                          sendCentralCopilotMessage(p.text)
+                                        }}
+                                        className="px-2 py-0.5 rounded bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 text-[10px] cursor-pointer font-medium"
+                                        title="Run immediately"
+                                      >
+                                        Run
+                                      </button>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
                             </div>
                           ))}
                         </div>
                       )}
-
-                      <div className="bg-[#0b0e14] border border-[#1c212e] rounded-2xl p-4 text-xs text-zinc-200 shadow-md space-y-2 font-sans leading-relaxed whitespace-pre-wrap">
-                        {msg.content}
-                      </div>
                     </div>
-                  </>
-                )}
-              </div>
-            ))}
-            {centralCopilotThinking && (
-              <div className="flex justify-start gap-2.5 items-start w-full">
-                <div className="w-7 h-7 rounded-lg bg-sky-500/10 border border-sky-500/30 flex items-center justify-center text-sky-400 font-mono font-bold text-[11px] shrink-0 mt-0.5">
-                  LP
-                </div>
-                <div className="bg-[#0b0e14] border border-[#1c212e] rounded-xl px-3.5 py-2.5 text-xs text-zinc-400 flex items-center gap-2 font-mono">
-                  <span className="w-1.5 h-1.5 rounded-full bg-sky-400 animate-pulse" />
-                  <span className="w-1.5 h-1.5 rounded-full bg-sky-400 animate-pulse delay-100" />
-                  <span className="w-1.5 h-1.5 rounded-full bg-sky-400 animate-pulse delay-200" />
-                  <span className="ml-1 text-[11px]">Executing deterministic pipeline...</span>
+                  </div>
+                  <div className="text-[11px] font-mono text-zinc-500">
+                    {centralCopilotInput.length} / 3,000
+                  </div>
                 </div>
               </div>
-            )}
+
+              <p className="text-[10px] text-center text-zinc-500 mt-2 font-mono">
+                langPeanut may generate suggestions requiring developer review. Engine: Google Genkit Go.
+              </p>
+            </div>
           </div>
 
-          {/* Quick Action Suggestions (Prompt-Kit PromptSuggestion) */}
-          <div className="px-6 py-2.5 border-t border-white/5 bg-[#06080d] flex flex-wrap items-center gap-2 text-[11px] font-mono">
-            <span className="text-[10px] uppercase text-zinc-500 font-semibold mr-1">Suggestions:</span>
-            <PromptSuggestion onClick={() => sendCentralCopilotMessage('Scan repository and calculate coverage matrix')}>
-              Scan AST
-            </PromptSuggestion>
-            <PromptSuggestion onClick={() => sendCentralCopilotMessage('Translate missing keys into Spanish, German and Japanese')}>
-              Translate Missing
-            </PromptSuggestion>
-            <PromptSuggestion onClick={() => sendCentralCopilotMessage('Execute 4-tier verification critic on all locales')}>
-              4-Tier Critic
-            </PromptSuggestion>
-            <PromptSuggestion onClick={() => sendCentralCopilotMessage('Simulate Japanese Google SERP preview')}>
-              SERP Preview
-            </PromptSuggestion>
-            <PromptSuggestion onClick={() => sendCentralCopilotMessage('List checkpoints or undo last changes')}>
-              Checkpoints
-            </PromptSuggestion>
-            <PromptSuggestion onClick={() => sendCentralCopilotMessage('Diagnose repository framework and localization readiness')}>
-              Diagnostics
-            </PromptSuggestion>
-          </div>
+          {/* Right Sidebar: Recent Tasks / Quick Actions matching reference */}
+          <div className="w-full lg:w-80 glass-panel rounded-2xl flex flex-col border border-white/10 bg-[#090c13] shadow-xl p-4 space-y-4 shrink-0 overflow-y-auto custom-scrollbar">
+            <div className="flex items-center justify-between border-b border-white/10 pb-3">
+              <h3 className="text-xs font-bold text-white font-mono uppercase tracking-wider">
+                Recent Tasks (7)
+              </h3>
+              <span className="text-[10px] font-mono text-zinc-400">Workflows</span>
+            </div>
 
-          {/* Prompt-Kit PromptInput Bar */}
-          <div className="p-4 border-t border-white/10 bg-[#0b0e14]">
-            <PromptInput
-              value={centralCopilotInput}
-              onValueChange={setCentralCopilotInput}
-              onSubmit={() => sendCentralCopilotMessage(centralCopilotInput)}
-              isLoading={centralCopilotThinking}
-              disabled={centralCopilotThinking}
-            >
-              <PromptInputTextarea
-                placeholder="Instruct agent or query repository (e.g. 'Scan AST', 'Translate missing keys to German', 'Run critic')..."
-              />
-              <PromptInputActions>
-                <span className="text-[11px] text-zinc-500 font-mono">Enter to send, Shift+Enter for newline</span>
+            <div className="space-y-2">
+              {[
+                { title: 'Scan Repository AST', desc: 'Audit strings & build coverage matrix', cmd: 'Scan repository and calculate coverage matrix' },
+                { title: 'Translate Missing Keys', desc: 'Batch translate with ICU variable safety', cmd: 'Translate missing keys into Spanish, German and Japanese' },
+                { title: '4-Tier Critic Verification', desc: 'Check syntax, variables & expansion', cmd: 'Execute 4-tier verification critic on all locales' },
+                { title: 'Simulate Google SERP', desc: 'Generate 600px search previews', cmd: 'Simulate Japanese Google SERP preview' },
+                { title: 'Scout Brand Persona', desc: 'Infer tone & glossary lexicon', cmd: 'Scout brand persona and recommended voice' },
+                { title: 'Prune Dead Keys', desc: 'Clean orphaned dictionary entries', cmd: 'Analyze and prune dead unused keys' },
+                { title: 'Manage Checkpoints', desc: 'Rollback snapshots & safety points', cmd: 'List checkpoints or undo last changes' },
+              ].map((task, tIdx) => (
                 <button
-                  type="button"
-                  onClick={() => sendCentralCopilotMessage(centralCopilotInput)}
-                  disabled={centralCopilotThinking || !centralCopilotInput.trim()}
-                  className="px-4 py-2 bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white rounded-xl font-medium text-xs flex items-center gap-1.5 transition-all cursor-pointer font-mono shadow-sm"
+                  key={tIdx}
+                  onClick={() => sendCentralCopilotMessage(task.cmd)}
+                  className="w-full text-left p-3 rounded-xl bg-zinc-900/60 hover:bg-zinc-800/80 border border-white/5 hover:border-sky-500/30 transition-all group cursor-pointer space-y-1 shadow-xs"
                 >
-                  <span>Execute</span>
-                  <span>→</span>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-semibold text-zinc-200 group-hover:text-sky-300 transition-colors">
+                      {task.title}
+                    </span>
+                    <span className="text-[10px] text-zinc-500 font-mono">Run →</span>
+                  </div>
+                  <p className="text-[11px] text-zinc-400 line-clamp-1">{task.desc}</p>
                 </button>
-              </PromptInputActions>
-            </PromptInput>
+              ))}
+            </div>
           </div>
         </div>
       )}
@@ -1559,8 +2311,8 @@ jobs:
           <div className="glass-panel p-6 rounded-2xl space-y-4 border border-sky-500/20 bg-sky-950/10">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-sky-500/20 border border-sky-500/30 text-sky-400 flex items-center justify-center font-bold text-base">
-                  🩺
+                <div className="w-10 h-10 rounded-xl bg-sky-500/20 border border-sky-500/30 text-sky-400 flex items-center justify-center font-bold text-xs font-mono">
+                  DOC
                 </div>
                 <div>
                   <h3 className="text-sm font-bold text-white flex items-center gap-2">
@@ -1589,7 +2341,7 @@ jobs:
                 disabled={runningDoctor}
                 className="rounded-xl bg-sky-600 hover:bg-sky-500 disabled:bg-sky-900 text-white text-xs font-semibold px-4 py-2 cursor-pointer shadow-lg shadow-sky-600/30 flex items-center gap-1.5 shrink-0"
               >
-                {runningDoctor ? 'Analyzing Codebase…' : 'Run Health Check 🩺'}
+                {runningDoctor ? 'Analyzing Codebase…' : 'Run Health Check'}
               </button>
             </div>
 
@@ -1618,14 +2370,20 @@ jobs:
                   <div className="space-y-1.5 pt-1">
                     {doctorReport.issues.map((iss: any, idx: number) => (
                       <div key={idx} className="p-2.5 rounded-xl bg-slate-900/60 border border-white/5 flex items-start gap-2.5 text-xs">
-                        <span className="text-sm">
-                          {iss.severity === 'ERROR' ? '❌' : iss.severity === 'WARNING' ? '⚠️' : 'ℹ️'}
+                        <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded font-bold ${
+                          iss.severity === 'ERROR'
+                            ? 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
+                            : iss.severity === 'WARNING'
+                            ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+                            : 'bg-sky-500/10 text-sky-400 border border-sky-500/20'
+                        }`}>
+                          {iss.severity}
                         </span>
                         <div className="flex-1 min-w-0">
                           <div className="font-semibold text-white">{iss.title}</div>
                           <div className="text-slate-400 text-[11px] mt-0.5">{iss.description}</div>
                           {iss.auto_fix_hint && (
-                            <div className="text-sky-300 text-[11px] mt-1 font-mono">💡 {iss.auto_fix_hint}</div>
+                            <div className="text-sky-300 text-[11px] mt-1 font-mono">Fix: {iss.auto_fix_hint}</div>
                           )}
                         </div>
                       </div>
@@ -1770,7 +2528,7 @@ jobs:
                 disabled={discoveringPersona}
                 className="rounded-xl bg-purple-600/20 hover:bg-purple-600/30 border border-purple-500/40 text-purple-300 text-xs font-semibold px-3.5 py-1.5 flex items-center gap-1.5 cursor-pointer transition-all shrink-0"
               >
-                {discoveringPersona ? 'Mining Assets…' : '✨ Auto-Discover Persona & Tone'}
+                {discoveringPersona ? 'Mining Assets…' : 'Auto-Discover Persona & Tone'}
               </button>
             </div>
 
@@ -1813,8 +2571,10 @@ jobs:
                   value={selectedProvider}
                   onChange={(e) => {
                     const p = e.target.value
+                    const nextModel = PROVIDER_MODELS[p]?.models[0] || ''
                     setSelectedProvider(p)
-                    setSelectedModel(PROVIDER_MODELS[p]?.models[0] || '')
+                    setSelectedModel(nextModel)
+                    handleQuickSwitchModel(p, nextModel)
                   }}
                   className="w-full rounded-xl bg-slate-900 border border-white/10 px-3.5 py-2 text-xs text-white focus:outline-none focus:border-sky-400"
                 >
@@ -1830,7 +2590,11 @@ jobs:
                 <label className="text-[11px] font-semibold text-slate-300 block mb-1">Model</label>
                 <select
                   value={selectedModel}
-                  onChange={(e) => setSelectedModel(e.target.value)}
+                  onChange={(e) => {
+                    const nextModel = e.target.value
+                    setSelectedModel(nextModel)
+                    handleQuickSwitchModel(selectedProvider, nextModel)
+                  }}
                   className="w-full rounded-xl bg-slate-900 border border-white/10 px-3.5 py-2 text-xs text-white focus:outline-none focus:border-sky-400"
                 >
                   {PROVIDER_MODELS[selectedProvider]?.models.map((m) => {
@@ -1911,9 +2675,20 @@ jobs:
                 <div className="flex items-center justify-between">
                   <label className="text-[11px] font-semibold text-slate-300 flex items-center gap-2">
                     <span>Optional Per-Repo Key Override</span>
-                    {repo.settings?.has_api_key_override && (
+                    {repo.settings?.has_api_key_override ? (
                       <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 font-bold">
                         Repo Override Active
+                      </span>
+                    ) : (
+                      <span className={cn(
+                        "text-[10px] font-mono px-2 py-0.5 rounded border font-semibold",
+                        isProviderConfigured(selectedProvider)
+                          ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
+                          : "bg-amber-500/10 text-amber-400 border-amber-500/20"
+                      )}>
+                        {isProviderConfigured(selectedProvider)
+                          ? `✓ Inheriting Global Vault Key (${PROVIDER_MODELS[selectedProvider]?.label || selectedProvider})`
+                          : `⚠ No Key in Global Vault for ${PROVIDER_MODELS[selectedProvider]?.label || selectedProvider}`}
                       </span>
                     )}
                   </label>
@@ -2034,12 +2809,175 @@ jobs:
               </div>
             </div>
 
-            {/* ── Section 5: UI Integration Directive (UI Switcher Agent) ── */}
+            {/* ── Section 5: GitHub Push & Webhook Autopilot Engine ── */}
+            <div className="pt-5 border-t border-white/[0.08] space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div>
+                  <h3 className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-2">
+                    <span className="text-emerald-400">Section 5</span> — GitHub Push & Webhook Autopilot Engine
+                    <span className={cn(
+                      "text-[10px] font-mono px-2 py-0.5 rounded-full border font-semibold",
+                      webhookPushEnabled
+                        ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/30"
+                        : "bg-slate-800 text-slate-400 border-white/10"
+                    )}>
+                      {webhookPushEnabled ? "● Autopilot Active" : "○ Manual Trigger Only"}
+                    </span>
+                  </h3>
+                  <p className="text-[11px] text-slate-400 mt-0.5">
+                    Automatically trigger localization runs when code is pushed to GitHub or when team members mention @langpeanut in PRs.
+                  </p>
+                </div>
+
+                {/* Autopilot Master Switch */}
+                <div className="flex items-center gap-2.5 bg-slate-900/90 border border-white/10 px-3.5 py-1.5 rounded-xl shrink-0">
+                  <span className="text-xs font-semibold text-slate-300">
+                    {webhookPushEnabled ? 'Push Trigger ON' : 'Push Trigger OFF'}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setWebhookPushEnabled(!webhookPushEnabled)}
+                    className={cn(
+                      "w-11 h-6 flex items-center rounded-full p-1 cursor-pointer transition-colors duration-200",
+                      webhookPushEnabled ? "bg-emerald-600 justify-end" : "bg-slate-700 justify-start"
+                    )}
+                  >
+                    <div className="bg-white w-4 h-4 rounded-full shadow-md transform transition-transform" />
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 pt-2">
+                {/* 1. Branch Strategy */}
+                <div>
+                  <label className="text-[11px] font-semibold text-slate-300 block mb-1">
+                    Monitored Branch Strategy
+                  </label>
+                  <select
+                    value={webhookBranchFilter}
+                    onChange={(e) => setWebhookBranchFilter(e.target.value as any)}
+                    className="w-full rounded-xl bg-slate-900 border border-white/10 px-3.5 py-2 text-xs text-white focus:outline-none focus:border-sky-400"
+                  >
+                    <option value="default_branch">Default Branch Only ({repo.DefaultBranch || 'main'})</option>
+                    <option value="all">All Branches (Trigger on any branch push)</option>
+                    <option value="custom">Custom Branch Filter (Globs / Patterns)</option>
+                  </select>
+                  <p className="text-[10px] text-slate-500 mt-1">
+                    {webhookBranchFilter === 'default_branch' && `Only pushes to ${repo.DefaultBranch || 'main'} will trigger automated localization.`}
+                    {webhookBranchFilter === 'all' && 'Every branch push to this repo will trigger an autonomous localization pass.'}
+                    {webhookBranchFilter === 'custom' && 'Only branches matching the custom glob patterns below will trigger jobs.'}
+                  </p>
+                </div>
+
+                {/* 2. Target Action */}
+                <div>
+                  <label className="text-[11px] font-semibold text-slate-300 block mb-1">
+                    Autopilot Trigger Action
+                  </label>
+                  <select
+                    value={webhookAction}
+                    onChange={(e) => setWebhookAction(e.target.value as any)}
+                    className="w-full rounded-xl bg-slate-900 border border-white/10 px-3.5 py-2 text-xs text-white focus:outline-none focus:border-sky-400"
+                  >
+                    <option value="auto_pr">Open Automated Pull Request (Recommended)</option>
+                    <option value="direct_commit">Direct Commit & Push to Pushed Branch</option>
+                    <option value="draft_pr">Open Draft Pull Request</option>
+                  </select>
+                  <p className="text-[10px] text-slate-500 mt-1">
+                    {webhookAction === 'auto_pr' && 'Creates a dedicated branch and opens a verified Pull Request for review.'}
+                    {webhookAction === 'direct_commit' && 'Commits translation catalogs directly back to the target branch.'}
+                    {webhookAction === 'draft_pr' && 'Opens a draft Pull Request without notifying reviewers.'}
+                  </p>
+                </div>
+
+                {/* 3. PR Bot Comment Commands */}
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-[11px] font-semibold text-slate-300 block">
+                      @langpeanut PR Bot Commands
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => setWebhookPRCommentsEnabled(!webhookPRCommentsEnabled)}
+                      className={cn(
+                        "w-8 h-4 flex items-center rounded-full p-0.5 cursor-pointer transition-colors duration-200",
+                        webhookPRCommentsEnabled ? "bg-sky-600 justify-end" : "bg-slate-700 justify-start"
+                      )}
+                    >
+                      <div className="bg-white w-3 h-3 rounded-full shadow-sm" />
+                    </button>
+                  </div>
+                  <div className="p-2.5 rounded-xl bg-slate-900/90 border border-white/10 text-xs">
+                    <span className="text-[11px] text-slate-300 font-medium block">
+                      {webhookPRCommentsEnabled ? '✓ PR Bot Mentions Active' : '✕ PR Bot Mentions Disabled'}
+                    </span>
+                    <p className="text-[10px] text-slate-500 mt-0.5">
+                      Enables commands like <code className="text-sky-400 font-mono">@langpeanut translate</code> in PR comments.
+                    </p>
+                  </div>
+                </div>
+
+                {/* Custom Branch Pattern (Conditional) */}
+                {webhookBranchFilter === 'custom' && (
+                  <div className="sm:col-span-2 lg:col-span-3">
+                    <label className="text-[11px] font-semibold text-slate-300 block mb-1">
+                      Custom Monitored Branch Patterns (Comma-separated)
+                    </label>
+                    <input
+                      type="text"
+                      value={webhookCustomBranches}
+                      onChange={(e) => setWebhookCustomBranches(e.target.value)}
+                      placeholder="e.g. main, master, release/*, feat/i18n-*"
+                      className="w-full rounded-xl bg-slate-900 border border-white/10 px-3.5 py-2 text-xs text-white font-mono placeholder:text-slate-600 focus:border-sky-400 focus:outline-none"
+                    />
+                    <p className="text-[10px] text-slate-500 mt-1">
+                      Supports exact branch names and glob wildcards (e.g. <code className="text-slate-400 font-mono">release/*</code>).
+                    </p>
+                  </div>
+                )}
+
+                {/* Custom Branch Prefix */}
+                <div>
+                  <label className="text-[11px] font-semibold text-slate-300 block mb-1">
+                    Automated PR Branch Prefix
+                  </label>
+                  <input
+                    type="text"
+                    value={webhookCustomBranchPrefix}
+                    onChange={(e) => setWebhookCustomBranchPrefix(e.target.value)}
+                    placeholder="e.g. langpeanut/i18n-, l10n/, i18n/auto-"
+                    className="w-full rounded-xl bg-slate-900 border border-white/10 px-3.5 py-2 text-xs text-white font-mono placeholder:text-slate-600 focus:border-sky-400 focus:outline-none"
+                  />
+                  <p className="text-[10px] text-slate-500 mt-1">
+                    Branch name format: <code className="text-slate-400 font-mono">{webhookCustomBranchPrefix || 'langpeanut/i18n-'}[timestamp]-[sha]</code>
+                  </p>
+                </div>
+
+                {/* Ignored / Monitored File Paths */}
+                <div className="sm:col-span-2">
+                  <label className="text-[11px] font-semibold text-slate-300 block mb-1">
+                    Path Filter / Monitored Folders (Optional)
+                  </label>
+                  <input
+                    type="text"
+                    value={webhookPathFilter}
+                    onChange={(e) => setWebhookPathFilter(e.target.value)}
+                    placeholder="e.g. src/**, app/**, lib/** (leave empty to monitor all source files)"
+                    className="w-full rounded-xl bg-slate-900 border border-white/10 px-3.5 py-2 text-xs text-white font-mono placeholder:text-slate-600 focus:border-sky-400 focus:outline-none"
+                  />
+                  <p className="text-[10px] text-slate-500 mt-1">
+                    Pushes that touch only excluded assets or docs will be intelligently skipped.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* ── Section 6: UI Integration Directive (UI Switcher Agent) ── */}
             <div className="pt-5 border-t border-white/[0.08] space-y-3">
               <div className="flex items-center justify-between">
                 <div>
                   <h3 className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
-                    <span className="text-sky-400">Section 5</span> — UI Integration Directive (UI Switcher Agent)
+                    <span className="text-sky-400">Section 6</span> — UI Integration Directive (UI Switcher Agent)
                   </h3>
                   <p className="text-[11px] text-slate-400 mt-0.5">
                     Autonomous post-localization UI generation. Instruct the agent to build and auto-link a language switcher component into your UI layout.
@@ -2507,6 +3445,90 @@ jobs:
               </div>
             </div>
 
+            {/* AST Discovery & Domain Overview Readiness Banner */}
+            <div className="pt-2">
+              {(seoData?.extracted_keys_count && seoData.extracted_keys_count > 0 && seoCategory) ? (
+                <div className="flex items-center justify-between px-3 py-2 rounded-xl bg-sky-500/10 border border-sky-500/20 text-xs text-sky-200">
+                  <div className="flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+                    <span>
+                      <strong>AI Domain Grounded</strong>: Analyzed <strong>{seoData.extracted_keys_count}</strong> extracted UI strings. Inferred Domain: <em>"{seoCategory}"</em>
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleTriggerAnalyzeDomain}
+                      disabled={analyzingDomain}
+                      className="text-[11px] font-medium px-2.5 py-1 rounded bg-sky-600/30 hover:bg-sky-600/50 text-sky-200 border border-sky-500/30 flex items-center gap-1.5 cursor-pointer transition-all"
+                    >
+                      <svg className={`w-3 h-3 ${analyzingDomain ? 'animate-spin' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                        <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" />
+                      </svg>
+                      <span>{analyzingDomain ? 'Analyzing...' : 'Re-Analyze with AI'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('matrix')}
+                      className="text-[11px] font-mono text-sky-400 hover:text-sky-300 underline cursor-pointer"
+                    >
+                      View Matrix
+                    </button>
+                  </div>
+                </div>
+              ) : (seoData?.extracted_keys_count && seoData.extracted_keys_count > 0) ? (
+                <div className="flex items-center justify-between px-3 py-2 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-xs text-indigo-200">
+                  <div className="flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-indigo-400 shrink-0" />
+                    <span>
+                      <strong>Strings Extracted ({seoData.extracted_keys_count} keys)</strong>: Run AI Domain Analysis to let the LLM inspect your UI copy and infer product overview.
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleTriggerAnalyzeDomain}
+                    disabled={analyzingDomain}
+                    className="text-[11px] font-medium px-3 py-1 rounded bg-indigo-600/40 hover:bg-indigo-600/60 text-indigo-100 border border-indigo-500/40 flex items-center gap-1.5 cursor-pointer transition-all shadow-sm"
+                  >
+                    <svg className={`w-3 h-3 ${analyzingDomain ? 'animate-spin' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                      <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" />
+                    </svg>
+                    <span>{analyzingDomain ? 'Analyzing UI Strings...' : 'Analyze Domain with AI'}</span>
+                  </button>
+                </div>
+              ) : (
+                <div className="flex items-center justify-between px-3 py-2 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs text-amber-200">
+                  <div className="flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-amber-400 shrink-0" />
+                    <span>
+                      <strong>No Keys in Matrix Yet</strong>: Extract UI strings from your codebase so the AI Agent can analyze your software domain and value proposition.
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleTriggerAnalyzeDomain}
+                      disabled={analyzingDomain}
+                      className="text-[11px] font-medium px-2.5 py-1 rounded bg-amber-600/30 hover:bg-amber-600/50 text-amber-100 border border-amber-500/40 flex items-center gap-1.5 cursor-pointer transition-all"
+                    >
+                      <svg className={`w-3 h-3 ${analyzingDomain ? 'animate-spin' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                        <circle cx="11" cy="11" r="8" />
+                        <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                      </svg>
+                      <span>{analyzingDomain ? 'Extracting...' : 'Extract & Analyze with AI'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={triggerJob}
+                      className="text-[11px] font-medium px-2.5 py-1 rounded bg-indigo-600/30 hover:bg-indigo-600/50 text-indigo-200 border border-indigo-500/30 cursor-pointer"
+                    >
+                      Trigger Full Job
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+
             {/* Strategic Controls Bar */}
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 pt-3 border-t border-white/[0.06]">
               {/* Target Locale Selector */}
@@ -2517,7 +3539,7 @@ jobs:
                   onChange={(e) => setSeoLocale(e.target.value)}
                   className="w-full rounded-xl bg-slate-900/80 border border-white/10 text-white text-xs px-3 py-2 font-medium focus:border-sky-500 focus:outline-none"
                 >
-                  {selectedLocales.map((loc) => {
+                  {Array.from(new Set(['en', ...selectedLocales])).map((loc) => {
                     const found = AVAILABLE_LANGUAGES.find((l) => l.code === loc)
                     return (
                       <option key={loc} value={loc}>
@@ -2565,6 +3587,61 @@ jobs:
                   onChange={(e) => setSeoCompetitorInput(e.target.value)}
                   onBlur={handleSaveSEOStrategy}
                   className="w-full rounded-xl bg-slate-900/80 border border-white/10 text-white text-xs px-3 py-2 placeholder:text-slate-600 focus:border-sky-500 focus:outline-none"
+                />
+              </div>
+            </div>
+
+            {/* Product Domain & Value Proposition Customizer */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-3 border-t border-white/[0.06]">
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <label className="text-[11px] font-semibold text-slate-300 uppercase tracking-wider">Product Domain / Category</label>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={handleTriggerAnalyzeDomain}
+                      disabled={analyzingDomain}
+                      className="text-[10px] px-2 py-0.5 rounded bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 border border-sky-500/30 transition-all flex items-center gap-1 cursor-pointer"
+                    >
+                      <svg className={`w-2.5 h-2.5 ${analyzingDomain ? 'animate-spin' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                        <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" />
+                      </svg>
+                      <span>Analyze with AI</span>
+                    </button>
+                    {['Localization AI', 'Developer Tool', 'SaaS Platform'].map((preset) => (
+                      <button
+                        key={preset}
+                        type="button"
+                        onClick={() => {
+                          setSeoCategory(preset)
+                          setTimeout(handleSaveSEOStrategy, 50)
+                        }}
+                        className="text-[10px] px-1.5 py-0.5 rounded bg-white/[0.04] hover:bg-sky-500/20 text-slate-400 hover:text-sky-300 border border-white/[0.06] transition-all cursor-pointer"
+                      >
+                        {preset}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <input
+                  type="text"
+                  placeholder="Click 'Analyze with AI' or type category..."
+                  value={seoCategory}
+                  onChange={(e) => setSeoCategory(e.target.value)}
+                  onBlur={handleSaveSEOStrategy}
+                  className="w-full rounded-xl bg-slate-900/80 border border-white/10 text-white text-xs px-3 py-2 font-medium focus:border-sky-500 focus:outline-none"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-[11px] font-semibold text-slate-300 uppercase tracking-wider">Product Overview & Core Value Prop</label>
+                <input
+                  type="text"
+                  placeholder="2-sentence product description inferred from extracted UI copy..."
+                  value={seoDescription}
+                  onChange={(e) => setSeoDescription(e.target.value)}
+                  onBlur={handleSaveSEOStrategy}
+                  className="w-full rounded-xl bg-slate-900/80 border border-white/10 text-white text-xs px-3 py-2 focus:border-sky-500 focus:outline-none"
                 />
               </div>
             </div>
@@ -3211,53 +4288,409 @@ jobs:
         </div>
       )}
 
-      {/* ─── TAB 5: PR BOT & WEBHOOK TRIGGERS ────────────────────────────────── */}
+      {/* ─── TAB 5: PR BOT & WEBHOOK CONTROL CENTER ────────────────────────── */}
       {activeTab === 'bot' && (
         <div className="space-y-6">
-          <div className="border-b border-white/[0.08] pb-4">
-            <h2 className="text-base font-bold text-white">GitHub PR Bot & Webhook Automation</h2>
-            <p className="text-xs text-slate-400 mt-0.5">
-              Interact with @langpeanut in GitHub Pull Requests or set up repository webhooks.
-            </p>
+          {/* Header */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-white/[0.08] pb-4">
+            <div>
+              <div className="flex items-center gap-2">
+                <h2 className="text-base font-bold text-white">GitHub PR Bot & Webhook Control Center</h2>
+                <span className={cn(
+                  "text-[10px] font-mono px-2 py-0.5 rounded-full border font-semibold",
+                  webhookPushEnabled
+                    ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/30"
+                    : "bg-amber-500/10 text-amber-400 border-amber-500/30"
+                )}>
+                  {webhookPushEnabled ? "● Autopilot Active" : "○ Manual Trigger Only"}
+                </span>
+              </div>
+              <p className="text-xs text-slate-400 mt-0.5">
+                Manage automated push triggers, PR bot mention commands, branch filters, and webhook delivery simulations.
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2.5">
+              <button
+                type="button"
+                onClick={async () => {
+                  setWebhookPushEnabled(!webhookPushEnabled)
+                  // Auto-save the toggle
+                  if (!repo) return
+                  const nextState = !webhookPushEnabled
+                  try {
+                    await fetch(`/api/repos/${repo.ID}/settings`, {
+                      method: 'PUT',
+                      credentials: 'include',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        locales: selectedLocales,
+                        tone_preset: selectedTone,
+                        provider: selectedProvider,
+                        model: selectedModel,
+                        safety_mode: true,
+                        chunk_word_budget: chunkWordBudget,
+                        chunk_key_ceiling: chunkKeyCeiling,
+                        custom_install_cmd: customInstallCmd.trim(),
+                        custom_build_cmd: customBuildCmd.trim(),
+                        root_dir: rootDirInput.trim(),
+                        existing_translations_mode: existingMode,
+                        user_directive: userDirective.trim(),
+                        webhook_push_enabled: nextState,
+                        webhook_branch_filter: webhookBranchFilter,
+                        webhook_custom_branches: webhookCustomBranches.trim(),
+                        webhook_action: webhookAction,
+                        webhook_pr_comments_enabled: webhookPRCommentsEnabled,
+                        webhook_custom_branch_prefix: webhookCustomBranchPrefix.trim(),
+                        webhook_path_filter: webhookPathFilter.trim(),
+                      }),
+                    })
+                    mutateRepos()
+                    toast.success(`Push Autopilot turned ${nextState ? 'ON' : 'OFF'}`)
+                  } catch (e: any) {
+                    toast.error(`Failed to update toggle: ${e.message}`)
+                  }
+                }}
+                className={cn(
+                  "rounded-xl text-xs font-semibold px-4 py-2 flex items-center gap-2 transition-all cursor-pointer border",
+                  webhookPushEnabled
+                    ? "bg-emerald-600/20 hover:bg-emerald-600/30 border-emerald-500/40 text-emerald-300"
+                    : "bg-slate-800 hover:bg-slate-700 border-white/10 text-slate-300"
+                )}
+              >
+                <span>{webhookPushEnabled ? 'Push Autopilot Enabled' : 'Push Autopilot Paused'}</span>
+              </button>
+            </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-            <div className="glass-panel p-6 rounded-2xl space-y-4">
-              <h3 className="text-sm font-bold text-white">PR Bot Mention Commands</h3>
-              <p className="text-xs text-slate-400">
-                Mention @langpeanut in any PR comment. The cloud worker will parse the command flags, checkout the PR branch, and commit localized AST files.
-              </p>
+          {/* Autopilot Strategy Summary Cards */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            <div className="glass-panel p-4 rounded-xl border border-white/[0.08] space-y-1">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">Monitored Branch</span>
+              <span className="text-xs font-mono font-bold text-sky-400 truncate block">
+                {webhookBranchFilter === 'default_branch'
+                  ? `Default (${repo.DefaultBranch || 'main'})`
+                  : webhookBranchFilter === 'all'
+                  ? 'All Branches (*)'
+                  : webhookCustomBranches || 'Custom'}
+              </span>
+              <p className="text-[10px] text-slate-500">Filter configured in Settings</p>
+            </div>
 
-              <div className="space-y-2 text-xs font-mono">
-                <div className="p-3 rounded-xl bg-slate-900 border border-white/10 text-emerald-400">
-                  @langpeanut translate --locales es,fr,de --tone formal
-                </div>
-                <div className="p-3 rounded-xl bg-slate-900 border border-white/10 text-sky-400">
-                  @langpeanut review
-                </div>
-                <div className="p-3 rounded-xl bg-slate-900 border border-white/10 text-slate-300">
-                  @langpeanut audit
-                </div>
+            <div className="glass-panel p-4 rounded-xl border border-white/[0.08] space-y-1">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">Trigger Action</span>
+              <span className="text-xs font-semibold text-emerald-400 truncate block">
+                {webhookAction === 'auto_pr'
+                  ? 'Open Pull Request'
+                  : webhookAction === 'direct_commit'
+                  ? 'Direct Commit'
+                  : 'Open Draft PR'}
+              </span>
+              <p className="text-[10px] text-slate-500">
+                Prefix: <code className="font-mono text-slate-400">{webhookCustomBranchPrefix || 'langpeanut/i18n-'}</code>
+              </p>
+            </div>
+
+            <div className="glass-panel p-4 rounded-xl border border-white/[0.08] space-y-1">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">PR Bot Commands</span>
+              <span className="text-xs font-semibold text-purple-300 flex items-center gap-1">
+                {webhookPRCommentsEnabled ? '✓ Active (@langpeanut)' : '✕ Disabled'}
+              </span>
+              <p className="text-[10px] text-slate-500">Issue/PR comments</p>
+            </div>
+
+            <div className="glass-panel p-4 rounded-xl border border-white/[0.08] space-y-1">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">Target Locales</span>
+              <div className="flex flex-wrap gap-1">
+                {selectedLocales.slice(0, 4).map((loc) => (
+                  <span key={loc} className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-sky-500/10 text-sky-400 font-semibold">
+                    {loc}
+                  </span>
+                ))}
+                {selectedLocales.length > 4 && (
+                  <span className="text-[10px] text-slate-400 font-mono">+{selectedLocales.length - 4} more</span>
+                )}
+              </div>
+              <p className="text-[10px] text-slate-500">{selectedLocales.length} language catalogs</p>
+            </div>
+          </div>
+
+          {/* Webhook Endpoint & Setup Card */}
+          <div className="glass-panel p-6 rounded-2xl space-y-4 border border-white/10">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div>
+                <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                  <span>GitHub Webhook Configuration</span>
+                  <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-semibold">
+                    POST /api/webhook
+                  </span>
+                </h3>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Webhooks are automatically routed when the GitHub App is installed. You can also configure them manually in GitHub repository settings.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  const url = `${typeof window !== 'undefined' ? window.location.origin : ''}/api/webhook`
+                  navigator.clipboard.writeText(url)
+                  setCopiedWebhookURL(true)
+                  setTimeout(() => setCopiedWebhookURL(false), 3000)
+                  toast.success('Webhook Payload URL copied to clipboard')
+                }}
+                className="rounded-xl bg-white/[0.05] hover:bg-white/[0.1] border border-white/10 text-slate-200 text-xs font-semibold px-3.5 py-2 transition-all cursor-pointer shrink-0"
+              >
+                {copiedWebhookURL ? '✓ URL Copied' : 'Copy Webhook Payload URL'}
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs font-mono">
+              <div className="p-3.5 rounded-xl bg-slate-900 border border-white/10 space-y-1">
+                <span className="text-[10px] uppercase font-bold text-slate-500 block">Payload URL</span>
+                <span className="text-sky-400 break-all select-all font-semibold">
+                  {typeof window !== 'undefined' ? window.location.origin : ''}/api/webhook
+                </span>
+              </div>
+
+              <div className="p-3.5 rounded-xl bg-slate-900 border border-white/10 space-y-1">
+                <span className="text-[10px] uppercase font-bold text-slate-500 block">Content Type</span>
+                <span className="text-amber-400 font-semibold">application/json</span>
+              </div>
+
+              <div className="p-3.5 rounded-xl bg-slate-900 border border-white/10 space-y-1">
+                <span className="text-[10px] uppercase font-bold text-slate-500 block">Security Verification</span>
+                <span className="text-emerald-400 font-semibold">HMAC-SHA256 (X-Hub-Signature-256)</span>
               </div>
             </div>
 
-            <div className="glass-panel p-6 rounded-2xl space-y-4">
-              <h3 className="text-sm font-bold text-white">GitHub Webhook Configuration</h3>
-              <p className="text-xs text-slate-400">
-                Webhooks are automatically routed when the GitHub App is installed.
-              </p>
+            {/* Subscribed Events Pills */}
+            <div className="pt-2 border-t border-white/[0.05] flex flex-wrap items-center gap-2">
+              <span className="text-[11px] font-semibold text-slate-400">Subscribed Events:</span>
+              <span className="text-[10px] font-mono px-2 py-0.5 rounded-lg bg-emerald-500/10 text-emerald-300 border border-emerald-500/20 font-semibold">
+                ✓ push (commits & branches)
+              </span>
+              <span className="text-[10px] font-mono px-2 py-0.5 rounded-lg bg-emerald-500/10 text-emerald-300 border border-emerald-500/20 font-semibold">
+                ✓ issue_comment (PR bot commands)
+              </span>
+              <span className="text-[10px] font-mono px-2 py-0.5 rounded-lg bg-emerald-500/10 text-emerald-300 border border-emerald-500/20 font-semibold">
+                ✓ installation_repositories (repo sync)
+              </span>
+            </div>
+          </div>
 
-              <div className="space-y-2 text-xs font-mono">
-                <div className="p-3 rounded-xl bg-slate-900 border border-white/10 text-slate-300">
-                  Payload URL: <span className="text-sky-400">/api/webhook</span>
+          {/* Interactive Webhook Simulator & Testing Card */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+            {/* 1. Simulate Push Webhook */}
+            <div className="glass-panel p-6 rounded-2xl space-y-4 border border-white/10">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                    <span>Simulate Git Push Webhook</span>
+                  </h3>
+                  <p className="text-xs text-slate-400">Test if a commit push on a branch triggers localization.</p>
                 </div>
-                <div className="p-3 rounded-xl bg-slate-900 border border-white/10 text-slate-300">
-                  Content type: <span className="text-amber-400">application/json</span>
-                </div>
-                <div className="p-3 rounded-xl bg-slate-900 border border-white/10 text-slate-300">
-                  Subscribed Events: <span className="text-emerald-400">Push, Issue comments, Installation</span>
-                </div>
+                <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-sky-500/10 text-sky-400 border border-sky-500/20 font-semibold">
+                  Dry-Run Test
+                </span>
               </div>
+
+              <div className="space-y-3 text-xs">
+                <div>
+                  <label className="text-[11px] font-semibold text-slate-300 block mb-1">Target Branch to Simulate</label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      value={selectedBranch || repo.DefaultBranch || 'main'}
+                      onChange={(e) => setSelectedBranch(e.target.value)}
+                      placeholder="e.g. main, dev, feature/checkout"
+                      className="w-full rounded-xl bg-slate-900 border border-white/10 px-3.5 py-2 text-xs text-white font-mono placeholder:text-slate-600 focus:border-sky-400 focus:outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => simulateWebhookPush(true)}
+                      disabled={simulatingPush}
+                      className="rounded-xl bg-sky-600 hover:bg-sky-500 disabled:bg-sky-900 text-white text-xs font-semibold px-4 py-2 transition-all cursor-pointer shrink-0"
+                    >
+                      {simulatingPush ? 'Testing…' : 'Test Rule'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => simulateWebhookPush(false)}
+                      disabled={simulatingPush}
+                      className="rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:bg-emerald-900 text-white text-xs font-semibold px-4 py-2 transition-all cursor-pointer shrink-0 shadow-lg shadow-emerald-900/30"
+                    >
+                      Trigger Run
+                    </button>
+                  </div>
+                </div>
+
+                {pushSimResult && (
+                  <div className={cn(
+                    "p-3.5 rounded-xl border font-mono text-xs space-y-1.5",
+                    pushSimResult.matched
+                      ? "bg-emerald-950/40 border-emerald-500/40 text-emerald-200"
+                      : "bg-amber-950/40 border-amber-500/40 text-amber-200"
+                  )}>
+                    <div className="flex items-center justify-between font-bold">
+                      <span>{pushSimResult.matched ? '✓ MATCH SUCCESSFUL' : '⚠ TRIGGER SKIPPED'}</span>
+                      <span className="text-[10px] text-slate-400 font-normal">status: {pushSimResult.status}</span>
+                    </div>
+                    <p className="text-[11px] leading-relaxed">{pushSimResult.message || JSON.stringify(pushSimResult)}</p>
+                    {pushSimResult.job_id && (
+                      <p className="text-[10px] text-sky-400 font-bold pt-1 border-t border-white/10">
+                        Queued Job #{pushSimResult.job_id} — check the Runs tab for progress!
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* 2. Simulate PR Bot Mention */}
+            <div className="glass-panel p-6 rounded-2xl space-y-4 border border-white/10">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                    <span>Simulate @langpeanut Bot Mention</span>
+                  </h3>
+                  <p className="text-xs text-slate-400">Test parsing PR comment commands with flags and directives.</p>
+                </div>
+                <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-purple-500/10 text-purple-300 border border-purple-500/20 font-semibold">
+                  Parser Test
+                </span>
+              </div>
+
+              <div className="space-y-3 text-xs">
+                <div>
+                  <label className="text-[11px] font-semibold text-slate-300 block mb-1">Simulate PR Comment Input</label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      value={botSimInput}
+                      onChange={(e) => setBotSimInput(e.target.value)}
+                      placeholder="@langpeanut translate --locales es,ja --tone formal"
+                      className="w-full rounded-xl bg-slate-900 border border-white/10 px-3.5 py-2 text-xs text-white font-mono placeholder:text-slate-600 focus:border-purple-400 focus:outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={simulateBotCommand}
+                      disabled={simulatingBot}
+                      className="rounded-xl bg-purple-600 hover:bg-purple-500 disabled:bg-purple-900 text-white text-xs font-semibold px-4 py-2 transition-all cursor-pointer shrink-0"
+                    >
+                      {simulatingBot ? 'Parsing…' : 'Test Parse'}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Quick Command Chips */}
+                <div className="flex flex-wrap gap-1.5 pt-1">
+                  {[
+                    '@langpeanut translate --locales es,ja',
+                    '@langpeanut review',
+                    '@langpeanut audit',
+                    '@langpeanut doctor',
+                  ].map((cmd) => (
+                    <button
+                      key={cmd}
+                      type="button"
+                      onClick={() => setBotSimInput(cmd)}
+                      className="text-[10px] font-mono px-2 py-0.5 rounded-lg bg-white/[0.04] hover:bg-white/[0.08] border border-white/10 text-slate-300 transition-colors"
+                    >
+                      {cmd}
+                    </button>
+                  ))}
+                </div>
+
+                {botSimResult && (
+                  <div className={cn(
+                    "p-3.5 rounded-xl border font-mono text-xs space-y-1.5",
+                    botSimResult.valid
+                      ? "bg-purple-950/40 border-purple-500/40 text-purple-200"
+                      : "bg-rose-950/40 border-rose-500/40 text-rose-200"
+                  )}>
+                    <div className="flex items-center justify-between font-bold">
+                      <span>{botSimResult.valid ? '✓ COMMAND PARSED' : '✗ INVALID COMMAND'}</span>
+                      <span className="text-[10px] text-slate-400 font-normal">action: {botSimResult.action || 'none'}</span>
+                    </div>
+                    <p className="text-[11px] leading-relaxed">{botSimResult.message}</p>
+                    {botSimResult.locales && botSimResult.locales.length > 0 && (
+                      <p className="text-[10px] text-sky-400">
+                        Locales: [{botSimResult.locales.join(', ')}]
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* PR Bot Mention Commands Reference Guide */}
+          <div className="glass-panel p-6 rounded-2xl space-y-4 border border-white/10">
+            <h3 className="text-sm font-bold text-white">Supported @langpeanut PR Mention Commands</h3>
+            <p className="text-xs text-slate-400">
+              When opened in any GitHub Pull Request, developers and reviewers can trigger autonomous bot actions by posting a comment:
+            </p>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {[
+                {
+                  cmd: '@langpeanut translate --locales es,fr,de --tone formal',
+                  desc: 'Extracts missing strings from PR diff, translates into specified locales, and pushes commits to the PR branch.',
+                  badge: 'Localization',
+                },
+                {
+                  cmd: '@langpeanut review',
+                  desc: 'Performs 4-tier ICU critic inspection on all translation files modified in this PR and comments diagnostics.',
+                  badge: 'Verification',
+                },
+                {
+                  cmd: '@langpeanut audit',
+                  desc: 'Scans all modified files for unextracted hardcoded UI strings, ambiguous verbs, and ICU syntax traps.',
+                  badge: 'AST Scout',
+                },
+                {
+                  cmd: '@langpeanut doctor',
+                  desc: 'Runs full repository health check (syntax validity, missing locale keys, orphan translation catalogs).',
+                  badge: 'Diagnostic',
+                },
+                {
+                  cmd: '@langpeanut prune',
+                  desc: 'Scans for unused translation keys in source code and cleans up dead entries across all locale files.',
+                  badge: 'Pruner',
+                },
+                {
+                  cmd: '@langpeanut directive "add a language dropdown to navbar"',
+                  desc: 'Invokes DirectiveAgent to synthesize a reactive language switcher component and wire it to app layout.',
+                  badge: 'UI Directive',
+                },
+              ].map((item) => (
+                <div key={item.cmd} className="p-4 rounded-xl bg-slate-900 border border-white/10 space-y-2 flex flex-col justify-between">
+                  <div>
+                    <div className="flex items-center justify-between gap-2 mb-1.5">
+                      <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-sky-500/10 text-sky-400 border border-sky-500/20 font-bold">
+                        {item.badge}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          navigator.clipboard.writeText(item.cmd)
+                          toast.success(`Copied: ${item.cmd}`)
+                        }}
+                        className="text-[10px] text-slate-400 hover:text-white transition-colors cursor-pointer"
+                      >
+                        Copy
+                      </button>
+                    </div>
+                    <code className="text-xs font-mono font-bold text-emerald-400 block break-words">
+                      {item.cmd}
+                    </code>
+                    <p className="text-[11px] text-slate-400 mt-2 leading-relaxed">
+                      {item.desc}
+                    </p>
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
         </div>

@@ -142,6 +142,73 @@ func TestAPI_RepoFlow(t *testing.T) {
 	}
 }
 
+func TestAPI_GenkitEndpoints(t *testing.T) {
+	mux, database, sessionSecret := setupTestServer(t)
+	defer database.Close()
+
+	team, _ := database.CreateTeam("Team Genkit")
+	inst, _ := database.UpsertInstallation(team.ID, 12345, "genkit-org")
+	repo, _ := database.UpsertRepo(inst.ID, "genkit-org", "cloud-app", "main")
+	user, _ := database.UpsertUserByGithubID(team.ID, 888, "genkit@example.com", "Genkit User", "gk-dev", "")
+	cookie := sessionCookie(t, sessionSecret, user.ID, team.ID)
+
+	// 1. GET /api/repos/{repoID}/genkit/runtime
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/repos/%d/genkit/runtime", repo.ID), nil)
+	req.AddCookie(cookie)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /genkit/runtime status = %d; body = %s", w.Code, w.Body.String())
+	}
+
+	var runtimeInfo map[string]any
+	_ = json.NewDecoder(w.Body).Decode(&runtimeInfo)
+	if runtimeInfo["framework"] != "Google Genkit Go" {
+		t.Errorf("expected framework 'Google Genkit Go', got %v", runtimeInfo["framework"])
+	}
+
+	// 2. GET /api/repos/{repoID}/genkit/flows
+	req = httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/repos/%d/genkit/flows", repo.ID), nil)
+	req.AddCookie(cookie)
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /genkit/flows status = %d; body = %s", w.Code, w.Body.String())
+	}
+
+	// 3. POST /api/repos/{repoID}/genkit/flow/verifyTranslationsFlow
+	req = httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/repos/%d/genkit/flow/verifyTranslationsFlow", repo.ID), bytes.NewReader([]byte(`{}`)))
+	req.AddCookie(cookie)
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("POST /genkit/flow/verifyTranslationsFlow status = %d; body = %s", w.Code, w.Body.String())
+	}
+
+	// 4. POST /api/repos/{repoID}/chat (Genkit SSE stream)
+	chatPayload, _ := json.Marshal(map[string]any{
+		"message": "Scan repository and show coverage matrix",
+	})
+	req = httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/repos/%d/chat", repo.ID), bytes.NewReader(chatPayload))
+	req.AddCookie(cookie)
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("POST /api/repos/{repoID}/chat status = %d; body = %s", w.Code, w.Body.String())
+	}
+
+	if w.Header().Get("Content-Type") != "text/event-stream" {
+		t.Errorf("expected text/event-stream content type, got %s", w.Header().Get("Content-Type"))
+	}
+	if w.Header().Get("X-Genkit-Framework") != "Google Genkit Go" {
+		t.Errorf("expected X-Genkit-Framework 'Google Genkit Go', got %s", w.Header().Get("X-Genkit-Framework"))
+	}
+}
+
 func TestAPI_RepoFlow_RejectsOtherTeam(t *testing.T) {
 	mux, database, sessionSecret := setupTestServer(t)
 	defer database.Close()
@@ -161,5 +228,104 @@ func TestAPI_RepoFlow_RejectsOtherTeam(t *testing.T) {
 
 	if w.Code == http.StatusOK {
 		t.Fatalf("expected team B to be denied access to team A's repo, got 200: %s", w.Body.String())
+	}
+}
+
+func TestAPI_WebhookBranchFilterAndSettings(t *testing.T) {
+	mux, database, sessionSecret := setupTestServer(t)
+	defer database.Close()
+
+	team, _ := database.CreateTeam("Team Webhook")
+	inst, _ := database.UpsertInstallation(team.ID, 12345, "webhook-org")
+	repo, _ := database.UpsertRepo(inst.ID, "webhook-org", "app-webhook", "main")
+	user, _ := database.UpsertUserByGithubID(team.ID, 555, "wh@example.com", "WH User", "wh-dev", "")
+	cookie := sessionCookie(t, sessionSecret, user.ID, team.ID)
+
+	// 1. Configure settings with branch filter = "default_branch" and push enabled
+	pushEnabled := true
+	settingsPayload, _ := json.Marshal(map[string]any{
+		"locales":                      []string{"ja", "de"},
+		"tone_preset":                  "formal",
+		"provider":                     "gemini",
+		"model":                        "gemini-3.5-flash",
+		"webhook_push_enabled":         &pushEnabled,
+		"webhook_branch_filter":        "default_branch",
+		"webhook_custom_branch_prefix": "l10n/auto-",
+	})
+	req := httptest.NewRequest(http.MethodPut, fmt.Sprintf("/api/repos/%d/settings", repo.ID), bytes.NewReader(settingsPayload))
+	req.AddCookie(cookie)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("PUT settings failed: %d, body: %s", w.Code, w.Body.String())
+	}
+
+	// 2. Verify GET settings returns webhook fields
+	req = httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/repos/%d/settings", repo.ID), nil)
+	req.AddCookie(cookie)
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET settings failed: %d", w.Code)
+	}
+	var resMap map[string]any
+	_ = json.NewDecoder(w.Body).Decode(&resMap)
+	if resMap["webhook_push_enabled"] != true {
+		t.Errorf("expected webhook_push_enabled=true, got %v", resMap["webhook_push_enabled"])
+	}
+	if resMap["webhook_branch_filter"] != "default_branch" {
+		t.Errorf("expected webhook_branch_filter='default_branch', got %v", resMap["webhook_branch_filter"])
+	}
+	if resMap["webhook_custom_branch_prefix"] != "l10n/auto-" {
+		t.Errorf("expected webhook_custom_branch_prefix='l10n/auto-', got %v", resMap["webhook_custom_branch_prefix"])
+	}
+
+	// 3. Test Simulation Push Endpoint: Matching Default Branch
+	simPayload, _ := json.Marshal(map[string]any{
+		"branch":  "main",
+		"dry_run": true,
+	})
+	req = httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/repos/%d/webhook/test-push", repo.ID), bytes.NewReader(simPayload))
+	req.AddCookie(cookie)
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("test-push failed: %d, body: %s", w.Code, w.Body.String())
+	}
+	var simRes map[string]any
+	_ = json.NewDecoder(w.Body).Decode(&simRes)
+	if simRes["matched"] != true {
+		t.Errorf("expected matched=true for default branch, got %v", simRes)
+	}
+
+	// 4. Test Simulation Push Endpoint: Non-matching feature branch
+	simPayloadNonMatch, _ := json.Marshal(map[string]any{
+		"branch":  "feature/unmatched",
+		"dry_run": true,
+	})
+	req = httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/repos/%d/webhook/test-push", repo.ID), bytes.NewReader(simPayloadNonMatch))
+	req.AddCookie(cookie)
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	_ = json.NewDecoder(w.Body).Decode(&simRes)
+	if simRes["matched"] == true {
+		t.Errorf("expected matched=false for non-matching branch, got %v", simRes)
+	}
+
+	// 5. Test Bot command simulation
+	botPayload, _ := json.Marshal(map[string]any{
+		"command": "@langpeanut translate --locales es,fr --tone casual",
+	})
+	req = httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/repos/%d/webhook/test-bot", repo.ID), bytes.NewReader(botPayload))
+	req.AddCookie(cookie)
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("test-bot failed: %d", w.Code)
+	}
+	var botRes map[string]any
+	_ = json.NewDecoder(w.Body).Decode(&botRes)
+	if botRes["valid"] != true || botRes["action"] != "translate" {
+		t.Errorf("expected valid=true, action='translate', got %v", botRes)
 	}
 }

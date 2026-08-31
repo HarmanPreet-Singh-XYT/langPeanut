@@ -7,6 +7,7 @@
 package api
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -16,6 +17,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -25,6 +27,7 @@ import (
 	"github.com/langPeanut/langpeanut-cloud/internal/db"
 	"github.com/langPeanut/langPeanut/pkg/agents"
 	"github.com/langPeanut/langPeanut/pkg/chat"
+	"github.com/langPeanut/langPeanut/pkg/genkit"
 	ghpkg "github.com/langPeanut/langPeanut/pkg/github"
 	"github.com/langPeanut/langPeanut/pkg/llm"
 	"github.com/langPeanut/langPeanut/pkg/logger"
@@ -71,6 +74,7 @@ func RegisterRoutes(mux *http.ServeMux, h *Handler) {
 	// ── Repo Settings & Translation Matrix ───────────────────────────────────
 	mux.HandleFunc("GET /api/repos/{repoID}/settings", h.requireSession(h.handleGetSettings))
 	mux.HandleFunc("PUT /api/repos/{repoID}/settings", h.requireSession(h.handleUpsertSettings))
+	mux.HandleFunc("POST /api/repos/{repoID}/model", h.requireSession(h.handleQuickSwitchModel))
 	mux.HandleFunc("GET /api/repos/{repoID}/matrix", h.requireSession(h.handleGetMatrix))
 	mux.HandleFunc("PUT /api/repos/{repoID}/matrix", h.requireSession(h.handleUpdateMatrixCell))
 	mux.HandleFunc("POST /api/repos/{repoID}/matrix/copilot", h.requireSession(h.handleMatrixCopilot))
@@ -79,11 +83,15 @@ func RegisterRoutes(mux *http.ServeMux, h *Handler) {
 	// ── SEO & Market Growth Studio ────────────────────────────────────────────
 	mux.HandleFunc("GET /api/repos/{repoID}/seo", h.requireSession(h.handleGetSEOOverview))
 	mux.HandleFunc("POST /api/repos/{repoID}/seo/strategy", h.requireSession(h.handleSaveSEOStrategy))
+	mux.HandleFunc("POST /api/repos/{repoID}/seo/analyze-domain", h.requireSession(h.handleAnalyzeSEODomain))
 	mux.HandleFunc("POST /api/repos/{repoID}/seo/scout", h.requireSession(h.handleRunSEOScout))
 	mux.HandleFunc("POST /api/repos/{repoID}/seo/optimize", h.requireSession(h.handleRunSEOOptimize))
 	mux.HandleFunc("POST /api/repos/{repoID}/seo/apply", h.requireSession(h.handleApplySEOToMatrix))
 
-	// ── Agentic Capabilities: Doctor, Persona, Pruner & Central Copilot ─────
+	// ── Google Genkit Workflows & Autonomous Copilot ───────────────────────
+	mux.HandleFunc("GET /api/repos/{repoID}/genkit/runtime", h.requireSession(h.handleGenkitRuntime))
+	mux.HandleFunc("GET /api/repos/{repoID}/genkit/flows", h.requireSession(h.handleGenkitFlows))
+	mux.HandleFunc("POST /api/repos/{repoID}/genkit/flow/{flowName}", h.requireSession(h.handleGenkitFlowRun))
 	mux.HandleFunc("GET /api/repos/{repoID}/doctor", h.requireSession(h.handleRepoDoctor))
 	mux.HandleFunc("POST /api/repos/{repoID}/discover-persona", h.requireSession(h.handleDiscoverPersona))
 	mux.HandleFunc("GET /api/repos/{repoID}/dead-keys", h.requireSession(h.handleGetDeadKeys))
@@ -111,8 +119,10 @@ func RegisterRoutes(mux *http.ServeMux, h *Handler) {
 	mux.HandleFunc("GET /api/auth/me", h.requireSession(h.handleGetMe))
 	mux.HandleFunc("POST /api/auth/logout", h.handleLogout)
 
-	// ── GitHub Webhook ────────────────────────────────────────────────────────
+	// ── GitHub Webhook & Automation Testing ──────────────────────────────────
 	mux.HandleFunc("POST /api/webhook", h.handleWebhook)
+	mux.HandleFunc("POST /api/repos/{repoID}/webhook/test-push", h.requireSession(h.handleTestWebhookPush))
+	mux.HandleFunc("POST /api/repos/{repoID}/webhook/test-bot", h.requireSession(h.handleTestWebhookBot))
 }
 
 // ─── Health ──────────────────────────────────────────────────────────────────
@@ -142,7 +152,9 @@ func (h *Handler) handleListAvailableGitHubRepos(w http.ResponseWriter, r *http.
 		return
 	}
 
-	teamID := sessionFromCtx(r).TeamID
+	sess := sessionFromCtx(r)
+	teamID := sess.TeamID
+	user, _ := h.DB.GetUserByID(sess.UserID)
 
 	type availableRepo struct {
 		InstallationID int64  `json:"installation_id"`
@@ -155,9 +167,22 @@ func (h *Handler) handleListAvailableGitHubRepos(w http.ResponseWriter, r *http.
 		IsImported     bool   `json:"is_imported"`
 	}
 
+	teamInstalls, _ := h.DB.ListInstallationsByTeam(teamID)
+	teamInstMap := make(map[int64]bool)
+	for _, ti := range teamInstalls {
+		teamInstMap[ti.InstallationID] = true
+	}
+
 	var results []availableRepo
 	for _, inst := range installs {
-		// Auto-upsert installation in DB for this team if not exists
+		// Only display installations that match the authenticated user's GitHub username or team
+		if user != nil && user.GithubLogin != "" {
+			if !strings.EqualFold(inst.Account.Login, user.GithubLogin) && !teamInstMap[inst.ID] {
+				continue
+			}
+		}
+
+		// Auto-upsert installation in DB for this team if authorized
 		dbInst, _ := h.DB.UpsertInstallation(teamID, inst.ID, inst.Account.Login)
 
 		tok, err := ghpkg.CreateInstallationToken(r.Context(), appCfg, inst.ID)
@@ -276,9 +301,15 @@ func (h *Handler) handleResetRepoData(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Remove mirror cache if exists
-	mirrorPath := filepath.Join("data", "mirrors", fmt.Sprintf("%d.git", repo.ID))
+	// Remove mirror cache and working checkout if exists
+	dataDir := os.Getenv("DATA_DIR")
+	if dataDir == "" {
+		dataDir = "data"
+	}
+	mirrorPath := filepath.Join(dataDir, "mirrors", fmt.Sprintf("%d.git", repo.ID))
 	_ = os.RemoveAll(mirrorPath)
+	repoPath := filepath.Join(dataDir, "repos", fmt.Sprintf("%d", repo.ID))
+	_ = os.RemoveAll(repoPath)
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":  "ok",
@@ -298,9 +329,15 @@ func (h *Handler) handleDeleteRepo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Clean up mirror bare git repo
-	mirrorPath := filepath.Join("data", "mirrors", fmt.Sprintf("%d.git", repo.ID))
+	// Clean up mirror bare git repo and working checkout
+	dataDir := os.Getenv("DATA_DIR")
+	if dataDir == "" {
+		dataDir = "data"
+	}
+	mirrorPath := filepath.Join(dataDir, "mirrors", fmt.Sprintf("%d.git", repo.ID))
 	_ = os.RemoveAll(mirrorPath)
+	repoPath := filepath.Join(dataDir, "repos", fmt.Sprintf("%d", repo.ID))
+	_ = os.RemoveAll(repoPath)
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":  "ok",
@@ -349,39 +386,53 @@ func (h *Handler) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resp := map[string]any{
-		"repo_id":                    s.RepoID,
-		"locales":                    s.Locales,
-		"tone_preset":                s.TonePreset,
-		"provider":                   s.Provider,
-		"model":                      s.Model,
-		"safety_mode":                s.SafetyMode,
-		"chunk_word_budget":          s.ChunkWordBudget,
-		"chunk_key_ceiling":          s.ChunkKeyCeiling,
-		"custom_install_cmd":         s.CustomInstallCmd,
-		"custom_build_cmd":           s.CustomBuildCmd,
-		"root_dir":                   s.RootDir,
-		"existing_translations_mode": s.ExistingTranslationsMode,
-		"user_directive":            s.UserDirective,
-		"has_api_key_override":       len(s.EncryptedAPIKeyOverride) > 0,
-		"updated_at":                 s.UpdatedAt,
+		"repo_id":                      s.RepoID,
+		"locales":                      s.Locales,
+		"tone_preset":                  s.TonePreset,
+		"provider":                     s.Provider,
+		"model":                        s.Model,
+		"safety_mode":                  s.SafetyMode,
+		"chunk_word_budget":            s.ChunkWordBudget,
+		"chunk_key_ceiling":            s.ChunkKeyCeiling,
+		"custom_install_cmd":           s.CustomInstallCmd,
+		"custom_build_cmd":             s.CustomBuildCmd,
+		"root_dir":                     s.RootDir,
+		"existing_translations_mode":   s.ExistingTranslationsMode,
+		"user_directive":               s.UserDirective,
+		"webhook_push_enabled":         s.WebhookPushEnabled,
+		"webhook_branch_filter":        s.WebhookBranchFilter,
+		"webhook_custom_branches":      s.WebhookCustomBranches,
+		"webhook_action":               s.WebhookAction,
+		"webhook_pr_comments_enabled":   s.WebhookPRCommentsEnabled,
+		"webhook_custom_branch_prefix": s.WebhookCustomBranchPrefix,
+		"webhook_path_filter":          s.WebhookPathFilter,
+		"has_api_key_override":         len(s.EncryptedAPIKeyOverride) > 0,
+		"updated_at":                   s.UpdatedAt,
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
 
 type upsertSettingsReq struct {
-	Locales                  []string `json:"locales"`
-	TonePreset               string   `json:"tone_preset"`
-	Provider                 string   `json:"provider"`
-	Model                    string   `json:"model"`
-	SafetyMode               bool     `json:"safety_mode"`
-	ChunkWordBudget          int      `json:"chunk_word_budget"`
-	ChunkKeyCeiling          int      `json:"chunk_key_ceiling"`
-	CustomInstallCmd         string   `json:"custom_install_cmd"`
-	CustomBuildCmd           string   `json:"custom_build_cmd"`
-	RootDir                  string   `json:"root_dir"`
-	ExistingTranslationsMode string   `json:"existing_translations_mode"`
-	UserDirective            string   `json:"user_directive,omitempty"`
-	APIKeyOverride           string   `json:"api_key_override,omitempty"`
+	Locales                    []string `json:"locales"`
+	TonePreset                 string   `json:"tone_preset"`
+	Provider                   string   `json:"provider"`
+	Model                      string   `json:"model"`
+	SafetyMode                 bool     `json:"safety_mode"`
+	ChunkWordBudget            int      `json:"chunk_word_budget"`
+	ChunkKeyCeiling            int      `json:"chunk_key_ceiling"`
+	CustomInstallCmd           string   `json:"custom_install_cmd"`
+	CustomBuildCmd             string   `json:"custom_build_cmd"`
+	RootDir                    string   `json:"root_dir"`
+	ExistingTranslationsMode   string   `json:"existing_translations_mode"`
+	UserDirective              string   `json:"user_directive,omitempty"`
+	APIKeyOverride             string   `json:"api_key_override,omitempty"`
+	WebhookPushEnabled         *bool    `json:"webhook_push_enabled,omitempty"`
+	WebhookBranchFilter        string   `json:"webhook_branch_filter,omitempty"`
+	WebhookCustomBranches      string   `json:"webhook_custom_branches,omitempty"`
+	WebhookAction              string   `json:"webhook_action,omitempty"`
+	WebhookPRCommentsEnabled   *bool    `json:"webhook_pr_comments_enabled,omitempty"`
+	WebhookCustomBranchPrefix  string   `json:"webhook_custom_branch_prefix,omitempty"`
+	WebhookPathFilter          string   `json:"webhook_path_filter,omitempty"`
 }
 
 func (h *Handler) handleUpsertSettings(w http.ResponseWriter, r *http.Request) {
@@ -448,27 +499,119 @@ func (h *Handler) handleUpsertSettings(w http.ResponseWriter, r *http.Request) {
 		encryptedOverride = enc
 	}
 
+	pushEnabled := true
+	if req.WebhookPushEnabled != nil {
+		pushEnabled = *req.WebhookPushEnabled
+	} else if existingSettings != nil {
+		pushEnabled = existingSettings.WebhookPushEnabled
+	}
+
+	prCommentsEnabled := true
+	if req.WebhookPRCommentsEnabled != nil {
+		prCommentsEnabled = *req.WebhookPRCommentsEnabled
+	} else if existingSettings != nil {
+		prCommentsEnabled = existingSettings.WebhookPRCommentsEnabled
+	}
+
+	branchFilter := req.WebhookBranchFilter
+	if branchFilter == "" {
+		if existingSettings != nil && existingSettings.WebhookBranchFilter != "" {
+			branchFilter = existingSettings.WebhookBranchFilter
+		} else {
+			branchFilter = "default_branch"
+		}
+	}
+
+	action := req.WebhookAction
+	if action == "" {
+		if existingSettings != nil && existingSettings.WebhookAction != "" {
+			action = existingSettings.WebhookAction
+		} else {
+			action = "auto_pr"
+		}
+	}
+
+	branchPrefix := req.WebhookCustomBranchPrefix
+	if branchPrefix == "" {
+		if existingSettings != nil && existingSettings.WebhookCustomBranchPrefix != "" {
+			branchPrefix = existingSettings.WebhookCustomBranchPrefix
+		} else {
+			branchPrefix = "langpeanut/i18n-"
+		}
+	}
+
 	s := &db.RepoSettings{
-		RepoID:                   repo.ID,
-		Locales:                  req.Locales,
-		TonePreset:               req.TonePreset,
-		Provider:                 req.Provider,
-		Model:                    req.Model,
-		SafetyMode:               req.SafetyMode,
-		ChunkWordBudget:          req.ChunkWordBudget,
-		ChunkKeyCeiling:          req.ChunkKeyCeiling,
-		CustomInstallCmd:         req.CustomInstallCmd,
-		CustomBuildCmd:           req.CustomBuildCmd,
-		RootDir:                  req.RootDir,
-		ExistingTranslationsMode: req.ExistingTranslationsMode,
-		EncryptedAPIKeyOverride:  encryptedOverride,
-		UserDirective:            req.UserDirective,
+		RepoID:                    repo.ID,
+		Locales:                   req.Locales,
+		TonePreset:                req.TonePreset,
+		Provider:                  req.Provider,
+		Model:                     req.Model,
+		SafetyMode:                req.SafetyMode,
+		ChunkWordBudget:           req.ChunkWordBudget,
+		ChunkKeyCeiling:           req.ChunkKeyCeiling,
+		CustomInstallCmd:          req.CustomInstallCmd,
+		CustomBuildCmd:            req.CustomBuildCmd,
+		RootDir:                   req.RootDir,
+		ExistingTranslationsMode:  req.ExistingTranslationsMode,
+		EncryptedAPIKeyOverride:   encryptedOverride,
+		UserDirective:             req.UserDirective,
+		WebhookPushEnabled:        pushEnabled,
+		WebhookBranchFilter:       branchFilter,
+		WebhookCustomBranches:     req.WebhookCustomBranches,
+		WebhookAction:             action,
+		WebhookPRCommentsEnabled:  prCommentsEnabled,
+		WebhookCustomBranchPrefix: branchPrefix,
+		WebhookPathFilter:         req.WebhookPathFilter,
 	}
 	if err := h.DB.UpsertRepoSettings(s); err != nil {
 		writeError(w, http.StatusInternalServerError, "upsert settings: "+err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (h *Handler) handleQuickSwitchModel(w http.ResponseWriter, r *http.Request) {
+	repo, ok := h.authorizeRepo(w, r)
+	if !ok {
+		return
+	}
+	var req struct {
+		Provider string `json:"provider"`
+		Model    string `json:"model"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Provider == "" || req.Model == "" {
+		writeError(w, http.StatusBadRequest, "provider and model are required")
+		return
+	}
+
+	settings, err := h.DB.GetRepoSettings(repo.ID)
+	if err != nil || settings == nil {
+		settings = &db.RepoSettings{
+			RepoID:                   repo.ID,
+			Locales:                  []string{"es", "fr", "de"},
+			TonePreset:               "neutral",
+			Provider:                 req.Provider,
+			Model:                    req.Model,
+			SafetyMode:               true,
+			ChunkWordBudget:          50000,
+			ChunkKeyCeiling:          1500,
+			ExistingTranslationsMode: "skip",
+		}
+	} else {
+		settings.Provider = req.Provider
+		settings.Model = req.Model
+	}
+
+	if err := h.DB.UpsertRepoSettings(settings); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to save model switch: "+err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"message":  "model updated successfully",
+		"provider": req.Provider,
+		"model":    req.Model,
+	})
 }
 
 func (h *Handler) handleGetMatrix(w http.ResponseWriter, r *http.Request) {
@@ -668,23 +811,65 @@ CRITICAL INVARIANTS:
 func (h *Handler) getRepoScanDir(repoID int64) string {
 	dataDir := os.Getenv("DATA_DIR")
 	if dataDir == "" {
-		dataDir = "data"
+		if mDir := os.Getenv("MIRRORS_DIR"); mDir != "" {
+			dataDir = filepath.Dir(mDir)
+		} else {
+			dataDir = "data"
+		}
 	}
-	// Check jobs directory for latest unpacked working copy
-	jobsDir := filepath.Join(dataDir, "jobs")
-	entries, err := os.ReadDir(jobsDir)
-	if err == nil {
-		for i := len(entries) - 1; i >= 0; i-- {
-			e := entries[i]
-			if e.IsDir() {
-				targetRepoDir := filepath.Join(jobsDir, e.Name(), "repo")
-				if _, err := os.Stat(targetRepoDir); err == nil {
-					return targetRepoDir
+	repoDir := filepath.Join(dataDir, "repos", fmt.Sprintf("%d", repoID))
+	if fi, err := os.Stat(repoDir); err == nil && fi.IsDir() {
+		// Check if directory is non-empty
+		entries, _ := os.ReadDir(repoDir)
+		if len(entries) > 0 {
+			return repoDir
+		}
+	}
+
+	// 1. If bare mirror exists, clone working copy for this repo
+	mirrorPath := filepath.Join(dataDir, "mirrors", fmt.Sprintf("%d.git", repoID))
+	if _, err := os.Stat(mirrorPath); err == nil {
+		_ = os.MkdirAll(filepath.Dir(repoDir), 0750)
+		cmd := exec.Command("git", "clone", mirrorPath, repoDir)
+		if err := cmd.Run(); err == nil {
+			return repoDir
+		}
+	}
+
+	// 2. Check if this specific repo has an active job directory
+	jobs, err := h.DB.ListJobsByRepo(repoID, 1)
+	if err == nil && len(jobs) > 0 {
+		targetRepoDir := filepath.Join(dataDir, "jobs", fmt.Sprintf("%d", jobs[0].ID), "repo")
+		if _, err := os.Stat(targetRepoDir); err == nil {
+			return targetRepoDir
+		}
+	}
+
+	// 3. Cold-start on-demand shallow clone from GitHub if App credentials available
+	repo, rErr := h.DB.GetRepoByID(repoID)
+	if rErr == nil && repo != nil && len(h.PrivateKeyPEM) > 0 && h.AppID != "" {
+		inst, iErr := h.DB.GetInstallationByID(repo.InstallationID)
+		if iErr == nil && inst != nil {
+			pk, pErr := ghpkg.ParsePrivateKeyPEM(h.PrivateKeyPEM)
+			if pErr == nil && pk != nil {
+				appCfg := ghpkg.AppConfig{AppID: h.AppID, PrivateKey: pk}
+				tok, tErr := ghpkg.CreateInstallationToken(context.Background(), appCfg, inst.InstallationID)
+				if tErr == nil && tok != nil && tok.Token != "" {
+					authURL := fmt.Sprintf("https://x-access-token:%s@github.com/%s/%s.git", tok.Token, repo.Owner, repo.Name)
+					_ = os.RemoveAll(repoDir)
+					_ = os.MkdirAll(filepath.Dir(repoDir), 0750)
+					cloneCmd := exec.Command("git", "clone", "--depth", "1", authURL, repoDir)
+					if err := cloneCmd.Run(); err == nil {
+						return repoDir
+					}
 				}
 			}
 		}
 	}
-	return "."
+
+	// Return isolated repoDir path (ensure directory exists so scanner doesn't inspect server root)
+	_ = os.MkdirAll(repoDir, 0750)
+	return repoDir
 }
 
 func (h *Handler) handleRepoDoctor(w http.ResponseWriter, r *http.Request) {
@@ -1249,6 +1434,53 @@ func (h *Handler) handleWebhook(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		// Check if push autopilot is enabled
+		if !settings.WebhookPushEnabled {
+			slog.Info("webhook: push ignored because push autopilot is disabled in repo settings", "repo", repo.Owner+"/"+repo.Name, "branch", branch)
+			writeJSON(w, http.StatusOK, map[string]string{
+				"status": "push_trigger_disabled",
+				"reason": "Push webhook autopilot is disabled in repository settings.",
+			})
+			return
+		}
+
+		// Check branch against settings.WebhookBranchFilter
+		branchMatches := false
+		switch settings.WebhookBranchFilter {
+		case "all":
+			branchMatches = true
+		case "custom":
+			if settings.WebhookCustomBranches != "" {
+				patterns := strings.Split(settings.WebhookCustomBranches, ",")
+				for _, pat := range patterns {
+					pat = strings.TrimSpace(pat)
+					if pat == "" {
+						continue
+					}
+					if matched, _ := filepath.Match(pat, branch); matched || pat == branch {
+						branchMatches = true
+						break
+					}
+				}
+			} else {
+				branchMatches = (branch == repo.DefaultBranch || repo.DefaultBranch == "")
+			}
+		case "default_branch", "":
+			fallthrough
+		default:
+			branchMatches = (branch == repo.DefaultBranch || repo.DefaultBranch == "")
+		}
+
+		if !branchMatches {
+			slog.Info("webhook: push ignored due to branch filter", "repo", repo.Owner+"/"+repo.Name, "branch", branch, "filter", settings.WebhookBranchFilter, "custom", settings.WebhookCustomBranches)
+			writeJSON(w, http.StatusOK, map[string]string{
+				"status": "ignored_branch_filter",
+				"branch": branch,
+				"reason": fmt.Sprintf("Branch '%s' does not match repository branch filter '%s'", branch, settings.WebhookBranchFilter),
+			})
+			return
+		}
+
 		// Queue job with target branch for continuous autopilot workflow
 		job, err := h.DB.CreateJobWithBranch(repo.ID, "webhook_push", branch)
 		if err != nil {
@@ -1283,18 +1515,65 @@ func (h *Handler) handleWebhook(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		settings, _ := h.DB.GetRepoSettings(repo.ID)
+		if settings != nil && !settings.WebhookPRCommentsEnabled {
+			slog.Info("webhook: PR comment ignored because PR comments are disabled in repo settings", "repo", repo.Owner+"/"+repo.Name)
+			writeJSON(w, http.StatusOK, map[string]string{
+				"status": "pr_comments_disabled",
+				"reason": "PR bot comment commands (@langpeanut) are disabled in repository settings.",
+			})
+			return
+		}
+
+		targetBranch := repo.DefaultBranch
+		inst, iErr := h.DB.GetInstallationByID(repo.InstallationID)
+		if iErr == nil && inst != nil && len(h.PrivateKeyPEM) > 0 && h.AppID != "" {
+			pk, pErr := ghpkg.ParsePrivateKeyPEM(h.PrivateKeyPEM)
+			if pErr == nil && pk != nil {
+				appCfg := ghpkg.AppConfig{AppID: h.AppID, PrivateKey: pk}
+				tok, tErr := ghpkg.CreateInstallationToken(r.Context(), appCfg, inst.InstallationID)
+				if tErr == nil && tok != nil && tok.Token != "" {
+					prReq, _ := http.NewRequestWithContext(r.Context(), "GET",
+						fmt.Sprintf("https://api.github.com/repos/%s/%s/pulls/%d", repo.Owner, repo.Name, commentEv.Issue.Number), nil)
+					if prReq != nil {
+						prReq.Header.Set("Authorization", "Bearer "+tok.Token)
+						prReq.Header.Set("Accept", "application/vnd.github+json")
+						if prResp, err := http.DefaultClient.Do(prReq); err == nil && prResp.StatusCode == http.StatusOK {
+							var prData struct {
+								Head struct {
+									Ref string `json:"ref"`
+								} `json:"head"`
+							}
+							if json.NewDecoder(prResp.Body).Decode(&prData) == nil && prData.Head.Ref != "" {
+								targetBranch = prData.Head.Ref
+							}
+							prResp.Body.Close()
+						}
+					}
+				}
+			}
+		}
+
+		if botCmd.Directive != "" {
+			if s, err := h.DB.GetRepoSettings(repo.ID); err == nil && s != nil {
+				s.UserDirective = botCmd.Directive
+				_ = h.DB.UpsertRepoSettings(s)
+			}
+		}
+
 		// Queue PR bot on-demand localization job
-		job, err := h.DB.CreateJob(repo.ID, "webhook_pr_comment")
+		job, err := h.DB.CreateJobWithBranch(repo.ID, "webhook_pr_comment", targetBranch)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "queue bot job: "+err.Error())
 			return
 		}
-		slog.Info("webhook: queued @langpeanut PR bot job", "job_id", job.ID, "action", botCmd.Action, "pr", commentEv.Issue.Number)
+		slog.Info("webhook: queued @langpeanut PR bot job", "job_id", job.ID, "action", botCmd.Action, "pr", commentEv.Issue.Number, "branch", targetBranch)
 		writeJSON(w, http.StatusOK, map[string]any{
 			"status":     "bot_job_queued",
 			"job_id":     job.ID,
 			"bot_action": botCmd.Action,
 			"pr_number":  commentEv.Issue.Number,
+			"branch":     targetBranch,
 		})
 		return
 
@@ -1306,6 +1585,152 @@ func (h *Handler) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeJSON(w, http.StatusOK, map[string]string{"status": "unhandled_event", "event": event})
 	}
+}
+
+func (h *Handler) handleTestWebhookPush(w http.ResponseWriter, r *http.Request) {
+	repo, ok := h.authorizeRepo(w, r)
+	if !ok {
+		return
+	}
+
+	var req struct {
+		Branch string `json:"branch"`
+		Commit string `json:"commit"`
+		DryRun bool   `json:"dry_run"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	branch := req.Branch
+	if branch == "" {
+		branch = repo.DefaultBranch
+	}
+	if branch == "" {
+		branch = "main"
+	}
+
+	settings, err := h.DB.GetRepoSettings(repo.ID)
+	if err != nil || settings == nil || len(settings.Locales) == 0 {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status":  "no_locales_configured",
+			"message": "Repository has no target localization languages configured.",
+			"matched": false,
+		})
+		return
+	}
+
+	if !settings.WebhookPushEnabled {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status":  "push_trigger_disabled",
+			"message": "Push Autopilot is currently DISABLED in repository settings.",
+			"matched": false,
+		})
+		return
+	}
+
+	branchMatches := false
+	switch settings.WebhookBranchFilter {
+	case "all":
+		branchMatches = true
+	case "custom":
+		if settings.WebhookCustomBranches != "" {
+			patterns := strings.Split(settings.WebhookCustomBranches, ",")
+			for _, pat := range patterns {
+				pat = strings.TrimSpace(pat)
+				if pat == "" {
+					continue
+				}
+				if matched, _ := filepath.Match(pat, branch); matched || pat == branch {
+					branchMatches = true
+					break
+				}
+			}
+		} else {
+			branchMatches = (branch == repo.DefaultBranch || repo.DefaultBranch == "")
+		}
+	case "default_branch", "":
+		fallthrough
+	default:
+		branchMatches = (branch == repo.DefaultBranch || repo.DefaultBranch == "")
+	}
+
+	if !branchMatches {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status":  "ignored_branch_filter",
+			"message": fmt.Sprintf("Branch '%s' does NOT match branch filter '%s' (custom patterns: '%s')", branch, settings.WebhookBranchFilter, settings.WebhookCustomBranches),
+			"matched": false,
+			"branch":  branch,
+		})
+		return
+	}
+
+	if req.DryRun {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status":         "simulated_match",
+			"message":        fmt.Sprintf("✓ Webhook criteria MATCHED for branch '%s'. Autopilot job would be queued.", branch),
+			"matched":        true,
+			"branch":         branch,
+			"action":         settings.WebhookAction,
+			"branch_prefix":  settings.WebhookCustomBranchPrefix,
+			"target_locales": settings.Locales,
+		})
+		return
+	}
+
+	job, err := h.DB.CreateJobWithBranch(repo.ID, "webhook_push", branch)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to queue job: "+err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":  "job_queued",
+		"message": fmt.Sprintf("Successfully simulated webhook push on branch '%s'. Job #%d queued.", branch, job.ID),
+		"job_id":  job.ID,
+		"branch":  branch,
+		"matched": true,
+	})
+}
+
+func (h *Handler) handleTestWebhookBot(w http.ResponseWriter, r *http.Request) {
+	repo, ok := h.authorizeRepo(w, r)
+	if !ok {
+		return
+	}
+
+	var req struct {
+		Command string `json:"command"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Command == "" {
+		writeError(w, http.StatusBadRequest, "command string is required")
+		return
+	}
+
+	cmd, isBot := ghpkg.ParseBotCommand(req.Command)
+	if !isBot || cmd == nil {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"valid":   false,
+			"message": "Not a valid @langpeanut or /langpeanut command. Example: '@langpeanut translate --locales ja,ko --tone formal'",
+		})
+		return
+	}
+
+	settings, _ := h.DB.GetRepoSettings(repo.ID)
+	enabled := true
+	if settings != nil {
+		enabled = settings.WebhookPRCommentsEnabled
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"valid":       true,
+		"enabled":     enabled,
+		"action":      cmd.Action,
+		"locales":     cmd.Locales,
+		"tone":        cmd.Tone,
+		"provider":    cmd.Provider,
+		"directive":   cmd.Directive,
+		"raw_command": cmd.RawCommand,
+		"message":     fmt.Sprintf("✓ Parsed command action '%s' with %d locales and directive: '%s'", cmd.Action, len(cmd.Locales), cmd.Directive),
+	})
 }
 
 // ─── Middleware ───────────────────────────────────────────────────────────────
@@ -1366,19 +1791,36 @@ func parseRepoID(w http.ResponseWriter, r *http.Request) (int64, bool) {
 }
 
 func (h *Handler) resolveClientForRepo(repo *db.Repo) llm.Client {
-	settings, err := h.DB.GetRepoSettings(repo.ID)
-	if err != nil || settings == nil {
-		return llm.AutoDetectClient()
+	return h.resolveClientForRepoWithOverride(repo, "", "")
+}
+
+func (h *Handler) resolveClientForRepoWithOverride(repo *db.Repo, overrideProvider, overrideModel string) llm.Client {
+	settings, _ := h.DB.GetRepoSettings(repo.ID)
+	provider := overrideProvider
+	model := overrideModel
+
+	if provider == "" && settings != nil {
+		provider = settings.Provider
+	}
+	if provider == "" {
+		provider = "gemini"
+	}
+
+	if model == "" && settings != nil {
+		model = settings.Model
+	}
+	if model == "" {
+		model = "gemini-3.5-flash"
 	}
 
 	var apiKey string
 	var encKey []byte
-	if len(settings.EncryptedAPIKeyOverride) > 0 {
+	if settings != nil && len(settings.EncryptedAPIKeyOverride) > 0 && (settings.Provider == provider || overrideProvider == "") {
 		encKey = settings.EncryptedAPIKeyOverride
 	} else {
 		inst, err := h.DB.GetInstallationByID(repo.InstallationID)
 		if err == nil && inst != nil {
-			cred, _ := h.DB.GetAPICredential(inst.TeamID, settings.Provider)
+			cred, _ := h.DB.GetAPICredential(inst.TeamID, provider)
 			if cred != nil {
 				encKey = cred.EncryptedKey
 			}
@@ -1389,7 +1831,7 @@ func (h *Handler) resolveClientForRepo(repo *db.Repo) llm.Client {
 	}
 
 	if apiKey != "" {
-		return llm.NewClientWithAPIKey(llm.ProviderType(settings.Provider), settings.Model, apiKey)
+		return llm.NewClientWithAPIKey(llm.ProviderType(provider), model, apiKey)
 	}
 	return llm.AutoDetectClient()
 }
@@ -1406,45 +1848,27 @@ func (h *Handler) handleGetSEOOverview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Auto-infer if empty
+	matrix, _ := h.DB.GetTranslationMatrix(repo.ID)
+	enCount := 0
+	if matrix != nil && matrix["en"] != nil {
+		enCount = len(matrix["en"])
+	}
+
 	if strategy == nil {
-		scanDir := h.getRepoScanDir(repo.ID)
-		client := h.resolveClientForRepo(repo)
-		scout := agents.NewPersonaScoutAgent(client)
-		persona, _ := scout.DiscoverPersona(scanDir)
-
-		projName := repo.Name
-		cat := "Software Platform"
 		locales := []string{"ja", "de", "es"}
-		if persona != nil {
-			if persona.ProjectName != "" {
-				projName = persona.ProjectName
-			}
-			if persona.Audience != "" && len(persona.Audience) <= 25 {
-				cat = persona.Audience
-			} else if persona.Summary != "" && len(persona.Summary) <= 30 && !strings.HasPrefix(persona.Summary, "Autonomous localization") {
-				cat = persona.Summary
-			} else if strings.Contains(strings.ToLower(projName), "store") || strings.Contains(strings.ToLower(projName), "shop") || strings.Contains(strings.ToLower(projName), "commerce") {
-				cat = "E-Commerce Platform"
-			} else if strings.Contains(strings.ToLower(projName), "app") {
-				cat = "Application"
-			}
-			if len(persona.LocalesSuggested) > 0 {
-				locales = persona.LocalesSuggested
-			}
+		if s, _ := h.DB.GetRepoSettings(repo.ID); s != nil && len(s.Locales) > 0 {
+			locales = s.Locales
 		}
-
 		strategy = &db.RepoSEOStrategy{
 			RepoID:             repo.ID,
-			ProjectName:        projName,
-			Category:           cat,
-			ProductDescription: fmt.Sprintf("Modern software platform: %s", projName),
+			ProjectName:        repo.Name,
+			Category:           "",
+			ProductDescription: "",
 			TargetLocales:      locales,
 			Goal:               "traffic",
 			ScopeTier:          "high_impact",
 			CompetitorURLs:     []string{},
 		}
-		_ = h.DB.UpsertSEOStrategy(strategy)
 	}
 
 	comps, _ := h.DB.GetSEOCompetitors(repo.ID, "")
@@ -1519,13 +1943,119 @@ func (h *Handler) handleGetSEOOverview(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"strategy":      strategy,
-		"competitors":   compMap,
-		"keywords":      kwMap,
-		"optimizations": optMap,
-		"metrics":       metricsMap,
-		"simulations":   simMap,
+		"strategy":             strategy,
+		"competitors":          compMap,
+		"keywords":             kwMap,
+		"optimizations":        optMap,
+		"metrics":              metricsMap,
+		"simulations":          simMap,
+		"extracted_keys_count": enCount,
 	})
+}
+
+// handleAnalyzeSEODomain executes AI Domain Analysis on the real extracted UI strings from the codebase
+func (h *Handler) handleAnalyzeSEODomain(w http.ResponseWriter, r *http.Request) {
+	repo, ok := h.authorizeRepo(w, r)
+	if !ok {
+		return
+	}
+
+	// 1. Gather real extracted UI strings (or perform instant AST scan if needed)
+	extractedStrings, _ := h.ensureSourceStringsExtracted(r.Context(), repo)
+	if len(extractedStrings) == 0 {
+		writeError(w, http.StatusBadRequest, "No UI strings found in repository. Please run an initial job or ensure codebase files contain extractable UI strings.")
+		return
+	}
+
+	// 2. Resolve LLM client for this repository
+	client := h.resolveClientForRepo(repo)
+	if client == nil {
+		writeError(w, http.StatusBadRequest, "Please configure an AI provider API key (Gemini, OpenAI, Anthropic, or Groq) in Repository Settings.")
+		return
+	}
+
+	strategy, _ := h.DB.GetSEOStrategy(repo.ID)
+	if strategy == nil {
+		locales := []string{"ja", "de", "es"}
+		if s, _ := h.DB.GetRepoSettings(repo.ID); s != nil && len(s.Locales) > 0 {
+			locales = s.Locales
+		}
+		strategy = &db.RepoSEOStrategy{
+			RepoID:         repo.ID,
+			ProjectName:    repo.Name,
+			TargetLocales:  locales,
+			Goal:           "traffic",
+			ScopeTier:      "high_impact",
+			CompetitorURLs: []string{},
+		}
+	}
+
+	// 3. AI Agent analyzes real UI strings
+	cat, desc := seo.InferSoftwareOverview(r.Context(), client, repo.Name, extractedStrings, "", "")
+	if cat == "" {
+		writeError(w, http.StatusInternalServerError, "AI Agent could not determine software domain. Please verify your API key or UI strings.")
+		return
+	}
+
+	strategy.Category = cat
+	strategy.ProductDescription = desc
+	if err := h.DB.UpsertSEOStrategy(strategy); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to save SEO strategy: "+err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"category":             cat,
+		"product_description": desc,
+		"extracted_keys_count": len(extractedStrings),
+		"strategy":             strategy,
+	})
+}
+
+// ensureSourceStringsExtracted guarantees that English UI strings are available in the translation matrix.
+// If the DB matrix is empty, it runs an instant in-memory AST scan on the repository files and persists them.
+func (h *Handler) ensureSourceStringsExtracted(ctx context.Context, repo *db.Repo) ([]string, map[string]map[string]string) {
+	matrix, _ := h.DB.GetTranslationMatrix(repo.ID)
+	if matrix == nil {
+		matrix = make(map[string]map[string]string)
+	}
+
+	var extracted []string
+	if enMap, ok := matrix["en"]; ok && len(enMap) > 0 {
+		for _, v := range enMap {
+			if v != "" {
+				extracted = append(extracted, v)
+			}
+		}
+		return extracted, matrix
+	}
+
+	// Matrix is empty: perform instant AST scan on disk
+	scanDir := h.getRepoScanDir(repo.ID)
+	if _, err := os.Stat(scanDir); err == nil {
+		reg := platforms.NewRegistry()
+		plat, _ := reg.AutoDetect(scanDir)
+		if plat != nil {
+			scout := agents.NewASTScoutAgent(plat)
+			report, err := scout.ScanProject(scanDir, "")
+			if err == nil && len(report.Candidates) > 0 {
+				if matrix["en"] == nil {
+					matrix["en"] = make(map[string]string)
+				}
+				for _, c := range report.Candidates {
+					cleanVal := strings.TrimSpace(c.CleanValue)
+					if cleanVal != "" {
+						matrix["en"][c.Key] = cleanVal
+						extracted = append(extracted, cleanVal)
+					}
+				}
+				_ = h.DB.UpsertTranslationMatrix(repo.ID, matrix)
+				slog.Info("seo: auto-extracted AST strings on first run", "repo_id", repo.ID, "count", len(extracted))
+			}
+		}
+	}
+
+	return extracted, matrix
 }
 
 func (h *Handler) handleSaveSEOStrategy(w http.ResponseWriter, r *http.Request) {
@@ -1570,7 +2100,7 @@ func (h *Handler) handleRunSEOScout(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewDecoder(r.Body).Decode(&req)
 	locale := req.Locale
 	if locale == "" {
-		locale = "ja"
+		locale = "en"
 	}
 
 	strategy, err := h.DB.GetSEOStrategy(repo.ID)
@@ -1583,10 +2113,24 @@ func (h *Handler) handleRunSEOScout(w http.ResponseWriter, r *http.Request) {
 	scoutAgent := seo.NewSERPScoutAgent(client)
 	kwAgent := seo.NewKeywordIntelligenceAgent(client)
 
+	// Collect extracted UI strings (auto-extracting via AST if matrix is empty)
+	extractedStrings, _ := h.ensureSourceStringsExtracted(r.Context(), repo)
+
+	currentCat := strategy.Category
+	if currentCat == "Software Platform" || currentCat == "E-Commerce & Storefront App" || currentCat == "Cloud Productivity Software" {
+		currentCat = ""
+	}
+	cat, desc := seo.InferSoftwareOverview(r.Context(), client, repo.Name, extractedStrings, currentCat, strategy.ProductDescription)
+	if cat != "" {
+		strategy.Category = cat
+		strategy.ProductDescription = desc
+		_ = h.DB.UpsertSEOStrategy(strategy)
+	}
+
 	coreStrategy := &seo.SEOStrategy{
 		ProjectName:        strategy.ProjectName,
-		Category:           strategy.Category,
-		ProductDescription: strategy.ProductDescription,
+		Category:           cat,
+		ProductDescription: desc,
 		TargetLocales:      strategy.TargetLocales,
 		Goal:               seo.GrowthGoal(strategy.Goal),
 		ScopeTier:          seo.KeyScopeTier(strategy.ScopeTier),
@@ -1655,7 +2199,7 @@ func (h *Handler) handleRunSEOOptimize(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewDecoder(r.Body).Decode(&req)
 	locale := req.Locale
 	if locale == "" {
-		locale = "ja"
+		locale = "en"
 	}
 
 	strategy, err := h.DB.GetSEOStrategy(repo.ID)
@@ -1669,18 +2213,7 @@ func (h *Handler) handleRunSEOOptimize(w http.ResponseWriter, r *http.Request) {
 	criticAgent := seo.NewGrowthPredictorCritic()
 	simAgent := seo.NewSERPSimulatorAgent()
 
-	coreStrategy := &seo.SEOStrategy{
-		ProjectName:        strategy.ProjectName,
-		Category:           strategy.Category,
-		ProductDescription: strategy.ProductDescription,
-		TargetLocales:      strategy.TargetLocales,
-		Goal:               seo.GrowthGoal(strategy.Goal),
-		ScopeTier:          seo.KeyScopeTier(strategy.ScopeTier),
-		CompetitorURLs:     strategy.CompetitorURLs,
-	}
-
-	// Fetch existing translation matrix keys for English and target locale
-	matrix, _ := h.DB.GetTranslationMatrix(repo.ID)
+	extractedStrings, matrix := h.ensureSourceStringsExtracted(r.Context(), repo)
 	sourceKeys := make(map[string]string)
 	baselineTranslations := make(map[string]string)
 
@@ -1696,6 +2229,22 @@ func (h *Handler) handleRunSEOOptimize(w http.ResponseWriter, r *http.Request) {
 				sourceKeys[k] = v
 			}
 		}
+	}
+
+	cat, desc := seo.InferSoftwareOverview(r.Context(), client, repo.Name, extractedStrings, strategy.Category, strategy.ProductDescription)
+	if cat != "" {
+		strategy.Category = cat
+		strategy.ProductDescription = desc
+	}
+
+	coreStrategy := &seo.SEOStrategy{
+		ProjectName:        strategy.ProjectName,
+		Category:           cat,
+		ProductDescription: desc,
+		TargetLocales:      strategy.TargetLocales,
+		Goal:               seo.GrowthGoal(strategy.Goal),
+		ScopeTier:          seo.KeyScopeTier(strategy.ScopeTier),
+		CompetitorURLs:     strategy.CompetitorURLs,
 	}
 
 	if len(sourceKeys) == 0 {
@@ -1821,6 +2370,96 @@ func (h *Handler) handleApplySEOToMatrix(w http.ResponseWriter, r *http.Request)
 	})
 }
 
+// ─── Google Genkit Handlers & Repository Copilot ─────────────────────────────
+
+func (h *Handler) handleGenkitRuntime(w http.ResponseWriter, r *http.Request) {
+	repo, ok := h.authorizeRepo(w, r)
+	if !ok {
+		return
+	}
+
+	client := h.resolveClientForRepo(repo)
+	scanDir := h.getRepoScanDir(repo.ID)
+	engine, err := genkit.NewGenkitEngine(scanDir, client)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to initialize genkit runtime: "+err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, engine.GetRuntimeInfo())
+}
+
+func (h *Handler) handleGenkitFlows(w http.ResponseWriter, r *http.Request) {
+	repo, ok := h.authorizeRepo(w, r)
+	if !ok {
+		return
+	}
+
+	client := h.resolveClientForRepo(repo)
+	scanDir := h.getRepoScanDir(repo.ID)
+	engine, err := genkit.NewGenkitEngine(scanDir, client)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to initialize genkit: "+err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"framework": "Google Genkit Go",
+		"version":   "v1.12.0",
+		"flows":     engine.ListFlows(),
+		"tools":     engine.ListTools(),
+	})
+}
+
+func (h *Handler) handleGenkitFlowRun(w http.ResponseWriter, r *http.Request) {
+	repo, ok := h.authorizeRepo(w, r)
+	if !ok {
+		return
+	}
+
+	flowName := r.PathValue("flowName")
+	if flowName == "" {
+		writeError(w, http.StatusBadRequest, "flowName is required")
+		return
+	}
+
+	var input map[string]any
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		input = make(map[string]any)
+	}
+
+	client := h.resolveClientForRepo(repo)
+	scanDir := h.getRepoScanDir(repo.ID)
+	engine, err := genkit.NewGenkitEngine(scanDir, client)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to initialize genkit: "+err.Error())
+		return
+	}
+
+	matrix, _ := h.DB.GetTranslationMatrix(repo.ID)
+	if enMap, ok := matrix["en"]; ok {
+		for k, v := range enMap {
+			engine.UnderlyingEngine.Candidates = append(engine.UnderlyingEngine.Candidates, types.StringCandidate{
+				Key:        k,
+				RawValue:   v,
+				CleanValue: v,
+			})
+		}
+	}
+
+	res, err := engine.RunFlow(r.Context(), flowName, input, nil)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "genkit flow execution failed: "+err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"flow":   flowName,
+		"status": "completed",
+		"result": res,
+	})
+}
+
 func (h *Handler) handleRepoChat(w http.ResponseWriter, r *http.Request) {
 	repo, ok := h.authorizeRepo(w, r)
 	if !ok {
@@ -1828,7 +2467,13 @@ func (h *Handler) handleRepoChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Message string `json:"message"`
+		Message  string `json:"message"`
+		Provider string `json:"provider"`
+		Model    string `json:"model"`
+		History  []struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		} `json:"history"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Message) == "" {
 		writeError(w, http.StatusBadRequest, "message is required")
@@ -1844,32 +2489,240 @@ func (h *Handler) handleRepoChat(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Genkit-Framework", "Google Genkit Go")
+	w.Header().Set("X-Genkit-Version", "v1.12.0")
 
-	settings, _ := h.DB.GetRepoSettings(repo.ID)
-	provider := llm.ProviderClaude
-	model := "claude-sonnet-5"
-	if settings != nil {
-		if settings.Provider != "" {
-			provider = llm.ProviderType(settings.Provider)
-		}
-		if settings.Model != "" {
-			model = settings.Model
-		}
-	}
-
-	client := llm.NewClient(provider, model)
-	engine, err := chat.NewEngine(".", client)
+	client := h.resolveClientForRepoWithOverride(repo, req.Provider, req.Model)
+	scanDir := h.getRepoScanDir(repo.ID)
+	engine, err := genkit.NewGenkitEngine(scanDir, client)
 	if err != nil {
-		fmt.Fprintf(w, "data: %s\n\n", `{"type":"error","error":"failed to init engine"}`)
+		fmt.Fprintf(w, "data: %s\n\n", `{"type":"error","error":"failed to init genkit engine"}`)
 		flusher.Flush()
 		return
 	}
 
-	// Populate engine with database translation matrix candidates
+	repoMeta := map[string]any{
+		"repo_id":        repo.ID,
+		"owner":          repo.Owner,
+		"name":           repo.Name,
+		"full_name":      fmt.Sprintf("%s/%s", repo.Owner, repo.Name),
+		"default_branch": repo.DefaultBranch,
+	}
+	var missingConfig []string
+
+	if settings, _ := h.DB.GetRepoSettings(repo.ID); settings != nil {
+		if len(settings.Locales) > 0 {
+			engine.UnderlyingEngine.TargetLocales = settings.Locales
+		} else {
+			missingConfig = append(missingConfig, "Target locales not configured (currently using defaults).")
+		}
+		if settings.TonePreset != "" {
+			engine.UnderlyingEngine.ToneStyle = settings.TonePreset
+		}
+		repoMeta["provider"] = settings.Provider
+		repoMeta["model"] = settings.Model
+		repoMeta["tone"] = settings.TonePreset
+		repoMeta["root_dir"] = settings.RootDir
+		repoMeta["user_directive"] = settings.UserDirective
+		repoMeta["custom_build_cmd"] = settings.CustomBuildCmd
+		repoMeta["custom_install_cmd"] = settings.CustomInstallCmd
+		repoMeta["existing_translations_mode"] = settings.ExistingTranslationsMode
+
+		// Check API key configuration
+		hasKey := false
+		if len(settings.EncryptedAPIKeyOverride) > 0 {
+			hasKey = true
+		} else {
+			inst, _ := h.DB.GetInstallationByID(repo.InstallationID)
+			if inst != nil {
+				cred, _ := h.DB.GetAPICredential(inst.TeamID, settings.Provider)
+				if cred != nil {
+					hasKey = true
+				}
+			}
+		}
+		repoMeta["has_api_key"] = hasKey
+		if !hasKey {
+			missingConfig = append(missingConfig, fmt.Sprintf("No API key configured for active provider '%s'. Add key in Vault Keys or Repo Settings before running automated background jobs.", settings.Provider))
+		}
+	} else {
+		missingConfig = append(missingConfig, "Repository settings not initialized.")
+	}
+
+	// Translation matrix stats
 	matrix, _ := h.DB.GetTranslationMatrix(repo.ID)
 	if enMap, ok := matrix["en"]; ok {
+		repoMeta["extracted_strings_count"] = len(enMap)
+		localeStats := make(map[string]int)
+		for loc, kv := range matrix {
+			localeStats[loc] = len(kv)
+		}
+		repoMeta["locale_key_counts"] = localeStats
+	} else {
+		missingConfig = append(missingConfig, "No extracted translation strings in database yet. Run an AST scan or trigger a job to extract strings.")
+	}
+
+	// Recent jobs status
+	recentJobs, _ := h.DB.ListJobsByRepo(repo.ID, 1)
+	if len(recentJobs) > 0 {
+		lastJob := recentJobs[0]
+		repoMeta["last_job_id"] = lastJob.ID
+		repoMeta["last_job_status"] = lastJob.Status
+		repoMeta["last_job_branch"] = lastJob.Branch
+		if lastJob.PRURL != "" {
+			repoMeta["last_job_pr_url"] = lastJob.PRURL
+		}
+		if lastJob.ErrorMessage != "" {
+			repoMeta["last_job_error"] = lastJob.ErrorMessage
+		}
+	}
+
+	engine.UnderlyingEngine.RepoMetadata = repoMeta
+	engine.UnderlyingEngine.MissingConfig = missingConfig
+
+	// Wire Platform Job Trigger Hook
+	engine.UnderlyingEngine.JobTriggerHook = func(ctx context.Context, branch, directive string) (map[string]any, error) {
+		targetBranch := strings.TrimSpace(branch)
+		if targetBranch == "" {
+			targetBranch = repo.DefaultBranch
+		}
+		if targetBranch == "" {
+			targetBranch = "main"
+		}
+
+		if directive != "" {
+			if s, _ := h.DB.GetRepoSettings(repo.ID); s != nil {
+				s.UserDirective = directive
+				_ = h.DB.UpsertRepoSettings(s)
+			}
+		}
+
+		job, err := h.DB.CreateJobWithBranch(repo.ID, "manual", targetBranch)
+		if err != nil {
+			return nil, fmt.Errorf("create job: %w", err)
+		}
+		slog.Info("api: job queued via central copilot", "job_id", job.ID, "repo_id", repo.ID, "branch", targetBranch)
+
+		return map[string]any{
+			"job_id":  job.ID,
+			"repo":    fmt.Sprintf("%s/%s", repo.Owner, repo.Name),
+			"branch":  targetBranch,
+			"status":  "queued",
+			"message": fmt.Sprintf("Platform Job #%d queued for %s on branch '%s'.", job.ID, repo.Name, targetBranch),
+		}, nil
+	}
+
+	// Wire Platform Config Update Hook
+	engine.UnderlyingEngine.ConfigUpdateHook = func(ctx context.Context, updates map[string]any) (map[string]any, error) {
+		s, err := h.DB.GetRepoSettings(repo.ID)
+		if err != nil || s == nil {
+			return nil, fmt.Errorf("settings not found")
+		}
+		if locs, ok := updates["locales"].([]string); ok && len(locs) > 0 {
+			s.Locales = locs
+		} else if locSlice, ok := updates["locales"].([]any); ok && len(locSlice) > 0 {
+			var parsed []string
+			for _, item := range locSlice {
+				if str, ok := item.(string); ok && str != "" {
+					parsed = append(parsed, str)
+				}
+			}
+			if len(parsed) > 0 {
+				s.Locales = parsed
+			}
+		}
+		if tone, ok := updates["tone"].(string); ok && tone != "" {
+			s.TonePreset = tone
+		}
+		if model, ok := updates["model"].(string); ok && model != "" {
+			s.Model = model
+		}
+		if provider, ok := updates["provider"].(string); ok && provider != "" {
+			s.Provider = provider
+		}
+		if dir, ok := updates["user_directive"].(string); ok {
+			s.UserDirective = dir
+		}
+		if err := h.DB.UpsertRepoSettings(s); err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"status":   "updated",
+			"settings": s,
+		}, nil
+	}
+
+	// Wire Platform Matrix Update Hook
+	engine.UnderlyingEngine.MatrixUpdateHook = func(ctx context.Context, trans map[string]map[string]string) error {
+		matrix, _ := h.DB.GetTranslationMatrix(repo.ID)
+		if matrix == nil {
+			matrix = make(map[string]map[string]string)
+		}
+		for loc, kv := range trans {
+			if matrix[loc] == nil {
+				matrix[loc] = make(map[string]string)
+			}
+			for k, v := range kv {
+				matrix[loc][k] = v
+			}
+		}
+		return h.DB.UpsertTranslationMatrix(repo.ID, matrix)
+	}
+
+	// Wire Platform Jobs Query Hook
+	engine.UnderlyingEngine.JobsQueryHook = func(ctx context.Context, limit int) ([]map[string]any, error) {
+		jobs, err := h.DB.ListJobsByRepo(repo.ID, limit)
+		if err != nil {
+			return nil, err
+		}
+		var list []map[string]any
+		for _, j := range jobs {
+			list = append(list, map[string]any{
+				"id":           j.ID,
+				"status":       j.Status,
+				"trigger_type": j.TriggerType,
+				"branch":       j.Branch,
+				"commit_sha":   j.HeadCommitSHA,
+				"pr_url":       j.PRURL,
+				"created_at":   j.CreatedAt,
+			})
+		}
+		return list, nil
+	}
+
+	// Wire Platform Key Update Hook
+	engine.UnderlyingEngine.KeyUpdateHook = func(ctx context.Context, locale, key, value string) error {
+		matrix, _ := h.DB.GetTranslationMatrix(repo.ID)
+		if matrix == nil {
+			matrix = make(map[string]map[string]string)
+		}
+		if matrix[locale] == nil {
+			matrix[locale] = make(map[string]string)
+		}
+		matrix[locale][key] = value
+		return h.DB.UpsertTranslationMatrix(repo.ID, matrix)
+	}
+
+	if len(req.History) > 0 {
+		for _, hMsg := range req.History {
+			if strings.TrimSpace(hMsg.Content) == "" {
+				continue
+			}
+			role := chat.RoleUser
+			if hMsg.Role == "assistant" || hMsg.Role == "model" {
+				role = chat.RoleAssistant
+			}
+			engine.UnderlyingEngine.History = append(engine.UnderlyingEngine.History, chat.ChatMessage{
+				Role:    role,
+				Content: hMsg.Content,
+			})
+		}
+	}
+
+	// Populate engine with database translation matrix candidates
+	if enMap, ok := matrix["en"]; ok {
 		for k, v := range enMap {
-			engine.Candidates = append(engine.Candidates, types.StringCandidate{
+			engine.UnderlyingEngine.Candidates = append(engine.UnderlyingEngine.Candidates, types.StringCandidate{
 				Key:        k,
 				RawValue:   v,
 				CleanValue: v,
@@ -1877,12 +2730,12 @@ func (h *Handler) handleRepoChat(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	eventChan := make(chan chat.ChatEvent, 100)
+	streamChan := make(chan genkit.GenkitStreamEvent, 100)
 	doneChan := make(chan struct{})
 
 	go func() {
 		defer close(doneChan)
-		_, _ = engine.SendMessage(r.Context(), req.Message, eventChan)
+		_, _ = engine.SendChatMessage(r.Context(), req.Message, streamChan)
 	}()
 
 	for {
@@ -1890,14 +2743,14 @@ func (h *Handler) handleRepoChat(w http.ResponseWriter, r *http.Request) {
 		case <-r.Context().Done():
 			return
 		case <-doneChan:
-			for len(eventChan) > 0 {
-				ev := <-eventChan
+			for len(streamChan) > 0 {
+				ev := <-streamChan
 				data, _ := json.Marshal(ev)
 				fmt.Fprintf(w, "data: %s\n\n", data)
 				flusher.Flush()
 			}
 			return
-		case ev := <-eventChan:
+		case ev := <-streamChan:
 			data, _ := json.Marshal(ev)
 			fmt.Fprintf(w, "data: %s\n\n", data)
 			flusher.Flush()
