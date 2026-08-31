@@ -79,7 +79,7 @@ jobs:
           # Deployment options
           ENABLE_CADDY: ${{ github.event.inputs.enable_caddy || 'yes' }}
           TARGET_BRANCH: ${{ github.event.inputs.custom_branch || github.ref_name }}
-          REPO_URL: ${{ github.server_url }}/${{ github.repository }}.git
+          REPO_URL: "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git"
         run: |
           echo "Connecting to Compute Engine VM: ${GCE_INSTANCE} in zone: ${GCE_ZONE}..."
 
@@ -92,10 +92,10 @@ jobs:
               set -euo pipefail
 
               echo '==> 1. Preparing deployment directory at ${DEPLOY_PATH}...'
-              if [ ! -d '${DEPLOY_PATH}' ]; then
-                sudo mkdir -p '${DEPLOY_PATH}'
-                sudo chown \$(whoami):\$(whoami) '${DEPLOY_PATH}'
-              fi
+              sudo mkdir -p '${DEPLOY_PATH}'
+              sudo chown -R \$(whoami):\$(whoami) '${DEPLOY_PATH}'
+              sudo chmod -R 775 '${DEPLOY_PATH}'
+              git config --global --add safe.directory '${DEPLOY_PATH}'
 
               cd '${DEPLOY_PATH}'
 
@@ -103,6 +103,7 @@ jobs:
               if [ ! -d .git ]; then
                 git clone '${REPO_URL}' .
               else
+                git remote set-url origin '${REPO_URL}'
                 git fetch origin
               fi
               git checkout '${TARGET_BRANCH}'
