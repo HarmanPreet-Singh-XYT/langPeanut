@@ -12,6 +12,8 @@ sudo chmod 666 /var/run/docker.sock || true
 
 echo "==> 2. Unpacking pre-compiled deployment bundle..."
 tar -xzf /tmp/deploy-package.tar.gz -C "${DEPLOY_PATH}/langpeanut-cloud"
+cp "${DEPLOY_PATH}/langpeanut-cloud/Dockerfile.prebuilt" "${DEPLOY_PATH}/langpeanut-cloud/Dockerfile"
+cp "${DEPLOY_PATH}/langpeanut-cloud/Dockerfile.runner.prebuilt" "${DEPLOY_PATH}/langpeanut-cloud/Dockerfile.runner"
 
 cd "${DEPLOY_PATH}/langpeanut-cloud"
 

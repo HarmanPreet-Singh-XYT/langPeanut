@@ -1,0 +1,17 @@
+# ── Runner Sandbox Image with Node.js 24 (Pre-compiled for CI/CD) ────────────
+FROM node:24-bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates git \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN git config --system --add safe.directory "*"
+
+WORKDIR /work
+COPY bin/langpeanut-runner /usr/local/bin/langpeanut-runner
+
+RUN chown -R node:node /work
+USER node
+
+VOLUME ["/work"]
+ENTRYPOINT ["langpeanut-runner"]

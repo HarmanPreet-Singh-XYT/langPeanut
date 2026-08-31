@@ -1,4 +1,22 @@
-# ── Runner Sandbox Image with Node.js 24 ─────────────────────────────────────
+# ── Stage 1: Build runner binary ──────────────────────────────────────────────
+FROM golang:1.26-bookworm AS builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc libc6-dev git \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+COPY --from=langpeanut_local . /langpeanut_local
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+RUN CGO_ENABLED=1 CGO_CFLAGS="-O0" GOOS=linux go build -trimpath -ldflags="-s -w" \
+    -o /out/langpeanut-runner ./cmd/runner
+
+# ── Stage 2: Runtime (runner sandbox with Node.js 24) ────────────────────────
 FROM node:24-bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -8,7 +26,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN git config --system --add safe.directory "*"
 
 WORKDIR /work
-COPY bin/langpeanut-runner /usr/local/bin/langpeanut-runner
+COPY --from=builder /out/langpeanut-runner /usr/local/bin/langpeanut-runner
 
 RUN chown -R node:node /work
 USER node

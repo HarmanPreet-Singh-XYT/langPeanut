@@ -64,7 +64,7 @@ jobs:
         working-directory: langpeanut-cloud
         run: |
           tar -czf ../deploy-package.tar.gz \
-            bin Dockerfile Dockerfile.runner docker-compose.yml Caddyfile web/out
+            bin Dockerfile.prebuilt Dockerfile.runner.prebuilt docker-compose.yml Caddyfile web/out
 
       # ── Authenticate to Google Cloud ──────────────────────────────────────────
       - name: Authenticate to Google Cloud
