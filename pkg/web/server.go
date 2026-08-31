@@ -1692,8 +1692,48 @@ const InteractiveAppHTML = `<!DOCTYPE html>
       theme: {
         extend: {
           fontFamily: {
-            sans: ['Poppins', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'Roboto', 'sans-serif'],
-            mono: ['JetBrains Mono', 'monospace']
+            sans: ['Geist', 'Inter', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'sans-serif'],
+            mono: ['Geist Mono', 'JetBrains Mono', 'monospace']
+          },
+          colors: {
+            border: 'hsl(var(--border))',
+            input: 'hsl(var(--input))',
+            ring: 'hsl(var(--ring))',
+            background: 'hsl(var(--background))',
+            foreground: 'hsl(var(--foreground))',
+            primary: {
+              DEFAULT: 'hsl(var(--primary))',
+              foreground: 'hsl(var(--primary-foreground))'
+            },
+            secondary: {
+              DEFAULT: 'hsl(var(--secondary))',
+              foreground: 'hsl(var(--secondary-foreground))'
+            },
+            destructive: {
+              DEFAULT: 'hsl(var(--destructive))',
+              foreground: 'hsl(var(--destructive-foreground))'
+            },
+            muted: {
+              DEFAULT: 'hsl(var(--muted))',
+              foreground: 'hsl(var(--muted-foreground))'
+            },
+            accent: {
+              DEFAULT: 'hsl(var(--accent))',
+              foreground: 'hsl(var(--accent-foreground))'
+            },
+            popover: {
+              DEFAULT: 'hsl(var(--popover))',
+              foreground: 'hsl(var(--popover-foreground))'
+            },
+            card: {
+              DEFAULT: 'hsl(var(--card))',
+              foreground: 'hsl(var(--card-foreground))'
+            }
+          },
+          borderRadius: {
+            lg: 'var(--radius)',
+            md: 'calc(var(--radius) - 2px)',
+            sm: 'calc(var(--radius) - 4px)'
           }
         }
       }
@@ -1701,26 +1741,229 @@ const InteractiveAppHTML = `<!DOCTYPE html>
   </script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <style>
-    @import url('https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,300;0,400;0,500;0,700;0,900;1,400&family=Roboto+Mono:wght@400;500;600;700&display=swap');
-    * { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
-    body, button, input, select, textarea { font-family: 'Roboto', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background-color: #07080b; color: #f3f4f6; }
-    pre, code, .font-mono { font-family: 'Roboto Mono', 'JetBrains Mono', monospace; letter-spacing: normal; }
+    @import url('https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700;800&family=Geist+Mono:wght@400;500;600;700&display=swap');
+
+    /* ── shadcn/ui Theme Tokens (Zinc Dark) ─────────────────────────── */
+    :root, .dark {
+      --background:        240 10% 3.9%;
+      --foreground:        0 0% 98%;
+      --card:              240 10% 4.9%;
+      --card-foreground:   0 0% 98%;
+      --popover:           240 10% 4.9%;
+      --popover-foreground:0 0% 98%;
+      --primary:           199 89% 48%;
+      --primary-foreground:0 0% 100%;
+      --secondary:         240 3.7% 15.9%;
+      --secondary-foreground: 0 0% 98%;
+      --muted:             240 3.7% 15.9%;
+      --muted-foreground:  240 5% 64.9%;
+      --accent:            240 3.7% 15.9%;
+      --accent-foreground: 0 0% 98%;
+      --destructive:       0 62.8% 30.6%;
+      --destructive-foreground: 0 0% 98%;
+      --border:            240 3.7% 15.9%;
+      --input:             240 3.7% 15.9%;
+      --ring:              199 89% 48%;
+      --radius:            0.5rem;
+
+      /* Direct CSS Helpers */
+      --clr-bg:            #09090b;
+      --clr-card:          #0c0c0e;
+      --clr-card-header:   #121215;
+      --clr-border:        #27272a;
+      --clr-border-muted:  #1e1e22;
+      --clr-text:          #fafafa;
+      --clr-text-muted:    #a1a1aa;
+      --clr-primary:       #38bdf8;
+      --clr-primary-dim:   rgba(56,189,248,0.12);
+      --clr-primary-border:rgba(56,189,248,0.3);
+    }
+
+    * { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; box-sizing: border-box; }
+
+    body, button, input, select, textarea {
+      font-family: 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background-color: var(--clr-bg);
+      color: var(--clr-text);
+    }
+    pre, code, .font-mono {
+      font-family: 'Geist Mono', monospace;
+      letter-spacing: normal;
+    }
+
+    /* ── Custom Scrollbar ─────────────────────────────────────────────── */
     .custom-scrollbar::-webkit-scrollbar { width: 5px; height: 5px; }
     .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
-    .custom-scrollbar::-webkit-scrollbar-thumb { background: #1f2430; border-radius: 3px; }
-    .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #2f3647; }
-    .nav-btn { color: #8a91a0; border-left: 2px solid transparent; }
-    .nav-btn:hover { color: #f3f4f6; background: #0f1219; }
-    .nav-btn.active { color: #38bdf8; background: #121622; border-left-color: #38bdf8; font-weight: 600; }
-    .panel { background: #0c0e14; border: 1px solid #181b24; }
-    .panel-header { background: #10131c; border-bottom: 1px solid #181b24; }
-    .field { background: #080a0f; border: 1px solid #1e222e; }
-    .field:focus { outline: none; border-color: #38bdf8; }
+    .custom-scrollbar::-webkit-scrollbar-thumb { background: #27272a; border-radius: 3px; }
+    .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #3f3f46; }
+
+    /* ── Nav ──────────────────────────────────────────────────────────── */
+    .nav-btn { color: var(--clr-text-muted); border-left: 2px solid transparent; transition: all 0.15s; }
+    .nav-btn:hover { color: var(--clr-text); background: #0f1219; }
+    .nav-btn.active { color: var(--clr-primary); background: #121622; border-left-color: var(--clr-primary); font-weight: 600; }
+
+    /* ── Panels & Fields ─────────────────────────────────────────────── */
+    .panel { background: var(--clr-surface); border: 1px solid var(--clr-border); }
+    .panel-header { background: var(--clr-surface-2); border-bottom: 1px solid var(--clr-border); }
+    .field { background: var(--clr-input, #080a0f); border: 1px solid var(--clr-border-2); transition: border-color 0.15s; }
+    .field:focus { outline: none; border-color: var(--clr-primary); box-shadow: 0 0 0 2px var(--clr-primary-dim); }
+
+    /* ── shadcn-style Button primitives ─────────────────────────────── */
+    .btn { display: inline-flex; align-items: center; justify-content: center; gap: 0.375rem;
+           font-size: 0.75rem; font-weight: 500; line-height: 1; border-radius: var(--radius);
+           border: 1px solid transparent; cursor: pointer; transition: all 0.15s; white-space: nowrap; }
+    .btn:disabled { opacity: 0.5; pointer-events: none; }
+    .btn-primary { background: var(--clr-primary); color: #0f172a; border-color: var(--clr-primary); }
+    .btn-primary:hover { background: #7dd3fc; }
+    .btn-secondary { background: #131722; color: #d4d8e0; border-color: #232838; }
+    .btn-secondary:hover { background: #1a2030; }
+    .btn-ghost { background: transparent; color: var(--clr-text-muted); border-color: transparent; }
+    .btn-ghost:hover { background: #0f1219; color: var(--clr-text); }
+    .btn-destructive { background: hsl(0 63% 38%); color: var(--clr-text); }
+    .btn-destructive:hover { background: hsl(0 63% 44%); }
+    .btn-outline { background: transparent; border-color: var(--clr-border-2); color: var(--clr-text); }
+    .btn-outline:hover { background: var(--clr-surface-2); }
+    .btn-sm { padding: 0.25rem 0.625rem; font-size: 0.6875rem; }
+    .btn-md { padding: 0.375rem 0.875rem; }
+    .btn-lg { padding: 0.5rem 1.25rem; font-size: 0.8125rem; }
+    .btn-icon { padding: 0.375rem; border-radius: 0.5rem; }
+
+    /* ── shadcn-style Badge ──────────────────────────────────────────── */
+    .badge { display: inline-flex; align-items: center; gap: 0.25rem; font-size: 0.6rem; font-weight: 600;
+             padding: 0.15rem 0.5rem; border-radius: 9999px; border: 1px solid; letter-spacing: 0.04em;
+             text-transform: uppercase; }
+    .badge-default { background: var(--clr-primary-dim); color: var(--clr-primary); border-color: var(--clr-primary-border); }
+    .badge-muted  { background: #12151e; color: #8a91a0; border-color: #1e222e; }
+    .badge-emerald{ background: rgba(52,211,153,0.1); color: #34d399; border-color: rgba(52,211,153,0.25); }
+    .badge-amber  { background: rgba(251,191,36,0.1); color: #fbbf24; border-color: rgba(251,191,36,0.25); }
+    .badge-rose   { background: rgba(251,113,133,0.1); color: #fb7185; border-color: rgba(251,113,133,0.25); }
+    .badge-purple { background: rgba(192,132,252,0.1); color: #c084fc; border-color: rgba(192,132,252,0.25); }
+
+    /* ── Prompt-Kit Chat UI ─────────────────────────────────────────── */
+    .pk-msg-user {
+      background: #121622;
+      border: 1px solid var(--clr-primary-border);
+      border-radius: 1rem 1rem 0.25rem 1rem;
+      padding: 0.625rem 0.875rem;
+      max-width: 82%;
+      color: #e2e8f0;
+      font-size: 0.75rem;
+      line-height: 1.5;
+    }
+    .pk-msg-assistant {
+      background: var(--clr-surface);
+      border: 1px solid var(--clr-border);
+      border-radius: 1rem 1rem 1rem 0.25rem;
+      padding: 0.75rem 1rem;
+      font-size: 0.75rem;
+      line-height: 1.6;
+      color: #d4d8e0;
+    }
+    .pk-avatar {
+      width: 1.75rem; height: 1.75rem; border-radius: 0.5rem;
+      background: var(--clr-primary-dim);
+      border: 1px solid var(--clr-primary-border);
+      display: flex; align-items: center; justify-content: center;
+      color: var(--clr-primary); font-size: 0.65rem; font-weight: 700;
+      flex-shrink: 0; margin-top: 0.125rem; font-family: 'Geist Mono', monospace;
+    }
+    .pk-tool-card {
+      border: 1px solid rgba(255,255,255,0.07);
+      border-radius: 0.75rem;
+      background: #090b10;
+      overflow: hidden;
+      font-size: 0.6875rem;
+      margin: 0.375rem 0;
+    }
+    .pk-tool-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0.5rem 0.75rem;
+      background: #0c0f16;
+      cursor: pointer;
+      transition: background 0.15s;
+      font-family: 'Geist Mono', monospace;
+    }
+    .pk-tool-header:hover { background: #111622; }
+    .pk-tool-body {
+      padding: 0.75rem;
+      border-top: 1px solid rgba(255,255,255,0.06);
+      background: #07080c;
+    }
+    .pk-suggestion {
+      display: inline-flex; align-items: center; gap: 0.25rem;
+      padding: 0.3125rem 0.75rem;
+      border-radius: 9999px;
+      border: 1px solid var(--clr-border);
+      background: var(--clr-surface);
+      color: var(--clr-text-muted);
+      font-size: 0.6875rem; font-weight: 500;
+      cursor: pointer; transition: all 0.15s; white-space: nowrap;
+      font-family: 'Geist', sans-serif;
+    }
+    .pk-suggestion:hover {
+      border-color: var(--clr-primary-border);
+      color: var(--clr-primary);
+      background: var(--clr-primary-dim);
+    }
+    .pk-input-wrap {
+      background: #06080d;
+      border: 1px solid #232838;
+      border-radius: 1rem;
+      padding: 0.75rem;
+      transition: border-color 0.15s, box-shadow 0.15s;
+    }
+    .pk-input-wrap:focus-within {
+      border-color: rgba(56,189,248,0.6);
+      box-shadow: 0 0 0 2px rgba(56,189,248,0.08);
+    }
+    @keyframes pk-thinking {
+      0%,80%,100% { opacity: 0.25; transform: scale(0.75); }
+      40% { opacity: 1; transform: scale(1); }
+    }
+    .pk-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--clr-primary); display: inline-block;
+               animation: pk-thinking 1.2s ease-in-out infinite; }
+    .pk-dot:nth-child(2) { animation-delay: 0.2s; }
+    .pk-dot:nth-child(3) { animation-delay: 0.4s; }
+
+    /* ── Reasoning block ─────────────────────────────────────────────── */
+    .pk-reasoning {
+      border: 1px solid rgba(192,132,252,0.15);
+      border-radius: 0.75rem;
+      background: rgba(192,132,252,0.03);
+      overflow: hidden; margin: 0.375rem 0;
+    }
+    .pk-reasoning-header {
+      display: flex; align-items: center; gap: 0.5rem;
+      padding: 0.5rem 0.75rem; cursor: pointer;
+      color: #c084fc; font-size: 0.6875rem; font-weight: 600;
+      font-family: 'Geist Mono', monospace;
+      transition: background 0.15s;
+    }
+    .pk-reasoning-header:hover { background: rgba(192,132,252,0.05); }
+    .pk-reasoning-body {
+      padding: 0.75rem; border-top: 1px solid rgba(192,132,252,0.1);
+      color: #9ca3af; font-size: 0.6875rem; line-height: 1.6;
+      font-family: 'Geist', sans-serif;
+    }
+
+    /* ── Canvas Panel tabs ───────────────────────────────────────────── */
+    .canvas-tab { padding: 0.3125rem 0.75rem; border-radius: 0.5rem; font-size: 0.6875rem;
+                  font-weight: 500; cursor: pointer; transition: all 0.15s; color: #4a5162; border: none;
+                  background: transparent; font-family: 'Geist', sans-serif; }
+    .canvas-tab:hover { color: var(--clr-text); background: #12151e; }
+    .canvas-tab.active { color: var(--clr-text); background: #12151e; font-weight: 600; }
+
+    /* ── Misc ────────────────────────────────────────────────────────── */
     .btn-disabled { opacity: 0.5; pointer-events: none; }
     @keyframes toast-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
     .toast { animation: toast-in 0.15s ease-out; }
-    .kbd { font-family: 'JetBrains Mono', monospace; font-size: 10px; background: #141722; border: 1px solid #232838; padding: 1px 4px; border-radius: 4px; color: #9ca3af; }
+    .kbd { font-family: 'Geist Mono', monospace; font-size: 10px; background: #141722;
+           border: 1px solid #232838; padding: 1px 4px; border-radius: 4px; color: #6b7280; }
     .cell-editable:hover { background: #131724; cursor: pointer; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .animate-spin { animation: spin 1s linear infinite; }
+    @keyframes pulse-slow { 0%,100% { opacity:1; } 50% { opacity:.45; } }
+    .animate-pulse-slow { animation: pulse-slow 2s ease-in-out infinite; }
   </style>
 </head>
 <body class="min-h-screen flex flex-col selection:bg-sky-500/30 selection:text-white">
@@ -1833,14 +2076,14 @@ const InteractiveAppHTML = `<!DOCTYPE html>
 
     <!-- Right Quick Action Buttons -->
     <div class="flex items-center gap-2">
-      <button onclick="rescanAST()" class="px-2.5 py-1.5 rounded-md field hover:border-zinc-700 text-xs text-zinc-300 font-medium flex items-center gap-1.5 transition-colors" title="Rescan code AST (R)">
+      <button onclick="rescanAST()" class="btn btn-outline btn-sm flex items-center gap-1.5" title="Rescan code AST (R)">
         <i class="fa-solid fa-arrows-rotate text-[11px] text-sky-400" id="rescanIcon"></i> Rescan <span class="kbd">R</span>
       </button>
-      <button onclick="executeLocalization()" id="topRunBtn" class="px-3 py-1.5 rounded-md bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold flex items-center gap-1.5 transition-colors shadow-sm" title="Execute Pipeline">
-        <i class="fa-solid fa-bolt text-[11px]"></i> Run Pipeline <span class="kbd text-sky-200 bg-sky-700 border-sky-600">⌘↵</span>
+      <button onclick="executeLocalization()" id="topRunBtn" class="btn btn-primary btn-md flex items-center gap-1.5 shadow-sm shadow-sky-600/20" title="Execute Pipeline">
+        <i class="fa-solid fa-bolt text-[11px]"></i> Run Pipeline <span class="kbd" style="color:#7dd3fc;background:#0c2a3a;border-color:#164e63">⌘↵</span>
       </button>
-      <button onclick="applyDiskChanges()" class="px-2.5 py-1.5 rounded-md border border-emerald-500/30 hover:bg-emerald-500/10 text-emerald-300 text-xs font-medium flex items-center gap-1.5 transition-colors" title="Apply to Disk (A)">
-        <i class="fa-solid fa-floppy-disk text-[11px] text-emerald-400"></i> Apply <span class="kbd text-emerald-300 bg-emerald-950 border-emerald-800">⌘S</span>
+      <button onclick="applyDiskChanges()" class="btn btn-sm flex items-center gap-1.5" style="border-color:rgba(52,211,153,0.3);color:#6ee7b7;background:transparent" title="Apply to Disk (A)">
+        <i class="fa-solid fa-floppy-disk text-[11px] text-emerald-400"></i> Apply <span class="kbd" style="color:#6ee7b7;background:#052e16;border-color:#166534">⌘S</span>
       </button>
     </div>
   </header>
@@ -1913,47 +2156,69 @@ const InteractiveAppHTML = `<!DOCTYPE html>
     <main class="flex-1 flex flex-col min-w-0 bg-[#07080b] overflow-hidden">
 
       <!-- ================================= SCREEN 0: AUTONOMOUS COPILOT WORKSPACE ================================= -->
-      <div id="screenCopilot" class="flex-1 flex flex-col min-h-0 bg-[#07080b] p-6 overflow-y-auto custom-scrollbar">
-        
-        <div class="max-w-4xl mx-auto w-full panel rounded-2xl flex flex-col overflow-hidden border border-[#181b24] shadow-2xl flex-1 min-h-[720px]">
-          <!-- Console Header -->
-          <div class="p-4 border-b border-[#181b24] bg-[#0b0e14] flex items-center justify-between">
+      <div id="screenCopilot" class="flex-1 flex min-h-0 bg-[#07080b] overflow-hidden">
+
+        <!-- LEFT: Chat Panel -->
+        <div class="flex flex-col" style="width:52%;min-width:420px;border-right:1px solid var(--clr-border)">
+
+          <!-- Chat Header -->
+          <div class="flex items-center justify-between px-4 py-3" style="background:var(--clr-surface);border-bottom:1px solid var(--clr-border)">
             <div class="flex items-center gap-2.5">
-              <span class="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
+              <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse-slow"></span>
               <div>
-                <h3 class="text-xs font-bold text-zinc-100 font-mono uppercase tracking-wider">Autonomous Multi-Agent Orchestrator</h3>
-                <p class="text-[11px] text-zinc-400 font-mono">Universal localization & growth engine</p>
+                <div class="text-xs font-semibold text-zinc-100" style="font-family:'Geist',sans-serif;letter-spacing:-0.01em">Autonomous Orchestrator</div>
+                <div class="text-[11px]" style="color:var(--clr-text-muted);font-family:'Geist Mono',monospace">6-agent localization pipeline</div>
               </div>
             </div>
             <div class="flex items-center gap-2">
-              <span id="copilotActiveModelBadge" class="text-[10px] font-mono px-2.5 py-1 rounded-md bg-zinc-800 text-zinc-300 border border-zinc-700">claude-sonnet-5</span>
-              <button onclick="resetCopilotChat()" title="Reset session" class="p-1.5 text-zinc-400 hover:text-zinc-200 rounded-md hover:bg-zinc-800 text-xs transition-colors">
+              <span id="copilotActiveModelBadge" class="badge badge-muted">claude-sonnet-5</span>
+              <button onclick="resetCopilotChat()" title="Reset session" class="btn btn-ghost btn-icon text-xs">
                 <i class="fa-solid fa-arrow-rotate-right"></i>
               </button>
             </div>
           </div>
 
-          <!-- Conversation Message Stream -->
-          <div id="copilotMessages" class="flex-1 overflow-y-auto custom-scrollbar p-6 space-y-4 text-xs font-sans min-h-[460px]"></div>
+          <!-- Message Stream -->
+          <div id="copilotMessages" class="flex-1 overflow-y-auto custom-scrollbar p-4 space-y-4 min-h-0"></div>
 
-          <!-- Quick Action Macros (Prompt-Kit PromptSuggestion) -->
-          <div class="px-6 py-2.5 border-t border-[#181b24] bg-[#080a0f] flex flex-wrap items-center gap-2 text-[11px] font-mono">
-            <span class="text-[10px] uppercase text-zinc-500 font-semibold mr-1">Suggestions:</span>
-            <button onclick="sendCopilotPrompt('Scan repository and calculate coverage matrix')" class="px-2.5 py-1 rounded-lg bg-[#0c0f16] hover:bg-[#131926] text-zinc-300 hover:text-white border border-white/10 hover:border-sky-500/40 transition-all cursor-pointer">Scan AST</button>
-            <button onclick="sendCopilotPrompt('Translate missing keys into Spanish, German and Japanese')" class="px-2.5 py-1 rounded-lg bg-[#0c0f16] hover:bg-[#131926] text-zinc-300 hover:text-white border border-white/10 hover:border-sky-500/40 transition-all cursor-pointer">Translate Missing</button>
-            <button onclick="sendCopilotPrompt('Execute 4-tier verification critic')" class="px-2.5 py-1 rounded-lg bg-[#0c0f16] hover:bg-[#131926] text-zinc-300 hover:text-white border border-white/10 hover:border-sky-500/40 transition-all cursor-pointer">4-Tier Critic</button>
-            <button onclick="sendCopilotPrompt('Simulate Japanese Google SERP preview')" class="px-2.5 py-1 rounded-lg bg-[#0c0f16] hover:bg-[#131926] text-zinc-300 hover:text-white border border-white/10 hover:border-sky-500/40 transition-all cursor-pointer">SERP Preview</button>
-            <button onclick="sendCopilotPrompt('List checkpoints or undo last changes')" class="px-2.5 py-1 rounded-lg bg-[#0c0f16] hover:bg-[#131926] text-zinc-300 hover:text-white border border-white/10 hover:border-sky-500/40 transition-all cursor-pointer">Checkpoints</button>
-            <button onclick="sendCopilotPrompt('Diagnose project health and readiness')" class="px-2.5 py-1 rounded-lg bg-[#0c0f16] hover:bg-[#131926] text-zinc-300 hover:text-white border border-white/10 hover:border-sky-500/40 transition-all cursor-pointer">Diagnostics</button>
+          <!-- Suggestion Chips (Prompt-Kit PromptSuggestion) -->
+          <div class="px-4 py-2.5 flex items-center gap-2 overflow-x-auto" style="border-top:1px solid var(--clr-border);background:var(--clr-surface)">
+            <span class="text-[10px] uppercase font-semibold shrink-0" style="color:var(--clr-text-muted)">Try:</span>
+            <button onclick="sendCopilotPrompt('Scan repository and calculate coverage matrix')" class="pk-suggestion shrink-0">
+              <i class="fa-solid fa-radar text-[9px]"></i> Scan AST
+            </button>
+            <button onclick="sendCopilotPrompt('Translate missing keys into Spanish, German and Japanese')" class="pk-suggestion shrink-0">
+              <i class="fa-solid fa-language text-[9px]"></i> Translate Missing
+            </button>
+            <button onclick="sendCopilotPrompt('Execute 4-tier verification critic')" class="pk-suggestion shrink-0">
+              <i class="fa-solid fa-shield-halved text-[9px]"></i> 4-Tier Critic
+            </button>
+            <button onclick="sendCopilotPrompt('Simulate Japanese Google SERP preview')" class="pk-suggestion shrink-0">
+              <i class="fa-solid fa-magnifying-glass text-[9px]"></i> SERP Preview
+            </button>
+            <button onclick="sendCopilotPrompt('List checkpoints or undo last changes')" class="pk-suggestion shrink-0">
+              <i class="fa-solid fa-clock-rotate-left text-[9px]"></i> Checkpoints
+            </button>
+            <button onclick="sendCopilotPrompt('Diagnose project health and readiness')" class="pk-suggestion shrink-0">
+              <i class="fa-solid fa-stethoscope text-[9px]"></i> Diagnostics
+            </button>
           </div>
 
-          <!-- Console Input Bar (Prompt-Kit PromptInput) -->
-          <div class="p-4 border-t border-[#181b24] bg-[#0b0e14]">
-            <form onsubmit="handleCopilotSubmit(event)" class="bg-[#06080d] border border-zinc-800 focus-within:border-sky-500/80 rounded-2xl p-3 shadow-lg transition-all space-y-2">
-              <textarea id="copilotInput" onkeydown="handleCopilotTextareaKey(event)" rows="2" placeholder="Instruct agent or query workspace (e.g. 'Scan AST', 'Translate missing keys to German', 'Run critic')..." class="w-full resize-none border-none bg-transparent shadow-none outline-none focus:outline-none text-xs text-zinc-100 placeholder-zinc-500 font-mono"></textarea>
-              <div class="flex items-center justify-between pt-2 border-t border-white/5 text-[11px] text-zinc-500 font-mono">
-                <span>Enter to send, Shift+Enter for newline</span>
-                <button type="submit" id="copilotSendBtn" class="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-medium text-xs flex items-center gap-1.5 transition-colors cursor-pointer shadow-sm">
+          <!-- Prompt-Kit Input Area -->
+          <div class="p-3" style="background:var(--clr-surface-2);border-top:1px solid var(--clr-border)">
+            <form onsubmit="handleCopilotSubmit(event)" class="pk-input-wrap">
+              <textarea
+                id="copilotInput"
+                onkeydown="handleCopilotTextareaKey(event)"
+                oninput="this.style.height='auto';this.style.height=Math.min(this.scrollHeight,160)+'px'"
+                rows="2"
+                placeholder="Instruct agent… ('Scan AST', 'Translate to German', 'Run 4-tier critic')"
+                class="w-full resize-none border-none bg-transparent shadow-none outline-none focus:outline-none text-xs placeholder-zinc-600"
+                style="color:var(--clr-text);font-family:'Geist',sans-serif;min-height:44px;max-height:160px"
+              ></textarea>
+              <div class="flex items-center justify-between pt-2 mt-1" style="border-top:1px solid rgba(255,255,255,0.04)">
+                <span class="text-[11px]" style="color:var(--clr-text-muted);font-family:'Geist Mono',monospace">⏎ send &nbsp;·&nbsp; ⇧⏎ newline</span>
+                <button type="submit" id="copilotSendBtn" class="btn btn-primary btn-sm gap-1.5">
                   <span>Execute</span>
                   <i class="fa-solid fa-arrow-right text-[10px]"></i>
                 </button>
@@ -1962,7 +2227,25 @@ const InteractiveAppHTML = `<!DOCTYPE html>
           </div>
         </div>
 
+        <!-- RIGHT: Live Canvas Viewport -->
+        <div class="flex flex-col flex-1 min-w-0">
+          <!-- Canvas Header / Tabs -->
+          <div class="flex items-center justify-between px-4 py-2" style="background:var(--clr-surface);border-bottom:1px solid var(--clr-border)">
+            <div class="flex items-center gap-1">
+              <button onclick="setCanvasTab('matrix')" id="canvasTabMatrix" class="canvas-tab active">Matrix</button>
+              <button onclick="setCanvasTab('diff')" id="canvasTabDiff" class="canvas-tab">Diff</button>
+              <button onclick="setCanvasTab('critic')" id="canvasTabCritic" class="canvas-tab">Critic</button>
+              <button onclick="setCanvasTab('serp')" id="canvasTabSerp" class="canvas-tab">SERP</button>
+              <button onclick="setCanvasTab('cost')" id="canvasTabCost" class="canvas-tab">Cost</button>
+            </div>
+            <span id="canvasActiveViewTitle" class="text-[11px] font-semibold" style="color:var(--clr-text-muted);font-family:'Geist Mono',monospace">Matrix Viewport</span>
+          </div>
+          <!-- Canvas Content -->
+          <div id="copilotCanvasContainer" class="flex-1 overflow-y-auto custom-scrollbar p-4 text-xs min-h-0" style="font-family:'Geist',sans-serif"></div>
+        </div>
+
       </div>
+
 
       <!-- ================================= SCREEN 1: 3-PANE STRING STUDIO ================================= -->
       <div id="screenStudio" class="hidden flex-1 flex min-h-0">
@@ -4412,15 +4695,25 @@ const InteractiveAppHTML = `<!DOCTYPE html>
 
     function renderCopilotWelcome() {
       const container = document.getElementById('copilotMessages');
-      container.innerHTML = '<div class="p-3.5 rounded-lg bg-[#0d1017] border border-[#1e2433] text-zinc-300 space-y-2">' +
-        '<div class="flex items-center gap-2 text-sky-400 font-semibold text-xs">' +
-          '<i class="fa-solid fa-microchip"></i>' +
-          '<span>Autonomous Multi-Agent Orchestrator Ready</span>' +
-        '</div>' +
-        '<p class="text-[11px] leading-relaxed text-zinc-400 font-sans">' +
-          'Direct the underlying supervisor agent to audit hardcoded AST strings, execute model-aware translation batches, verify ICU variable integrity with 4-tier critics, or simulate Google SERP rankings.' +
-        '</p>' +
-      '</div>';
+      container.innerHTML =
+        '<div class="flex gap-2.5 items-start">' +
+          '<div class="pk-avatar">LP</div>' +
+          '<div class="pk-msg-assistant flex-1">' +
+            '<div class="flex items-center gap-2 mb-2">' +
+              '<span class="text-sky-400 font-semibold text-xs" style="font-family:\'Geist Mono\',monospace">Autonomous Orchestrator</span>' +
+              '<span class="badge badge-emerald">Ready</span>' +
+            '</div>' +
+            '<p class="text-[11px] leading-relaxed" style="color:#9ca3af">' +
+              'Direct the supervisor agent to audit AST strings, execute model-aware translation batches, verify ICU variable integrity with the 4-tier critic, or simulate Google SERP rankings.' +
+            '</p>' +
+            '<div class="grid grid-cols-2 gap-1.5 mt-3">' +
+              '<button onclick="sendCopilotPrompt(\'Scan project AST and report coverage\')" class="btn btn-secondary btn-sm text-left justify-start gap-1.5"><i class="fa-solid fa-radar text-sky-400 text-[10px]"></i>Scan AST</button>' +
+              '<button onclick="sendCopilotPrompt(\'Translate all missing keys to es, de, ja\')" class="btn btn-secondary btn-sm text-left justify-start gap-1.5"><i class="fa-solid fa-language text-emerald-400 text-[10px]"></i>Translate</button>' +
+              '<button onclick="sendCopilotPrompt(\'Run 4-tier verification critic\')" class="btn btn-secondary btn-sm text-left justify-start gap-1.5"><i class="fa-solid fa-shield-halved text-purple-400 text-[10px]"></i>4-Tier Critic</button>' +
+              '<button onclick="sendCopilotPrompt(\'Show Japanese SERP preview\')" class="btn btn-secondary btn-sm text-left justify-start gap-1.5"><i class="fa-solid fa-magnifying-glass text-pink-400 text-[10px]"></i>SERP Preview</button>' +
+            '</div>' +
+          '</div>' +
+        '</div>';
     }
 
     function toggleToolCollapsible(id) {
@@ -4437,24 +4730,27 @@ const InteractiveAppHTML = `<!DOCTYPE html>
       const name = escapeHtml(tc.name || 'tool_call');
       let inputHtml = '';
       if (tc.args && Object.keys(tc.args).length > 0) {
-        inputHtml = '<div class="mt-1.5"><div class="text-[10px] uppercase font-bold text-zinc-400 mb-1">Input Parameters</div><pre class="p-2 rounded-lg bg-[#050609] border border-white/5 text-[11px] font-mono text-zinc-300 overflow-x-auto custom-scrollbar">' + escapeHtml(JSON.stringify(tc.args, null, 2)) + '</pre></div>';
+        inputHtml = '<div class="mt-2"><div class="text-[10px] uppercase font-bold mb-1" style="color:#6b7280">Input</div>' +
+          '<pre class="p-2 rounded-lg text-[11px] overflow-x-auto custom-scrollbar" style="background:#050609;border:1px solid rgba(255,255,255,0.05);color:#94a3b8">' +
+          escapeHtml(JSON.stringify(tc.args, null, 2)) + '</pre></div>';
       }
       let outputHtml = '';
       if (tc.result && Object.keys(tc.result).length > 0) {
-        outputHtml = '<div class="mt-1.5"><div class="text-[10px] uppercase font-bold text-zinc-400 mb-1">Execution Output</div><pre class="p-2 rounded-lg bg-[#050609] border border-white/5 text-[11px] font-mono text-zinc-300 overflow-x-auto custom-scrollbar">' + escapeHtml(JSON.stringify(tc.result, null, 2)) + '</pre></div>';
+        outputHtml = '<div class="mt-2"><div class="text-[10px] uppercase font-bold mb-1" style="color:#6b7280">Output</div>' +
+          '<pre class="p-2 rounded-lg text-[11px] overflow-x-auto custom-scrollbar" style="background:#050609;border:1px solid rgba(255,255,255,0.05);color:#94a3b8">' +
+          escapeHtml(JSON.stringify(tc.result, null, 2)) + '</pre></div>';
       }
-      return '<div class="rounded-xl border border-white/10 bg-[#090b10] overflow-hidden my-2 text-xs shadow-sm">' +
-        '<button type="button" onclick="toggleToolCollapsible(\'' + toolId + '\')" class="w-full flex items-center justify-between px-3 py-2 bg-[#0c0f16] hover:bg-[#111622] transition-colors cursor-pointer text-left font-mono">' +
-          '<div class="flex items-center gap-2">' +
-            '<i class="fa-solid fa-wrench text-amber-400 text-xs"></i>' +
+      return '<div class="pk-tool-card">' +
+        '<button type="button" onclick="toggleToolCollapsible(\'' + toolId + '\')" class="pk-tool-header w-full text-left">' +
+          '<div style="display:flex;align-items:center;gap:0.5rem">' +
+            '<i class="fa-solid fa-wrench text-[10px]" style="color:#fbbf24"></i>' +
             '<span class="font-semibold text-zinc-200 text-xs">' + name + '</span>' +
-            '<span class="px-1.5 py-0.5 rounded text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 uppercase font-semibold">Completed</span>' +
+            '<span class="badge badge-emerald">Done</span>' +
           '</div>' +
-          '<i class="fa-solid fa-chevron-down text-zinc-400 text-[10px] transition-transform" id="' + toolId + '_icon"></i>' +
+          '<i class="fa-solid fa-chevron-down text-[10px] transition-transform" style="color:#4a5162" id="' + toolId + '_icon"></i>' +
         '</button>' +
-        '<div id="' + toolId + '" class="hidden border-t border-white/10 p-3 space-y-2 bg-[#07080c] font-mono text-[11px]">' +
-          inputHtml +
-          outputHtml +
+        '<div id="' + toolId + '" class="pk-tool-body hidden">' +
+          inputHtml + outputHtml +
         '</div>' +
       '</div>';
     }
@@ -4463,15 +4759,17 @@ const InteractiveAppHTML = `<!DOCTYPE html>
       const container = document.getElementById('copilotMessages');
       const isUser = msg.role === 'user';
       const div = document.createElement('div');
-      div.className = isUser ? 'flex justify-end' : 'flex justify-start';
 
-      let inner = '';
       if (isUser) {
-        inner = '<div class="max-w-[85%] bg-[#121622] border border-sky-500/40 text-zinc-100 rounded-2xl px-3.5 py-2 text-xs font-mono shadow-sm">' +
-          '<div class="text-[10px] uppercase text-sky-400 font-bold mb-0.5">User Directive</div>' +
-          escapeHtml(msg.content) +
-        '</div>';
+        div.className = 'flex justify-end';
+        div.innerHTML =
+          '<div class="pk-msg-user">' +
+            '<div class="text-[10px] uppercase font-bold mb-1" style="color:var(--clr-primary);font-family:\'Geist Mono\',monospace">You</div>' +
+            '<div style="white-space:pre-wrap">' + escapeHtml(msg.content) + '</div>' +
+          '</div>';
       } else {
+        div.className = 'flex gap-2.5 items-start';
+
         let toolsHtml = '';
         if (msg.tool_calls && msg.tool_calls.length > 0) {
           toolsHtml = msg.tool_calls.map(function(tc) {
@@ -4483,21 +4781,26 @@ const InteractiveAppHTML = `<!DOCTYPE html>
         if (msg.cards && msg.cards.length > 0) {
           cardsHtml = msg.cards.map(function(c) {
             if (c && c.rendered_text) {
-              return '<div class="rounded-xl border border-white/10 bg-[#050609] p-3 text-xs font-mono text-zinc-300 my-2 shadow-inner overflow-x-auto custom-scrollbar"><pre class="whitespace-pre">' + escapeHtml(c.rendered_text) + '</pre></div>';
+              return '<div class="rounded-xl overflow-x-auto custom-scrollbar my-2" style="border:1px solid rgba(255,255,255,0.07);background:#050609">' +
+                '<pre class="p-3 text-[11px] whitespace-pre" style="color:#94a3b8;font-family:\'Geist Mono\',monospace">' +
+                escapeHtml(c.rendered_text) + '</pre></div>';
             }
             return '';
           }).join('');
         }
 
-        inner = '<div class="max-w-[95%] space-y-2 w-full">' +
-          toolsHtml +
-          cardsHtml +
-          '<div class="bg-[#0b0e14] border border-[#1c212e] rounded-2xl p-4 text-xs text-zinc-200 shadow-md space-y-2 font-sans leading-relaxed whitespace-pre-wrap">' +
+        const contentHtml = msg.content ?
+          '<div class="pk-msg-assistant mt-1" style="font-family:\'Geist\',sans-serif">' +
             formatMarkdown(msg.content) +
-          '</div>' +
-        '</div>';
+          '</div>' : '';
+
+        div.innerHTML =
+          '<div class="pk-avatar flex-shrink-0">LP</div>' +
+          '<div style="flex:1;min-width:0;max-width:95%">' +
+            toolsHtml + cardsHtml + contentHtml +
+          '</div>';
       }
-      div.innerHTML = inner;
+
       container.appendChild(div);
       container.scrollTop = container.scrollHeight;
     }
@@ -4508,11 +4811,9 @@ const InteractiveAppHTML = `<!DOCTYPE html>
       tabs.forEach(t => {
         const btn = document.getElementById('canvasTab' + cap(t));
         if (t === tab) {
-          btn?.classList.add('bg-zinc-800', 'text-zinc-100', 'font-semibold');
-          btn?.classList.remove('text-zinc-400', 'font-medium');
+          btn?.classList.add('active');
         } else {
-          btn?.classList.remove('bg-zinc-800', 'text-zinc-100', 'font-semibold');
-          btn?.classList.add('text-zinc-400', 'font-medium');
+          btn?.classList.remove('active');
         }
       });
       document.getElementById('canvasActiveViewTitle').textContent = cap(tab) + ' Viewport';
@@ -4708,14 +5009,19 @@ const InteractiveAppHTML = `<!DOCTYPE html>
       const container = document.getElementById('copilotMessages');
       appendCopilotMessageToDOM({ role: 'user', content: prompt });
 
-      // Thinking indicator bubble
+      // Thinking indicator bubble (prompt-kit dots)
       const thinkingDiv = document.createElement('div');
       thinkingDiv.id = 'copilotThinkingBubble';
-      thinkingDiv.className = 'flex justify-start';
-      thinkingDiv.innerHTML = '<div class="bg-[#0b0e14] border border-[#1c212e] rounded-lg p-3 text-xs text-zinc-400 flex items-center gap-2 font-mono">' +
-        '<i class="fa-solid fa-spinner fa-spin text-sky-400"></i>' +
-        '<span>Routing tools & executing plan...</span>' +
-      '</div>';
+      thinkingDiv.className = 'flex gap-2.5 items-start';
+      thinkingDiv.innerHTML =
+        '<div class="pk-avatar flex-shrink-0">LP</div>' +
+        '<div class="pk-msg-assistant" style="padding:0.625rem 0.875rem">' +
+          '<div style="display:flex;align-items:center;gap:4px">' +
+            '<span class="pk-dot"></span>' +
+            '<span class="pk-dot"></span>' +
+            '<span class="pk-dot"></span>' +
+          '</div>' +
+        '</div>';
       container.appendChild(thinkingDiv);
       container.scrollTop = container.scrollHeight;
 

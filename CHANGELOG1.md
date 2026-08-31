@@ -8,6 +8,74 @@
 
 ## Interactive Development & User Directives Log (Continued)
 
+### Session Entry 109: 1-Click First-Time Setup & CLI Installation Script (`install.sh` & `Makefile`)
+
+* **User Directive**: *"write a install cli script that u know for someone who sets this up first time just cloned the project"*
+
+* **Why It Was Given**: Developers cloning the repository for the first time needed an effortless, automated 1-command setup that verifies system prerequisites, compiles optimized binaries, installs to `$PATH`, initializes `.env`, and outputs a clean quickstart menu without manual build steps.
+
+* **Actions Taken**:
+  1. **Automated First-Time Setup Script (`install.sh`, `scripts/install.sh`)**:
+     - **Prerequisites Verification**: Checks for Go installation (`>= 1.21/1.22`) and `git`.
+     - **Dependency Resolution**: Automatically executes `go mod download`.
+     - **Optimized Compilation**: Builds stripped binary (`-ldflags="-s -w"`) to `bin/langPeanut` and creates a root symlink `langPeanut`.
+     - **System PATH Installation**: Detects user PATH locations (`$GOPATH/bin`, `~/.local/bin`, or `~/go/bin`), installs the binary with executable permissions (`chmod +x`), and gives instructions if the folder needs adding to shell profiles (`.zshrc` / `.bashrc`).
+     - **Environment Setup**: Automatically provisions `.env` from `.env.example` if no `.env` exists, while preserving existing keys.
+     - **Onboarding Banner**: Displays quickstart command options (TUI, Web Studio, 1-Click Run, Audit, Chat, Benchmark).
+  2. **Developer Makefile (`Makefile`)**:
+     - Added standard targets: `make install`, `make build`, `make web`, `make tui`, `make benchmark`, `make test`, `make reset`, `make clean`.
+  3. **Documentation Updates**:
+     - Updated [`README.md`](file:///Users/harmanpreetsingh/Public/Code/langpeanut_local/README.md) Quickstart section with `./install.sh` and `make install`.
+  4. **Verification**: Executed `./install.sh` and `make build` from clean environment — 100% pass with 0 errors.
+
+* **Files Modified**:
+  - `install.sh` (new)
+  - `scripts/install.sh` (new)
+  - `Makefile` (new)
+  - `README.md` (quickstart section)
+
+### Session Entry 108: shadcn/ui Design System + Prompt-Kit Chat UI Across Local & Cloud Web
+
+* **User Directive**: *"can you implement shadcn like across the cloud web and local web, this is gonna be big task and also implement the prompt kit ui for chat"*
+
+* **Why It Was Given**: The existing UIs used ad-hoc Tailwind classes with no design token system, making consistency hard to maintain. The chat UI lacked proper message bubbles, avatars, and animated states.
+
+* **Actions Taken**:
+
+  **Local Web (`pkg/web/server.go`)**:
+  1. **shadcn/ui CSS Design Token System**: Replaced minimal inline CSS with a full shadcn/ui-compatible CSS custom property system. Added all HSL-based design tokens (`--background`, `--foreground`, `--primary`, `--secondary`, `--muted`, `--border`, `--ring`, `--radius`) plus hex shortcut vars (`--clr-bg`, `--clr-primary`, `--clr-primary-dim`, etc.).
+  2. **Geist Font**: Upgraded from Roboto to Geist + Geist Mono (Vercel's modern sans-serif), keeping Roboto as fallback.
+  3. **shadcn Button Primitives**: Added `.btn`, `.btn-primary`, `.btn-secondary`, `.btn-ghost`, `.btn-outline`, `.btn-destructive`, `.btn-sm`/`md`/`lg`/`icon` CSS classes. Upgraded all top-header action buttons.
+  4. **shadcn Badge Primitives**: Added `.badge`, `.badge-default`, `.badge-muted`, `.badge-emerald`, `.badge-amber`, `.badge-rose`, `.badge-purple`.
+  5. **Full Prompt-Kit Chat Component CSS**: Added `.pk-msg-user`, `.pk-msg-assistant`, `.pk-avatar`, `.pk-tool-card`, `.pk-tool-header`, `.pk-tool-body`, `.pk-suggestion`, `.pk-input-wrap`, `.pk-reasoning` + animated thinking dots (`@keyframes pk-thinking`, `.pk-dot`).
+  6. **Copilot Screen Rebuilt (2-Pane Layout)**: Replaced the single-column chat layout with a proper side-by-side layout: **Left pane (52%)** = Chat with avatar-based message bubbles, `PromptSuggestion` pill chips, auto-resizing `PromptInput` textarea. **Right pane (48%)** = Live Canvas with proper tab system (Matrix/Diff/Critic/SERP/Cost).
+  7. **JS Updated**: `renderCopilotWelcome()` now renders an LP avatar + welcome card with quick-action grid. `appendCopilotMessageToDOM()` uses `.pk-msg-user`/`.pk-msg-assistant` bubbles with LP avatar for assistant. `renderPromptKitToolHTML()` uses `.pk-tool-card`/`.pk-tool-header`/`.pk-tool-body`. Thinking bubble uses animated `.pk-dot` triplet animation.
+  8. **Build**: `go build ./...` — ✅ 0 errors.
+
+  **Cloud Web (`langpeanut-cloud/web`)**:
+  1. **shadcn/ui Component Suite**: Created and configured 17 standard shadcn components in `components/ui/` (`button.tsx`, `card.tsx`, `badge.tsx`, `input.tsx`, `textarea.tsx`, `select.tsx`, `switch.tsx`, `separator.tsx`, `scroll-area.tsx`, `tooltip.tsx`, `dialog.tsx`, `sheet.tsx`, `tabs.tsx`, `avatar.tsx`, `dropdown-menu.tsx`, `skeleton.tsx`, `sonner.tsx`).
+  2. **Radix & Tailwind Tokens**: Added Radix primitives and `class-variance-authority` in `package.json`, configured `components.json`, `tailwind.config.ts` (extended with HSL design variables and accordion animations), and `app/globals.css` with full dark mode token variables.
+  3. **Toast Provider**: Added Sonner `<Toaster theme="dark" position="bottom-right" />` in `app/layout.tsx`.
+  4. **Component Refactoring**:
+     - `app/components/Navbar.tsx`: Refactored with shadcn `Button`, `Badge`, `Avatar`, and `DropdownMenu`.
+     - `app/page.tsx`: Upgraded with shadcn `Button` (asChild, variants), `Badge`, and `Card`.
+     - `app/login/page.tsx`: Upgraded with shadcn `Card` and `Button`.
+     - `app/dashboard/page.tsx`: Upgraded with shadcn `Button`, `Card`, `Badge`, `Input`, `Skeleton`, and `Dialog`.
+     - `app/repo/page.tsx`: Integrated full prompt-kit chat UI with `PromptInput`, `PromptInputTextarea`, `PromptInputActions`, `PromptSuggestion`, `Tool`, `Reasoning`, and LP avatar message bubbles with animated thinking indicators.
+  5. **Build Verification**: `npm run build` executed successfully, generating 7/7 static routes with 0 errors.
+
+* **Files Modified**:
+  - `pkg/web/server.go` — CSS system, copilot screen HTML, JS message rendering
+  - `langpeanut-cloud/web/package.json` — new Radix deps
+  - `langpeanut-cloud/web/app/globals.css` — shadcn variables
+  - `langpeanut-cloud/web/tailwind.config.ts` — shadcn tokens
+  - `langpeanut-cloud/web/app/layout.tsx` — Toaster
+  - `langpeanut-cloud/web/components/ui/*` — all shadcn UI components
+  - `langpeanut-cloud/web/app/components/Navbar.tsx` — shadcn refactor
+  - `langpeanut-cloud/web/app/page.tsx` — Card/Badge/Button
+  - `langpeanut-cloud/web/app/dashboard/page.tsx` — Dialog/Card/Skeleton
+  - `langpeanut-cloud/web/app/repo/page.tsx` — Tabs/Select/Switch/PromptKit
+
 ### Session Entry 98: Model-Aware 50k Token Limits, Custom Batch Chunking & Parallel Concurrency Tunables
 
 * **User Directives**:

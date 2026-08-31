@@ -1,6 +1,5 @@
 # 🥜 langPeanut — Universal Multi-Agent Localization Workflow
 
-[![micro1 Hackathon](https://img.shields.io/badge/micro1-Agentic%20Workflows%20Hackathon-purple.svg)](https://micro1.ai)
 [![Go Version](https://img.shields.io/badge/Go-1.21%2B-00ADD8?logo=go)](https://golang.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Benchmark](https://img.shields.io/badge/10--Case%20Benchmark-100%25%20Pass-brightgreen.svg)](benchmark/)
@@ -58,7 +57,7 @@
 
 ---
 
-## 3. Measured Improvement (micro1 Rubric — 15 Points)
+## 3. Measured Improvement
 
 `./langPeanut benchmark` live-measures two of the three comparison columns on every run — nothing below is a fixed constant unless labeled as an estimate:
 
@@ -77,7 +76,7 @@ Run `./langPeanut benchmark` yourself to see the live numbers for your environme
 
 ---
 
-## 4. Hot Take & Practical Insights (micro1 Rubric — 5 Points)
+## 4. Hot Take & Practical Insights
 
 1. **The "Zero-Generation" Principle for Code Refactoring Agents**: Never let an LLM rewrite full code files. Use the LLM only for structured patch decisions and delegate all file mutations to a deterministic AST patch engine that computes exact byte offsets.
 2. **Linters and AST Matchers Beat Prompt Engineering Every Time**: Don't fight model stochasticity with 500-token prompt rules. Build lightweight programmatic AST critics that compare variable token sets and trigger automated self-correction loops.
@@ -85,20 +84,26 @@ Run `./langPeanut benchmark` yourself to see the live numbers for your environme
 
 ---
 
-## 5. Quickstart & Benchmark Execution
+## 5. Quickstart & Installation
 
 ```bash
-# 1. Build the binary
-go build -o langPeanut ./cmd/langPeanut
+# 1-Click Installation (Checks Go, builds binary, installs to PATH, initializes .env)
+./install.sh
 
-# 2. Run the 10-case benchmark
-./langPeanut benchmark
+# Or with Make:
+make install
 
-# 3. Audit any project directory
-./langPeanut audit --dir /path/to/project
+# Launch Interactive Bubble Tea TUI
+langPeanut
 
-# 4. Translate codebase into target locales
-./langPeanut translate --dir /path/to/project --locales fr,es,de,ja
+# Launch Web Studio with shadcn design system & Prompt-Kit Copilot
+langPeanut web
+
+# 1-Click Autonomous Localization on an example
+langPeanut run ./examples/nextjs-app
+
+# Run the 10-case Adversarial Benchmark
+langPeanut benchmark
 ```
 
 ---
