@@ -3,6 +3,17 @@
 import useSWR from 'swr'
 import { useState, useEffect, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
+import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
+import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from '@/components/ui/dialog'
 import {
   Tool,
   PromptInput,
@@ -1238,9 +1249,9 @@ jobs:
                 </div>
 
                 {latestStatus && (
-                  <span className={`text-[11px] font-mono px-2 py-0.5 rounded-full border ${latestStatus.bg} ${latestStatus.border} ${latestStatus.text}`}>
+                  <Badge variant="outline" className={`text-[11px] font-mono px-2 py-0.5 rounded-full ${latestStatus.bg} ${latestStatus.border} ${latestStatus.text}`}>
                     {latestStatus.label}
-                  </span>
+                  </Badge>
                 )}
               </div>
               <p className="text-xs text-slate-400 mt-1">
@@ -1250,28 +1261,35 @@ jobs:
           </div>
 
           <div className="flex items-center gap-2.5">
-            <a
-              href={`https://github.com/${repo.Owner}/${repo.Name}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="rounded-xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/10 text-slate-300 font-medium px-3.5 py-2 text-xs transition-all flex items-center gap-1.5"
+            <Button
+              asChild
+              variant="outline"
+              size="sm"
+              className="rounded-xl bg-white/[0.04] hover:bg-white/[0.08] border-white/10 text-slate-300 font-medium px-3.5 py-2 text-xs h-auto gap-1.5"
             >
-              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z" />
-              </svg>
-              <span>GitHub</span>
-            </a>
+              <a
+                href={`https://github.com/${repo.Owner}/${repo.Name}`}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z" />
+                </svg>
+                <span>GitHub</span>
+              </a>
+            </Button>
 
-            <button
+            <Button
               onClick={triggerJob}
               disabled={triggering}
-              className="rounded-xl bg-blue-600 hover:bg-blue-500 disabled:bg-blue-900 text-white font-semibold px-4 py-2 text-xs shadow-lg shadow-blue-600/30 transition-all cursor-pointer flex items-center gap-2"
+              size="sm"
+              className="rounded-xl bg-blue-600 hover:bg-blue-500 disabled:bg-blue-900 text-white font-semibold px-4 py-2 text-xs shadow-lg shadow-blue-600/30 h-auto gap-2"
             >
               <svg className={`w-3.5 h-3.5 ${triggering ? 'animate-spin' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                 <polygon points="5 3 19 12 5 21 5 3" />
               </svg>
               <span>{triggering ? 'Starting Pipeline…' : 'Run Localization'}</span>
-            </button>
+            </Button>
           </div>
         </div>
 
@@ -1286,22 +1304,24 @@ jobs:
             { id: 'runs', label: 'Runs & Logs' },
             { id: 'bot', label: 'PR Bot & Webhooks' },
           ].map((t) => (
-            <button
+            <Button
               key={t.id}
+              variant="ghost"
+              size="sm"
               onClick={() => setTab(t.id as any)}
-              className={`px-4 py-2 rounded-xl text-xs font-semibold transition-all flex items-center gap-2 cursor-pointer ${
+              className={`px-4 py-2 rounded-xl text-xs font-semibold h-auto flex items-center gap-2 ${
                 activeTab === t.id
-                  ? 'bg-blue-600/15 border border-blue-500/30 text-sky-300 shadow-md shadow-sky-950/50'
+                  ? 'bg-blue-600/15 border border-blue-500/30 text-sky-300 shadow-md shadow-sky-950/50 hover:bg-blue-600/20 hover:text-sky-200'
                   : 'text-slate-400 hover:text-white hover:bg-white/[0.03]'
               }`}
             >
               <span>{t.label}</span>
               {t.badge && (
-                <span className="text-[9px] px-1.5 py-0.2 rounded bg-sky-500/10 text-sky-400 border border-sky-500/20 font-mono">
+                <Badge variant="outline" className="text-[9px] px-1.5 py-0.2 rounded bg-sky-500/10 text-sky-400 border-sky-500/20 font-mono">
                   {t.badge}
-                </span>
+                </Badge>
               )}
-            </button>
+            </Button>
           ))}
         </div>
       </div>
@@ -1348,7 +1368,7 @@ jobs:
             {centralCopilotMessages.map((msg, idx) => (
               <div
                 key={idx}
-                className={msg.role === 'user' ? 'flex justify-end' : 'flex justify-start'}
+                className={msg.role === 'user' ? 'flex justify-end' : 'flex justify-start gap-2.5 items-start'}
               >
                 {msg.role === 'user' ? (
                   <div className="max-w-[80%] bg-[#121622] border border-sky-500/40 text-zinc-100 rounded-2xl px-4 py-2.5 text-xs font-mono shadow-sm">
@@ -1356,49 +1376,59 @@ jobs:
                     {msg.content}
                   </div>
                 ) : (
-                  <div className="max-w-[95%] space-y-2.5 w-full">
-                    {msg.tool_calls && msg.tool_calls.length > 0 && (
-                      <div className="space-y-1.5">
-                        {msg.tool_calls.map((tc: any, tIdx: number) => (
-                          <Tool
-                            key={tIdx}
-                            toolPart={{
-                              type: tc.name || 'tool_invocation',
-                              state: tc.error ? 'output-error' : tc.result ? 'output-available' : 'output-available',
-                              input: tc.args,
-                              output: tc.result,
-                              toolCallId: tc.id,
-                              errorText: tc.error,
-                            }}
-                          />
-                        ))}
-                      </div>
-                    )}
-
-                    {msg.cards && msg.cards.length > 0 && (
-                      <div className="space-y-2">
-                        {msg.cards.map((c: any, cIdx: number) => (
-                          <div key={cIdx} className="rounded-xl border border-white/10 bg-[#050609] p-3 text-xs font-mono text-zinc-300">
-                            {c.rendered_text && (
-                              <pre className="whitespace-pre overflow-x-auto custom-scrollbar">{c.rendered_text}</pre>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-
-                    <div className="bg-[#0b0e14] border border-[#1c212e] rounded-2xl p-4 text-xs text-zinc-200 shadow-md space-y-2 font-sans leading-relaxed whitespace-pre-wrap">
-                      {msg.content}
+                  <>
+                    <div className="w-7 h-7 rounded-lg bg-sky-500/10 border border-sky-500/30 flex items-center justify-center text-sky-400 font-mono font-bold text-[11px] shrink-0 mt-0.5 shadow-xs">
+                      LP
                     </div>
-                  </div>
+                    <div className="max-w-[92%] space-y-2.5 flex-1 min-w-0">
+                      {msg.tool_calls && msg.tool_calls.length > 0 && (
+                        <div className="space-y-1.5">
+                          {msg.tool_calls.map((tc: any, tIdx: number) => (
+                            <Tool
+                              key={tIdx}
+                              toolPart={{
+                                type: tc.name || 'tool_invocation',
+                                state: tc.error ? 'output-error' : tc.result ? 'output-available' : 'output-available',
+                                input: tc.args,
+                                output: tc.result,
+                                toolCallId: tc.id,
+                                errorText: tc.error,
+                              }}
+                            />
+                          ))}
+                        </div>
+                      )}
+
+                      {msg.cards && msg.cards.length > 0 && (
+                        <div className="space-y-2">
+                          {msg.cards.map((c: any, cIdx: number) => (
+                            <div key={cIdx} className="rounded-xl border border-white/10 bg-[#050609] p-3 text-xs font-mono text-zinc-300">
+                              {c.rendered_text && (
+                                <pre className="whitespace-pre overflow-x-auto custom-scrollbar">{c.rendered_text}</pre>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      <div className="bg-[#0b0e14] border border-[#1c212e] rounded-2xl p-4 text-xs text-zinc-200 shadow-md space-y-2 font-sans leading-relaxed whitespace-pre-wrap">
+                        {msg.content}
+                      </div>
+                    </div>
+                  </>
                 )}
               </div>
             ))}
             {centralCopilotThinking && (
-              <div className="flex justify-start w-full">
-                <div className="bg-[#0b0e14] border border-[#1c212e] rounded-xl p-3 text-xs text-zinc-400 flex items-center gap-2.5 font-mono">
-                  <span className="w-2 h-2 rounded-full bg-sky-400 animate-ping" />
-                  <span>Routing deterministic tools & executing plan...</span>
+              <div className="flex justify-start gap-2.5 items-start w-full">
+                <div className="w-7 h-7 rounded-lg bg-sky-500/10 border border-sky-500/30 flex items-center justify-center text-sky-400 font-mono font-bold text-[11px] shrink-0 mt-0.5">
+                  LP
+                </div>
+                <div className="bg-[#0b0e14] border border-[#1c212e] rounded-xl px-3.5 py-2.5 text-xs text-zinc-400 flex items-center gap-2 font-mono">
+                  <span className="w-1.5 h-1.5 rounded-full bg-sky-400 animate-pulse" />
+                  <span className="w-1.5 h-1.5 rounded-full bg-sky-400 animate-pulse delay-100" />
+                  <span className="w-1.5 h-1.5 rounded-full bg-sky-400 animate-pulse delay-200" />
+                  <span className="ml-1 text-[11px]">Executing deterministic pipeline...</span>
                 </div>
               </div>
             )}

@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 import { Roboto, Roboto_Mono } from 'next/font/google'
 import Navbar from './components/Navbar'
+import { Toaster } from '@/components/ui/sonner'
 import './globals.css'
 
 const roboto = Roboto({
@@ -34,6 +35,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
 
         {/* Main Content */}
         <main className="max-w-7xl mx-auto px-6 py-8">{children}</main>
+
+        {/* Sonner Toast Notifications */}
+        <Toaster theme="dark" position="bottom-right" />
 
         {/* Global Footer */}
         <footer className="border-t border-white/[0.08] mt-28 py-12 text-center text-xs text-slate-500">

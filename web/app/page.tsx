@@ -1,6 +1,10 @@
 'use client'
 
 import { useState } from 'react'
+import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
+import { cn } from '@/lib/utils'
 
 const WORKFLOWS = [
   {
@@ -337,27 +341,23 @@ export default function HomePage() {
         </p>
 
         <div className="flex flex-wrap items-center justify-center gap-3.5 pt-2">
-          <a
-            href="/dashboard"
-            className="rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-semibold px-6 py-3 text-xs shadow-xl shadow-blue-600/30 transition-all cursor-pointer"
-          >
-            Launch Console
-          </a>
-          <button
+          <Button asChild size="lg" className="rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-semibold px-6 py-3 text-xs shadow-xl shadow-blue-600/30 h-auto">
+            <a href="/dashboard">Launch Console</a>
+          </Button>
+          <Button
             onClick={runSimulator}
-            className="rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-100 font-semibold px-6 py-3 text-xs shadow-lg transition-all cursor-pointer flex items-center gap-2"
+            variant="outline"
+            size="lg"
+            className="rounded-xl bg-slate-800 hover:bg-slate-700 border-slate-700 text-slate-100 font-semibold px-6 py-3 text-xs shadow-lg h-auto flex items-center gap-2"
           >
             <svg className="w-3.5 h-3.5 text-sky-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <polygon points="5 3 19 12 5 21 5 3" />
             </svg>
             <span>Run Live Agent Simulator</span>
-          </button>
-          <a
-            href="#benchmark"
-            className="rounded-xl glass-panel hover:bg-white/[0.04] text-slate-200 font-semibold px-6 py-3 text-xs transition-all cursor-pointer"
-          >
-            View Benchmark
-          </a>
+          </Button>
+          <Button asChild variant="ghost" size="lg" className="rounded-xl glass-panel hover:bg-white/[0.04] text-slate-200 font-semibold px-6 py-3 text-xs h-auto">
+            <a href="#benchmark">View Benchmark</a>
+          </Button>
         </div>
 
         {/* CLI Quick Start Banner */}
@@ -367,12 +367,14 @@ export default function HomePage() {
               <span className="text-sky-400">$</span>
               <span className="truncate">curl -fsSL https://langpeanut.ai/install.sh | bash</span>
             </div>
-            <button
+            <Button
               onClick={copyCliCommand}
-              className="rounded-lg bg-white/5 hover:bg-white/10 text-slate-300 text-[11px] px-3 py-1 shrink-0 transition-colors cursor-pointer"
+              variant="ghost"
+              size="sm"
+              className="rounded-lg bg-white/5 hover:bg-white/10 text-slate-300 text-[11px] px-3 py-1 h-auto shrink-0"
             >
               {copiedCLI ? '✓ Copied' : 'Copy CLI'}
-            </button>
+            </Button>
           </div>
         </div>
 
@@ -384,11 +386,11 @@ export default function HomePage() {
             { metric: '86.4%', label: 'Token Reduction', desc: 'Layer 1 AST static scout' },
             { metric: 'Tier-5', label: 'Self-Healing Repair', desc: 'Autonomous compiler fixes' },
           ].map((item, idx) => (
-            <div key={idx} className="glass-panel p-4 rounded-xl space-y-1">
+            <Card key={idx} className="glass-panel p-4 rounded-xl space-y-1 bg-transparent border-white/[0.08]">
               <div className="text-2xl font-bold font-mono text-sky-400 tracking-tight">{item.metric}</div>
               <div className="text-xs font-semibold text-slate-200">{item.label}</div>
               <div className="text-[11px] text-slate-500">{item.desc}</div>
-            </div>
+            </Card>
           ))}
         </div>
       </section>
@@ -426,14 +428,14 @@ export default function HomePage() {
         </div>
 
         {/* Selected Workflow Detailed Card */}
-        <div className="glass-panel rounded-2xl p-6 space-y-6">
+        <Card className="glass-panel rounded-2xl p-6 space-y-6 bg-transparent border-white/[0.08]">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-white/[0.08] pb-4">
             <div className="space-y-1">
               <div className="flex items-center gap-3">
                 <h3 className="text-lg font-bold text-white">{selectedWorkflow.name}</h3>
-                <span className={`text-[11px] font-mono font-medium px-2.5 py-0.5 rounded-full border ${selectedWorkflow.badgeColor}`}>
+                <Badge variant="outline" className={`text-[11px] font-mono font-medium px-2.5 py-0.5 rounded-full ${selectedWorkflow.badgeColor}`}>
                   {selectedWorkflow.badge}
-                </span>
+                </Badge>
               </div>
               <p className="text-xs text-slate-400">{selectedWorkflow.description}</p>
             </div>
@@ -467,7 +469,7 @@ export default function HomePage() {
               <code>{selectedWorkflow.sampleArtifact}</code>
             </pre>
           </div>
-        </div>
+        </Card>
       </section>
 
       {/* ─── Analytics & Translation Memory Efficiency Section ───────────────── */}
