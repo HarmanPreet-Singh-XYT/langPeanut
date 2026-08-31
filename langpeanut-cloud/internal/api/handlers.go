@@ -144,7 +144,7 @@ func (h *Handler) handleAppInfo(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"app_id":      h.AppID,
-		"client_id":   h.ClientID,
+		"client_id":   h.OAuthClientID,
 		"app_slug":    appSlug,
 		"install_url": installURL,
 	})
