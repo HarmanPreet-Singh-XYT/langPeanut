@@ -5,6 +5,8 @@
 
 ---
 
+Went to AI, Chatted with AI on my idea, went into conversation that here's what my idea is and i want it to be solved coz i faced this issue in my development process, with this and that and then i started thinking about it how could it be solved without using any AI tools like claude code and etc as using them costs a lot right, coz they read entire files, they read all files and then these harness also have guards like u need to read file before u make change for safety which is great but that causes token consumption to go up and also many times the AI still messes up with the code like instead of writing to source files it writes to the files that r generated from those source files so it messes up writing to correct files then these files have so many placeholders like {name} {age} and LLMs sometimes mess up with those as well so ya that becomes a mess so basically i was just narrating my problem and how i would solve it then AI came up with this idea of building a multi-agent system that can solve this problem. And also these files contains more than 5k entries and depending upon the codebase size that is gonna be enormous amount of cost to make these localizations. So drafted after all the conversation I got idea.md drafted considering edge cases, what am thinking, how could this be architected and then went ahead with the goal of creating while also defined the goals that i want to achieve.
+
 ## 1. Formal Hackathon Improvement Progression
 
 | Stage | What We Tried & Why | Evidence / Observed Result | Decision / Learning |

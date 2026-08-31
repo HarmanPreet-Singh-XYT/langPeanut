@@ -410,10 +410,15 @@ func getComponentNameFromFile(filePath string) string {
 	base := filepath.Base(filePath)
 	ext := filepath.Ext(base)
 	name := strings.TrimSuffix(base, ext)
+	name = strings.TrimLeft(name, "0123456789_-")
 	name = strings.ReplaceAll(name, ".screen", "")
 	name = strings.ReplaceAll(name, ".view", "")
 	name = strings.ReplaceAll(name, "_screen", "")
 	name = strings.ReplaceAll(name, "_view", "")
 	name = strings.ReplaceAll(name, "_modal", "")
-	return platforms.ToCamelCase(name)
+	res := platforms.ToCamelCase(name)
+	if res == "textKey" {
+		return ""
+	}
+	return res
 }

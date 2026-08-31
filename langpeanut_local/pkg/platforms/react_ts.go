@@ -1040,6 +1040,15 @@ func ToCamelCase(input string) string {
 		return "textKey"
 	}
 
+	// Ensure the first word does not start with digits
+	words[0] = strings.TrimLeft(words[0], "0123456789")
+	if words[0] == "" {
+		words = words[1:]
+	}
+	if len(words) == 0 {
+		return "textKey"
+	}
+
 	// Limit to max 5 words for key
 	if len(words) > 5 {
 		words = words[:5]
@@ -1054,7 +1063,11 @@ func ToCamelCase(input string) string {
 			sb.WriteString(strings.Title(w))
 		}
 	}
-	return sb.String()
+	res := sb.String()
+	if res == "" {
+		return "textKey"
+	}
+	return res
 }
 
 func sanitizeVarName(expr string, idx int) string {

@@ -286,6 +286,7 @@ func RunBenchmark(benchmarkDir string) ([]BenchmarkResult, error) {
 			defer wg.Done()
 			start := time.Now()
 			caseDir := filepath.Join(benchmarkDir, fmt.Sprintf("case_%02d", c.ID))
+			_ = os.RemoveAll(caseDir)
 			_ = os.MkdirAll(caseDir, 0755)
 
 			caseFilePath := filepath.Join(caseDir, c.FileName)
