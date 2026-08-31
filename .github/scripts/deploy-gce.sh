@@ -4,26 +4,14 @@ set -euo pipefail
 DEPLOY_PATH="/opt/langpeanut"
 
 echo "==> 1. Preparing deployment directory and Docker permissions..."
-sudo mkdir -p "${DEPLOY_PATH}"
+sudo mkdir -p "${DEPLOY_PATH}/langpeanut-cloud"
 sudo chown -R "$(whoami):$(whoami)" "${DEPLOY_PATH}"
 sudo chmod -R 775 "${DEPLOY_PATH}"
-sudo git config --system --add safe.directory '*' || true
-git config --global --add safe.directory '*' || true
 sudo usermod -aG docker "$(whoami)" || true
 sudo chmod 666 /var/run/docker.sock || true
 
-cd "${DEPLOY_PATH}"
-
-echo "==> 2. Syncing source repository..."
-if [ ! -d .git ]; then
-  git clone "${REPO_URL}" .
-else
-  git remote set-url origin "${REPO_URL}"
-  git fetch origin "${TARGET_BRANCH}"
-  git checkout -f "${TARGET_BRANCH}"
-  git reset --hard "origin/${TARGET_BRANCH}"
-  git clean -fd
-fi
+echo "==> 2. Unpacking pre-compiled deployment bundle..."
+tar -xzf /tmp/deploy-package.tar.gz -C "${DEPLOY_PATH}/langpeanut-cloud"
 
 cd "${DEPLOY_PATH}/langpeanut-cloud"
 
@@ -40,11 +28,7 @@ if [ -s /tmp/local_github_app.pem ]; then
   chmod 600 data/github-app.pem
 fi
 
-echo "==> 6. Building sandboxed runner image (langpeanut-runner:latest)..."
-docker build -f Dockerfile.runner -t langpeanut-runner:latest \
-  --build-context langpeanut_local=../langpeanut_local .
-
-echo "==> 7. Launching Docker Compose stack..."
+echo "==> 6. Launching pre-built Docker containers..."
 if [ "${ENABLE_CADDY}" = "yes" ]; then
   docker compose --profile caddy up -d --build
 else
@@ -54,12 +38,12 @@ fi
 # Clean up dangling build layers
 docker image prune -f || true
 
-echo "==> 8. Verifying application health status..."
+echo "==> 7. Verifying application health status..."
 sleep 5
 for i in {1..20}; do
   if curl -sf http://127.0.0.1:8080/health | grep -q 'ok'; then
     echo "==> SUCCESS: langPeanut Cloud is healthy and running on GCE!"
-    rm -f /tmp/local.env /tmp/local_github_app.pem /tmp/deploy-gce.sh
+    rm -f /tmp/local.env /tmp/local_github_app.pem /tmp/deploy-package.tar.gz /tmp/deploy-gce.sh
     exit 0
   fi
   echo "Waiting for app to become ready (attempt $i/20)..."

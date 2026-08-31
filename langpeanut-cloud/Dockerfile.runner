@@ -1,50 +1,17 @@
-# Dockerfile.runner — langpeanut-runner sandbox image.
-#
-# This image runs one localization job per container instance and exits.
-# It deliberately has NO access to:
-#   - The Docker socket (not mounted at runtime per docker-compose.yml / worker.go).
-#   - The SQLite database file (only this job's scratch volume is mounted).
-#   - The GitHub App private key (receives only a pre-minted, short-lived install token).
-#
-# Built once:  docker build -f Dockerfile.runner -t langpeanut-runner:latest \
-#                --build-context langpeanut_local=../langpeanut_local .
-# Used by:     internal/worker/worker.go (spawned via Docker socket from the trusted host process)
-
-# ── Stage 1: Build runner binary ──────────────────────────────────────────────
-FROM golang:1.26-bookworm AS builder
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc libc6-dev git \
-    && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /build
-
-COPY --from=langpeanut_local . /langpeanut_local
-COPY go.mod go.sum ./
-RUN go mod download
-
-COPY . .
-
-RUN CGO_ENABLED=1 CGO_CFLAGS="-O0" GOOS=linux go build -trimpath -ldflags="-s -w" \
-    -o /out/langpeanut-runner ./cmd/runner
-
-# ── Stage 2: Runtime (runner sandbox with Node.js 24) ────────────────────────
+# ── Runtime (runner sandbox with Node.js 24) ─────────────────────────────────
 FROM node:24-bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates git \
     && rm -rf /var/lib/apt/lists/*
 
-# Non-root runner configuration
 RUN git config --system --add safe.directory "*"
 
 WORKDIR /work
-COPY --from=builder /out/langpeanut-runner /usr/local/bin/langpeanut-runner
+COPY bin/langpeanut-runner /usr/local/bin/langpeanut-runner
 
 RUN chown -R node:node /work
 USER node
 
-# /work is bind-mounted per-job by the host worker (job-specific scratch volume).
 VOLUME ["/work"]
-
 ENTRYPOINT ["langpeanut-runner"]

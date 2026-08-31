@@ -16,10 +16,6 @@ on:
         description: "Enable bundled Caddy for automatic Let's Encrypt HTTPS (yes/no)"
         required: false
         default: 'yes'
-      custom_branch:
-        description: 'Branch to deploy (leave empty for default)'
-        required: false
-        default: ''
 
 concurrency:
   group: deploy-gce-${{ github.ref }}
@@ -27,13 +23,48 @@ concurrency:
 
 jobs:
   deploy:
-    name: Deploy to GCE VM
+    name: Build & Deploy to GCE VM
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 15
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache-dependency-path: langpeanut-cloud/go.sum
+
+      - name: Set up Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: langpeanut-cloud/web/package-lock.json
+
+      # ── Fast Pre-Compilation on GitHub Actions Runner (4 Fast vCPUs) ──────────
+      - name: Build Next.js Web UI
+        working-directory: langpeanut-cloud/web
+        run: |
+          npm ci || npm install
+          npm run build
+
+      - name: Compile Linux Binaries with CGO
+        working-directory: langpeanut-cloud
+        run: |
+          mkdir -p bin
+          echo "Compiling server binary..."
+          CGO_ENABLED=1 CGO_CFLAGS="-O0" GOOS=linux go build -trimpath -ldflags="-s -w" -o bin/langpeanut-cloud ./cmd/server
+          echo "Compiling runner binary..."
+          CGO_ENABLED=1 CGO_CFLAGS="-O0" GOOS=linux go build -trimpath -ldflags="-s -w" -o bin/langpeanut-runner ./cmd/runner
+
+      - name: Bundle Pre-Compiled Deployment Package
+        working-directory: langpeanut-cloud
+        run: |
+          tar -czf ../deploy-package.tar.gz \
+            bin Dockerfile Dockerfile.runner docker-compose.yml Caddyfile web/out
 
       # ── Authenticate to Google Cloud ──────────────────────────────────────────
       - name: Authenticate to Google Cloud
@@ -49,7 +80,7 @@ jobs:
         with:
           version: '>= 460.0.0'
 
-      # ── Deploy to Compute Engine Instance ─────────────────────────────────────
+      # ── Deploy Pre-Built Bundle to Compute Engine VM ──────────────────────────
       - name: Execute Deployment on GCE VM
         env:
           GCP_PROJECT: ${{ secrets.GCP_PROJECT_ID }}
@@ -76,8 +107,6 @@ jobs:
           
           # Deployment options
           ENABLE_CADDY: ${{ github.event.inputs.enable_caddy || 'yes' }}
-          TARGET_BRANCH: ${{ github.event.inputs.custom_branch || github.ref_name }}
-          REPO_URL: "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git"
         run: |
           echo "Preparing deployment payload for ${GCE_INSTANCE} (${GCE_ZONE})..."
 
@@ -118,18 +147,18 @@ jobs:
             touch local_github_app.pem
           fi
 
-          # 3. Copy files to GCE VM safely via scp
-          echo "Transferring config files to VM..."
-          gcloud compute scp local.env local_github_app.pem .github/scripts/deploy-gce.sh \
+          # 3. Transfer pre-built bundle and configs to VM via scp
+          echo "Transferring pre-built package to VM..."
+          gcloud compute scp deploy-package.tar.gz local.env local_github_app.pem .github/scripts/deploy-gce.sh \
             "${GCE_INSTANCE}:/tmp/" \
             --zone="${GCE_ZONE}" \
             --project="${GCP_PROJECT}" \
             --quiet
 
           # 4. Execute remote deployment script
-          echo "Executing deployment on VM..."
+          echo "Launching containers on VM..."
           gcloud compute ssh "${GCE_INSTANCE}" \
             --zone="${GCE_ZONE}" \
             --project="${GCP_PROJECT}" \
             --quiet \
-            --command="REPO_URL='${REPO_URL}' TARGET_BRANCH='${TARGET_BRANCH}' ENABLE_CADDY='${ENABLE_CADDY}' bash /tmp/deploy-gce.sh"
+            --command="ENABLE_CADDY='${ENABLE_CADDY}' bash /tmp/deploy-gce.sh"
