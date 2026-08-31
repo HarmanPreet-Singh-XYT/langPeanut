@@ -9,6 +9,7 @@ on:
       - 'langpeanut-cloud/**'
       - 'langpeanut_local/**'
       - '.github/workflows/deploy-gce.yml'
+      - '.github/scripts/deploy-gce.sh'
   workflow_dispatch:
     inputs:
       enable_caddy:
@@ -35,8 +36,6 @@ jobs:
         uses: actions/checkout@v4
 
       # ── Authenticate to Google Cloud ──────────────────────────────────────────
-      # You can provide either a Service Account JSON Key via GCP_SA_KEY
-      # OR use Workload Identity Federation (WIF) via GCP_WIF_PROVIDER + GCP_WIF_SERVICE_ACCOUNT
       - name: Authenticate to Google Cloud
         id: gcp-auth
         uses: google-github-actions/auth@v2
@@ -50,13 +49,12 @@ jobs:
         with:
           version: '>= 460.0.0'
 
-      # ── Deploy to Compute Engine Instance via gcloud compute ssh ──────────────
+      # ── Deploy to Compute Engine Instance ─────────────────────────────────────
       - name: Execute Deployment on GCE VM
         env:
           GCP_PROJECT: ${{ secrets.GCP_PROJECT_ID }}
           GCE_INSTANCE: ${{ secrets.GCE_INSTANCE_NAME }}
           GCE_ZONE: ${{ secrets.GCE_ZONE }}
-          DEPLOY_PATH: ${{ secrets.GCE_DEPLOY_PATH || '/opt/langpeanut' }}
           
           # Secrets for .env
           ENV_FILE: ${{ secrets.ENV_FILE || secrets.GCP_ENV_FILE }}
@@ -81,102 +79,57 @@ jobs:
           TARGET_BRANCH: ${{ github.event.inputs.custom_branch || github.ref_name }}
           REPO_URL: "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git"
         run: |
-          echo "Connecting to Compute Engine VM: ${GCE_INSTANCE} in zone: ${GCE_ZONE}..."
+          echo "Preparing deployment payload for ${GCE_INSTANCE} (${GCE_ZONE})..."
 
-          # Construct remote bash deployment script
+          # 1. Generate local .env file
+          if [ -n "${ENV_FILE}" ]; then
+            printf "%s\n" "${ENV_FILE}" > local.env
+          else
+            cat << 'ENV_BLOCK' > local.env
+          MASTER_KEY=${MASTER_KEY}
+          GITHUB_APP_ID=${GITHUB_APP_ID}
+          GITHUB_APP_PRIVATE_KEY_PATH=/data/github-app.pem
+          GITHUB_WEBHOOK_SECRET=${GITHUB_WEBHOOK_SECRET}
+          GITHUB_APP_CLIENT_ID=${GITHUB_APP_CLIENT_ID}
+          GITHUB_APP_CLIENT_SECRET=${GITHUB_APP_CLIENT_SECRET}
+          GITHUB_CLIENT_ID=${GITHUB_APP_CLIENT_ID}
+          GITHUB_CLIENT_SECRET=${GITHUB_APP_CLIENT_SECRET}
+          PUBLIC_BASE_URL=${PUBLIC_BASE_URL}
+          SESSION_SECRET=${SESSION_SECRET}
+          GEMINI_API_KEY=${GEMINI_API_KEY}
+          ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+          OPENAI_API_KEY=${OPENAI_API_KEY}
+          DEEPL_API_KEY=${DEEPL_API_KEY}
+          HF_TOKEN=${HF_TOKEN}
+          LISTEN_ADDR=:8080
+          DATABASE_PATH=/data/langpeanut.db
+          MIRRORS_DIR=/data/mirrors
+          JOBS_DIR=/data/jobs
+          RUNNER_IMAGE=langpeanut-runner:latest
+          ENV_BLOCK
+            # Substitute environment variables into local.env
+            envsubst < local.env > local.env.tmp && mv local.env.tmp local.env
+          fi
+
+          # 2. Generate local PEM file if provided
+          if [ -n "${GITHUB_APP_PRIVATE_KEY_PEM}" ]; then
+            printf "%s\n" "${GITHUB_APP_PRIVATE_KEY_PEM}" > local_github_app.pem
+          else
+            touch local_github_app.pem
+          fi
+
+          # 3. Copy files to GCE VM safely via scp
+          echo "Transferring config files to VM..."
+          gcloud compute scp local.env local_github_app.pem .github/scripts/deploy-gce.sh \
+            "${GCE_INSTANCE}:/tmp/" \
+            --zone="${GCE_ZONE}" \
+            --project="${GCP_PROJECT}" \
+            --quiet
+
+          # 4. Execute remote deployment script
+          echo "Executing deployment on VM..."
           gcloud compute ssh "${GCE_INSTANCE}" \
             --zone="${GCE_ZONE}" \
             --project="${GCP_PROJECT}" \
             --quiet \
-            --command="
-              set -euo pipefail
-
-              echo '==> 1. Preparing deployment directory at ${DEPLOY_PATH}...'
-              sudo mkdir -p '${DEPLOY_PATH}'
-              sudo chown -R \$(whoami):\$(whoami) '${DEPLOY_PATH}'
-              sudo chmod -R 775 '${DEPLOY_PATH}'
-              git config --global --add safe.directory '${DEPLOY_PATH}'
-
-              cd '${DEPLOY_PATH}'
-
-              echo '==> 2. Syncing source repository...'
-              if [ ! -d .git ]; then
-                git clone '${REPO_URL}' .
-              else
-                git remote set-url origin '${REPO_URL}'
-                git fetch origin
-              fi
-              git checkout '${TARGET_BRANCH}'
-              git pull origin '${TARGET_BRANCH}'
-
-              cd '${DEPLOY_PATH}/langpeanut-cloud'
-
-              echo '==> 3. Creating persistent data directories...'
-              mkdir -p data/mirrors data/jobs
-
-              echo '==> 4. Injecting environment secrets into .env...'
-              if [ -n \"${ENV_FILE}\" ]; then
-                cat << 'CUSTOM_ENV_EOF' > .env
-              ${ENV_FILE}
-              CUSTOM_ENV_EOF
-              else
-                cat << 'ENV_EOF' > .env
-              # Auto-generated by GitHub Actions deployment workflow
-              MASTER_KEY=${MASTER_KEY}
-              GITHUB_APP_ID=${GITHUB_APP_ID}
-              GITHUB_APP_PRIVATE_KEY_PATH=/data/github-app.pem
-              GITHUB_WEBHOOK_SECRET=${GITHUB_WEBHOOK_SECRET}
-              GITHUB_APP_CLIENT_ID=${GITHUB_APP_CLIENT_ID}
-              GITHUB_APP_CLIENT_SECRET=${GITHUB_APP_CLIENT_SECRET}
-              GITHUB_CLIENT_ID=${GITHUB_APP_CLIENT_ID}
-              GITHUB_CLIENT_SECRET=${GITHUB_APP_CLIENT_SECRET}
-              PUBLIC_BASE_URL=${PUBLIC_BASE_URL}
-              SESSION_SECRET=${SESSION_SECRET}
-              GEMINI_API_KEY=${GEMINI_API_KEY}
-              ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-              OPENAI_API_KEY=${OPENAI_API_KEY}
-              DEEPL_API_KEY=${DEEPL_API_KEY}
-              HF_TOKEN=${HF_TOKEN}
-              LISTEN_ADDR=:8080
-              DATABASE_PATH=/data/langpeanut.db
-              MIRRORS_DIR=/data/mirrors
-              JOBS_DIR=/data/jobs
-              RUNNER_IMAGE=langpeanut-runner:latest
-              ENV_EOF
-              fi
-              chmod 600 .env
-
-              if [ -n \"${GITHUB_APP_PRIVATE_KEY_PEM}\" ]; then
-                echo '==> 5. Writing GitHub App private key PEM...'
-                cat << 'PEM_EOF' > data/github-app.pem
-              ${GITHUB_APP_PRIVATE_KEY_PEM}
-              PEM_EOF
-                chmod 600 data/github-app.pem
-              fi
-
-              echo '==> 6. Building sandboxed runner image (langpeanut-runner:latest)...'
-              docker build -f Dockerfile.runner -t langpeanut-runner:latest \
-                --build-context langpeanut_local=../langpeanut_local .
-
-              echo '==> 7. Launching Docker Compose stack...'
-              if [ \"${ENABLE_CADDY}\" = \"yes\" ]; then
-                docker compose --profile caddy up -d --build
-              else
-                docker compose up -d --build
-              fi
-
-              echo '==> 8. Verifying application health status...'
-              sleep 5
-              for i in {1..12}; do
-                if curl -sf http://127.0.0.1:8080/health | grep -q 'ok'; then
-                  echo '==> SUCCESS: langPeanut Cloud is healthy and running on GCE!'
-                  exit 0
-                fi
-                echo \"Waiting for app to become ready (attempt \$i/12)...\"
-                sleep 3
-              done
-
-              echo '==> ERROR: Health check failed after deployment!'
-              docker compose logs --tail=50 app
-              exit 1
-            "
+            --command="REPO_URL='${REPO_URL}' TARGET_BRANCH='${TARGET_BRANCH}' ENABLE_CADDY='${ENABLE_CADDY}' bash /tmp/deploy-gce.sh"
