@@ -51,7 +51,7 @@
 2. Fill in the basic details:
    - **GitHub App name**: `langPeanut Localization Bot` (or your preferred name).
    - **Homepage URL**: `https://yourdomain.com` (or `http://your-vps-ip`).
-   - **Callback URL**: `https://yourdomain.com/api/auth/callback` (for OAuth login).
+   - **Callback URL**: `https://yourdomain.com/api/auth/github/callback` (for OAuth login).
    - **Webhook URL**: `https://yourdomain.com/api/webhook`.
    - **Webhook secret**: Generate a random string (e.g. `openssl rand -hex 16`).
 3. Set **Permissions**:

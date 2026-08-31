@@ -146,6 +146,11 @@ export default function DashboardPage() {
     authed ? '/api/repos' : null,
     fetcher
   )
+  const { data: appInfo } = useSWR<{ app_slug?: string; install_url?: string }>(
+    authed ? '/api/app/info' : null,
+    fetcher
+  )
+  const installUrl = appInfo?.install_url || "https://github.com/apps/langpeanut-localization-bot/installations/new"
   const { data: credentials, mutate: mutateCreds } = useSWR<ProviderCredential[]>(
     authed ? '/api/credentials' : null,
     fetcher
@@ -699,7 +704,7 @@ export default function DashboardPage() {
               <p className="text-[11px] text-slate-400">Install the GitHub App on your personal account or organization.</p>
             </div>
             <Button asChild size="sm" variant="outline" className="text-xs h-7 border-sky-500/40 text-sky-300 hover:bg-sky-500/20 shrink-0">
-              <a href="https://github.com/apps/langpeanut/installations/new" target="_blank" rel="noopener noreferrer">
+              <a href={installUrl} target="_blank" rel="noopener noreferrer">
                 Install App ↗
               </a>
             </Button>
@@ -724,7 +729,7 @@ export default function DashboardPage() {
               </div>
               <div className="flex items-center justify-center gap-3 pt-2">
                 <Button asChild size="sm" className="bg-blue-600 hover:bg-blue-500 shadow-lg shadow-blue-600/30">
-                  <a href="https://github.com/apps/langpeanut/installations/new" target="_blank" rel="noopener noreferrer">
+                  <a href={installUrl} target="_blank" rel="noopener noreferrer">
                     Install GitHub App ↗
                   </a>
                 </Button>

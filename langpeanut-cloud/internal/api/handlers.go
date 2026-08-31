@@ -118,6 +118,7 @@ func RegisterRoutes(mux *http.ServeMux, h *Handler) {
 	mux.HandleFunc("GET /api/auth/github/callback", h.handleGitHubOAuthCallback)
 	mux.HandleFunc("GET /api/auth/me", h.requireSession(h.handleGetMe))
 	mux.HandleFunc("POST /api/auth/logout", h.handleLogout)
+	mux.HandleFunc("GET /api/app/info", h.handleAppInfo)
 
 	// ── GitHub Webhook & Automation Testing ──────────────────────────────────
 	mux.HandleFunc("POST /api/webhook", h.handleWebhook)
@@ -125,10 +126,28 @@ func RegisterRoutes(mux *http.ServeMux, h *Handler) {
 	mux.HandleFunc("POST /api/repos/{repoID}/webhook/test-bot", h.requireSession(h.handleTestWebhookBot))
 }
 
-// ─── Health ──────────────────────────────────────────────────────────────────
+// ─── App Info & Health ───────────────────────────────────────────────────────
 
 func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (h *Handler) handleAppInfo(w http.ResponseWriter, r *http.Request) {
+	appSlug := os.Getenv("GITHUB_APP_SLUG")
+	if appSlug == "" {
+		appSlug = "langpeanut-localization-bot"
+	}
+	installURL := "https://github.com/apps/" + appSlug + "/installations/new"
+	if custom := os.Getenv("GITHUB_APP_INSTALL_URL"); custom != "" {
+		installURL = custom
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"app_id":      h.AppID,
+		"client_id":   h.ClientID,
+		"app_slug":    appSlug,
+		"install_url": installURL,
+	})
 }
 
 // ─── GitHub App Available Repositories ────────────────────────────────────────
