@@ -70,8 +70,8 @@ func NewEngine(projectRoot string, client llm.Client) (*Engine, error) {
 
 	if client == nil {
 		cfg := memory.LoadConfig(absRoot)
-		provider := llm.ProviderClaude
-		model := "claude-sonnet-5"
+		provider := llm.ProviderGemini
+		model := "gemini-3.7-flash"
 		if cfg != nil {
 			if cfg.ActiveProvider != "" {
 				provider = llm.ProviderType(cfg.ActiveProvider)

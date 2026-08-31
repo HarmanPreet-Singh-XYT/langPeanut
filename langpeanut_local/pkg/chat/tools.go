@@ -655,8 +655,8 @@ func handlePlanLocalization(ctx context.Context, args map[string]any, engine *En
 	totalTokens := estInputTokens + estOutputTokens
 
 	cfg := memory.LoadConfig(engine.ProjectRoot)
-	provider := "claude"
-	model := "claude-sonnet-5"
+	provider := "gemini"
+	model := "gemini-3.7-flash"
 	if cfg != nil {
 		if cfg.ActiveProvider != "" {
 			provider = cfg.ActiveProvider
@@ -1244,11 +1244,11 @@ func handleManageConfig(ctx context.Context, args map[string]any, engine *Engine
 
 		// Synchronize Engine LLMClient if provider/model updated
 		if cfg.ActiveProvider != "" || cfg.ActiveModel != "" {
-			prov := llm.ProviderClaude
+			prov := llm.ProviderGemini
 			if cfg.ActiveProvider != "" {
 				prov = llm.ProviderType(cfg.ActiveProvider)
 			}
-			mod := "claude-sonnet-5"
+			mod := "gemini-3.7-flash"
 			if cfg.ActiveModel != "" {
 				mod = cfg.ActiveModel
 			}
@@ -1282,10 +1282,10 @@ func handleManageConfig(ctx context.Context, args map[string]any, engine *Engine
 	}
 
 	if cfgData.ActiveProvider == "" {
-		cfgData.ActiveProvider = "claude"
+		cfgData.ActiveProvider = "gemini"
 	}
 	if cfgData.ActiveModel == "" {
-		cfgData.ActiveModel = "claude-sonnet-5"
+		cfgData.ActiveModel = "gemini-3.7-flash"
 	}
 
 	card := FormatConfigCard(cfgData)

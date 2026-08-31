@@ -64,8 +64,8 @@ func GetGlobalConfigPath() string {
 // LoadConfig loads preferences from ~/.langPeanut/config.json and optional project .langPeanut/config.json
 func LoadConfig(projectDir string) *AppConfig {
 	cfg := &AppConfig{
-		ActiveProvider:           "nllb-local",
-		ActiveModel:              "nllb-200-600M-q4_k_m.gguf",
+		ActiveProvider:           "gemini",
+		ActiveModel:              "gemini-3.7-flash",
 		StylePreset:              "default",
 		APIKeys:                  make(map[string]string),
 		SelectedLocales:          []string{"fr", "es", "de", "ja"},

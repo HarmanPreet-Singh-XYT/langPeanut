@@ -36,7 +36,7 @@ func NewGenkitEngine(projectRoot string, client llm.Client) (*GenkitEngine, erro
 	}
 
 	provider := "gemini"
-	model := "gemini-3.5-flash"
+	model := "gemini-3.7-flash"
 	cfg := memory.LoadConfig(absRoot)
 	if cfg != nil {
 		if cfg.ActiveProvider != "" {

@@ -91,7 +91,7 @@ func NewClientWithConfig(provider ProviderType, model string, customDescription 
 	case ProviderGemini:
 		apiKey = os.Getenv("GEMINI_API_KEY")
 		if model == "" {
-			model = "gemini-3.5-flash"
+			model = "gemini-3.7-flash"
 		}
 		if desc == "" {
 			desc = fmt.Sprintf("Google Gemini (%s) — Ultra-low latency & token efficiency", model)
@@ -202,6 +202,9 @@ func (c *MultiProviderClient) Description() string {
 func (c *MultiProviderClient) Complete(ctx context.Context, systemPrompt, userPrompt string) (string, error) {
 	if c.provider == ProviderLocal {
 		return "", fmt.Errorf("local engine uses deterministic dictionary")
+	}
+	if c.apiKey == "" && c.provider != ProviderLocal && c.provider != ProviderOllama && c.provider != ProviderNLLBLocal {
+		return "", fmt.Errorf("missing API key for %s", c.provider)
 	}
 
 	logger.Get().Info("MODEL:LLM", fmt.Sprintf("Dispatching completion request to %s (%s)", c.provider, c.model))
@@ -724,14 +727,14 @@ func (c *MultiProviderClient) callDeepL(ctx context.Context, system, user string
 
 // AutoDetectClient instantiates the best available LLM provider from environment variables
 func AutoDetectClient() *MultiProviderClient {
+	if os.Getenv("GEMINI_API_KEY") != "" {
+		return NewClient(ProviderGemini, "gemini-3.7-flash")
+	}
 	if os.Getenv("ANTHROPIC_API_KEY") != "" {
-		return NewClient(ProviderClaude, "")
+		return NewClient(ProviderClaude, "claude-sonnet-5")
 	}
 	if os.Getenv("OPENAI_API_KEY") != "" {
-		return NewClient(ProviderOpenAI, "")
-	}
-	if os.Getenv("GEMINI_API_KEY") != "" {
-		return NewClient(ProviderGemini, "")
+		return NewClient(ProviderOpenAI, "gpt-5.4-mini")
 	}
 	if os.Getenv("HF_TOKEN") != "" || os.Getenv("HUGGINGFACE_API_KEY") != "" {
 		return NewClient(ProviderNLLBCloud, "")
@@ -739,6 +742,6 @@ func AutoDetectClient() *MultiProviderClient {
 	if os.Getenv("OPENAI_BASE_URL") != "" {
 		return NewClient(ProviderCustom, "")
 	}
-	return NewClient(ProviderLocal, "")
+	return NewClient(ProviderGemini, "gemini-3.7-flash")
 }
 

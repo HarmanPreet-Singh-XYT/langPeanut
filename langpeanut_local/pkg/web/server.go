@@ -2262,7 +2262,7 @@ const InteractiveAppHTML = `<!DOCTYPE html>
               </div>
             </div>
             <div class="flex items-center gap-2">
-              <span id="copilotActiveModelBadge" class="badge badge-muted">claude-sonnet-5</span>
+              <span id="copilotActiveModelBadge" class="badge badge-muted">gemini-3.7-flash</span>
               <button onclick="resetCopilotChat()" title="Reset session" class="btn btn-ghost btn-icon text-xs">
                 <i class="fa-solid fa-arrow-rotate-right"></i>
               </button>
@@ -2968,7 +2968,7 @@ const InteractiveAppHTML = `<!DOCTYPE html>
                 <div>
                   <label class="text-zinc-400 font-medium block mb-1">Translation Provider Engine:</label>
                   <select id="settingsActiveProvider" onchange="handleProviderChange()" class="w-full field rounded-lg px-3 py-2 text-xs font-mono text-zinc-200">
-                    <option value="gemini">Google Gemini (gemini-3.5-flash — $1.50 in / $9.00 out per 1M)</option>
+                    <option value="gemini" selected>Google Gemini (gemini-3.7-flash — 1M Context, $0.75 in / $3.75 out per 1M)</option>
                     <option value="claude">Anthropic Claude (claude-sonnet-5 — 1M Context, 128k Out, $2/$10)</option>
                     <option value="openai">OpenAI (gpt-5.4-mini — 400k Context, 128k Out, $0.75/$4.50)</option>
                     <option value="ollama">Ollama (100% Offline GPU Engine — Qwen, Gemma, LLaMA)</option>
@@ -3205,7 +3205,8 @@ const InteractiveAppHTML = `<!DOCTYPE html>
 
         loadGitStatus();
         loadTreeAndCandidates();
-        loadSettings();
+        await loadSettings();
+        await loadCopilotWorkspace();
       } catch (err) {
         showToast('Connection to Studio server failed', 'error');
       }
@@ -4118,6 +4119,14 @@ const InteractiveAppHTML = `<!DOCTYPE html>
           }
         }
 
+        if (data.active_model) {
+          const badge = document.getElementById('copilotActiveModelBadge');
+          if (badge) badge.innerText = data.active_model;
+        } else if (data.active_provider === 'gemini') {
+          const badge = document.getElementById('copilotActiveModelBadge');
+          if (badge) badge.innerText = 'gemini-3.7-flash';
+        }
+
         if (data.api_keys) {
           if (data.api_keys.hf) document.getElementById('keyInputHF').placeholder = data.api_keys.hf;
           if (data.api_keys.anthropic) document.getElementById('keyInputAnthropic').placeholder = data.api_keys.anthropic;
@@ -4156,16 +4165,22 @@ const InteractiveAppHTML = `<!DOCTYPE html>
 
     function handleProviderChange() {
       const prov = document.getElementById('settingsActiveProvider').value;
-      if (prov === 'ollama') {
+      const badge = document.getElementById('copilotActiveModelBadge');
+      if (prov === 'gemini') {
+        if (badge) badge.innerText = 'gemini-3.7-flash';
+        showToast('Google Gemini selected (gemini-3.7-flash)', 'info');
+      } else if (prov === 'claude') {
+        if (badge) badge.innerText = 'claude-sonnet-5';
+        showToast('Anthropic Claude selected (claude-sonnet-5)', 'info');
+      } else if (prov === 'openai') {
+        if (badge) badge.innerText = 'gpt-5.4-mini';
+        showToast('OpenAI selected (gpt-5.4-mini)', 'info');
+      } else if (prov === 'ollama') {
+        if (badge) badge.innerText = 'ollama-local';
         showToast('Ollama selected (100% Offline GPU Engine)', 'info');
       } else if (prov === 'nllb-cloud') {
+        if (badge) badge.innerText = 'nllb-200';
         showToast('Meta NLLB-200 Cloud selected (HF Serverless API)', 'info');
-      } else if (prov === 'claude') {
-        showToast('Anthropic Claude selected', 'info');
-      } else if (prov === 'openai') {
-        showToast('OpenAI selected', 'info');
-      } else if (prov === 'gemini') {
-        showToast('Google Gemini selected', 'info');
       }
     }
 
@@ -4195,13 +4210,14 @@ const InteractiveAppHTML = `<!DOCTYPE html>
       if (deepl) apiKeys['DEEPL_API_KEY'] = deepl;
       if (customUrl) apiKeys['OPENAI_BASE_URL'] = customUrl;
 
-      let modelName = "claude-sonnet-5";
+      let modelName = "gemini-3.7-flash";
       if (prov === 'ollama') {
         const selMod = document.getElementById('settingsOllamaModelSelect') ? document.getElementById('settingsOllamaModelSelect').value : '';
         modelName = selMod || "auto-detect";
       } else if (prov === 'nllb-cloud') modelName = "facebook/nllb-200-distilled-600M";
-      else if (prov === 'openai') modelName = "gpt-5.4-mini-2026-03-17";
-      else if (prov === 'gemini') modelName = "gemini-3.5-flash";
+      else if (prov === 'claude') modelName = "claude-sonnet-5";
+      else if (prov === 'openai') modelName = "gpt-5.4-mini";
+      else if (prov === 'gemini') modelName = "gemini-3.7-flash";
       else if (prov === 'deepl') modelName = "deepl-v2";
       else if (prov === 'custom') modelName = customUrl || "localhost:11434";
       else if (prov === 'local') modelName = "Deterministic ICU Engine";

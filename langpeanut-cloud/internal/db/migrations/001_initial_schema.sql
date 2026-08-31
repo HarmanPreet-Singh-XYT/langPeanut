@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS repo_settings (
     locales_json       TEXT    NOT NULL DEFAULT '[]',  -- JSON array of locale codes e.g. ["fr","es","de"]
     tone_preset        TEXT    NOT NULL DEFAULT 'neutral',
     provider           TEXT    NOT NULL DEFAULT 'gemini',
-    model              TEXT    NOT NULL DEFAULT 'gemini-3.5-flash',
+    model              TEXT    NOT NULL DEFAULT 'gemini-3.7-flash',
     safety_mode        INTEGER NOT NULL DEFAULT 1,      -- 1=on, 0=off (maps to CLI --safety-mode)
     chunk_word_budget  INTEGER NOT NULL DEFAULT 10000,
     chunk_key_ceiling  INTEGER NOT NULL DEFAULT 300,

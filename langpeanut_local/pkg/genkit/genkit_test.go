@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/langPeanut/langPeanut/pkg/chat"
+	"github.com/langPeanut/langPeanut/pkg/llm"
 	"github.com/langPeanut/langPeanut/pkg/types"
 )
 
@@ -33,7 +34,9 @@ func TestGenkitEngine_Initialization(t *testing.T) {
 }
 
 func TestGenkitEngine_ChatFlowStreaming(t *testing.T) {
-	engine, err := NewGenkitEngine(".", nil)
+	tempDir := t.TempDir()
+	mockClient := llm.NewClient(llm.ProviderLocal, "")
+	engine, err := NewGenkitEngine(tempDir, mockClient)
 	if err != nil {
 		t.Fatalf("failed initializing Genkit engine: %v", err)
 	}

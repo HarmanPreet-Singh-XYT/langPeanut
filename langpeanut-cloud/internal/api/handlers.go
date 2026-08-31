@@ -453,7 +453,7 @@ func (h *Handler) handleUpsertSettings(w http.ResponseWriter, r *http.Request) {
 		req.Provider = "gemini"
 	}
 	if req.Model == "" {
-		req.Model = "gemini-3.5-flash"
+		req.Model = "gemini-3.7-flash"
 	}
 	if req.TonePreset == "" {
 		req.TonePreset = "neutral"
@@ -1810,7 +1810,7 @@ func (h *Handler) resolveClientForRepoWithOverride(repo *db.Repo, overrideProvid
 		model = settings.Model
 	}
 	if model == "" {
-		model = "gemini-3.5-flash"
+		model = "gemini-3.7-flash"
 	}
 
 	var apiKey string

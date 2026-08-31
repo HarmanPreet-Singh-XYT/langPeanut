@@ -149,8 +149,8 @@ const PROVIDER_MODELS: Record<string, { label: string; tag: string; models: stri
     label: 'Google Gemini',
     tag: 'GEM',
     models: [
-      'gemini-3.5-flash',
       'gemini-3.7-flash',
+      'gemini-3.5-flash',
       'gemini-3.6-flash',
       'gemini-3.5-flash-lite',
       'gemini-3.1-pro-preview',
@@ -327,7 +327,7 @@ function RepoDetailsContent() {
   const [customLocaleInput, setCustomLocaleInput] = useState<string>('')
   const [selectedTone, setSelectedTone] = useState<string>('neutral')
   const [selectedProvider, setSelectedProvider] = useState<string>('gemini')
-  const [selectedModel, setSelectedModel] = useState<string>('gemini-3.5-flash')
+  const [selectedModel, setSelectedModel] = useState<string>('gemini-3.7-flash')
   const [customPrompt, setCustomPrompt] = useState<string>('')
   const [customInstallCmd, setCustomInstallCmd] = useState<string>('')
   const [customBuildCmd, setCustomBuildCmd] = useState<string>('')
@@ -663,7 +663,7 @@ function RepoDetailsContent() {
       setSelectedLocales(repo.settings.Locales || ['es', 'fr', 'de'])
       setSelectedTone(repo.settings.TonePreset || 'neutral')
       setSelectedProvider(repo.settings.Provider || 'gemini')
-      setSelectedModel(repo.settings.Model || 'gemini-3.5-flash')
+      setSelectedModel(repo.settings.Model || 'gemini-3.7-flash')
       setCustomPrompt(repo.settings.CustomPrompt || '')
       setCustomInstallCmd(repo.settings.CustomInstallCmd || '')
       setCustomBuildCmd(repo.settings.CustomBuildCmd || '')
