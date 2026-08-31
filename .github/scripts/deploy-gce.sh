@@ -49,6 +49,9 @@ else
   docker compose up -d --build
 fi
 
+# Clean up dangling build layers
+docker image prune -f || true
+
 echo "==> 8. Verifying application health status..."
 sleep 5
 for i in {1..20}; do
