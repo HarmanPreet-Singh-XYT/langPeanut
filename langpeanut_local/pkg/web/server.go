@@ -2164,10 +2164,13 @@ const InteractiveAppHTML = `<!DOCTYPE html>
 
     <!-- Right Quick Action Buttons -->
     <div class="flex items-center gap-2">
+      <button onclick="openOnboardingModal()" class="btn btn-ghost btn-sm flex items-center gap-1.5 text-zinc-400 hover:text-zinc-200" title="Studio Overview & Quick Start Guide">
+        <i class="fa-regular fa-circle-question text-[11px]"></i> Guide
+      </button>
       <button onclick="rescanAST()" class="btn btn-outline btn-sm flex items-center gap-1.5" title="Rescan code AST (R)">
         <i class="fa-solid fa-arrows-rotate text-[11px] text-sky-400" id="rescanIcon"></i> Rescan <span class="kbd">R</span>
       </button>
-      <button onclick="executeLocalization()" id="topRunBtn" class="btn btn-primary btn-md flex items-center gap-1.5 shadow-sm shadow-sky-600/20" title="Execute Pipeline">
+      <button onclick="switchScreen('runner')" id="topRunBtn" class="btn btn-primary btn-md flex items-center gap-1.5 shadow-sm shadow-sky-600/20" title="Open Pipeline Logs (⌘↵)">
         <i class="fa-solid fa-bolt text-[11px]"></i> Run Pipeline <span class="kbd" style="color:#7dd3fc;background:#0c2a3a;border-color:#164e63">⌘↵</span>
       </button>
       <button onclick="applyDiskChanges()" class="btn btn-sm flex items-center gap-1.5" style="border-color:rgba(52,211,153,0.3);color:#6ee7b7;background:transparent" title="Apply to Disk (A)">
@@ -2790,8 +2793,12 @@ const InteractiveAppHTML = `<!DOCTYPE html>
             </div>
 
             <!-- Scrollable Language Grid -->
-            <div id="runnerLangGrid" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2 max-h-52 overflow-y-auto custom-scrollbar pr-1 text-xs">
+            <div id="runnerLangGrid" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2 flex-1 min-h-[14rem] max-h-72 overflow-y-auto custom-scrollbar pr-1 text-xs">
               <!-- Dynamically rendered by JS -->
+            </div>
+            <div class="pt-2 border-t border-zinc-800/80 flex items-center justify-between text-[11px] text-zinc-400 font-mono">
+              <span id="runnerLangSelectionSummary">Select target locales to localize</span>
+              <span class="text-zinc-500">Auto-discovers & updates locale catalog files</span>
             </div>
           </div>
 
@@ -3161,6 +3168,43 @@ const InteractiveAppHTML = `<!DOCTYPE html>
     </main>
   </div>
 
+  <!-- First-Time User Onboarding Modal -->
+  <div id="onboardingModal" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4" style="background:rgba(2,4,8,0.85);backdrop-filter:blur(8px);">
+    <div class="relative w-full max-w-xl rounded-2xl border border-zinc-800 bg-[#0b0e14] shadow-2xl p-6 space-y-5 text-zinc-200">
+      <!-- Top Bar: Progress & Close -->
+      <div class="flex items-center justify-between border-b border-zinc-800/80 pb-3">
+        <div class="flex items-center gap-2">
+          <span class="w-2 h-2 rounded-full bg-sky-400"></span>
+          <span class="text-xs font-mono font-bold tracking-wider text-sky-400 uppercase">langPeanut Studio Guide</span>
+          <span id="onboardingStepIndicator" class="text-[10px] font-mono text-zinc-500 ml-2">Step 1 of 4</span>
+        </div>
+        <button onclick="closeOnboardingModal()" class="text-zinc-500 hover:text-zinc-300 text-xs font-mono cursor-pointer p-1">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+
+      <!-- Slide Container -->
+      <div id="onboardingSlideContent" class="space-y-4 min-h-[220px]">
+        <!-- Rendered dynamically by JS -->
+      </div>
+
+      <!-- Footer Controls -->
+      <div class="flex items-center justify-between border-t border-zinc-800/80 pt-3">
+        <button onclick="closeOnboardingModal()" class="text-xs text-zinc-500 hover:text-zinc-300 font-medium cursor-pointer">
+          Skip Walkthrough
+        </button>
+        <div class="flex items-center gap-2">
+          <button id="onboardingPrevBtn" onclick="prevOnboardingStep()" class="px-3 py-1.5 rounded-lg border border-zinc-700 bg-zinc-800/80 hover:bg-zinc-700 text-zinc-300 text-xs font-medium cursor-pointer transition-colors hidden">
+            Previous
+          </button>
+          <button id="onboardingNextBtn" onclick="nextOnboardingStep()" class="px-4 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold cursor-pointer transition-colors shadow-md shadow-sky-600/20">
+            Next
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script>
     let tuiCandidates = [];
     let fileTreeNodes = [];
@@ -3192,6 +3236,136 @@ const InteractiveAppHTML = `<!DOCTYPE html>
       }, 3200);
     }
 
+    // ---------- Product Walkthrough & Onboarding ----------
+    let currentOnboardingStep = 0;
+    const onboardingSteps = [
+      {
+        title: "Universal Codebase AST Extraction",
+        subtitle: "Zero Regex Drift with Tree-sitter Grammars",
+        bullets: [
+          "Direct AST parsing for TypeScript/React, Flutter/Dart, SwiftUI, Kotlin, Vue, HTML, and Go.",
+          "Extracts hardcoded UI strings, JSX children, attribute props, and template literals with line-exact coordinates.",
+          "Automatically skips technical identifiers, regex patterns, import statements, and code logic."
+        ],
+        icon: "fa-solid fa-code"
+      },
+      {
+        title: "ICU Syntax & Interpolation Safety",
+        subtitle: "Deterministic Token & Pluralization Protection",
+        bullets: [
+          "Preserves template variables ({count}, {name}, %d, $price) and complex ICU plural formatting.",
+          "Eliminates broken runtime templates and variable distortion across multi-language catalogs.",
+          "Protects brand names, punctuation formatting, and glossary keywords."
+        ],
+        icon: "fa-solid fa-shield-halved"
+      },
+      {
+        title: "Autonomous Multi-Agent Translation",
+        subtitle: "Frontier LLMs or 100% Offline Local Neural Engine",
+        bullets: [
+          "Translate via Google Gemini 3.7 Flash, Claude Sonnet 3.7, GPT-4.5, or run 100% offline via local Meta NLLB-200 / Ollama.",
+          "Smart token budgeting packs up to 50,000 tokens per request to minimize API rounds and latency.",
+          "Maintains cultural idiom fidelity and tone personas (Professional, Casual, Corporate Formal, Gen-Z)."
+        ],
+        icon: "fa-solid fa-microchip"
+      },
+      {
+        title: "4-Tier Critic Verification & Surgical Patching",
+        subtitle: "Continuous Automated Quality Assurance",
+        bullets: [
+          "Every translation is audited across syntax, ICU placeholder matching, UI expansion budget, and key parity.",
+          "Applies byte-range surgical code diffs directly to source files without full-file hallucination.",
+          "Ensures framework localization packages (react-i18next, flutter_localizations) are installed and configured."
+        ],
+        icon: "fa-solid fa-check-double"
+      }
+    ];
+
+    function decodeHtmlEntities(str) {
+      if (!str || typeof str !== 'string') return str || '';
+      return str
+        .replace(/&mdash;/g, '—')
+        .replace(/&ndash;/g, '–')
+        .replace(/&amp;/g, '&')
+        .replace(/&quot;/g, '"')
+        .replace(/&#39;/g, "'")
+        .replace(/&apos;/g, "'")
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&hellip;/g, '…')
+        .replace(/&nbsp;/g, ' ');
+    }
+
+    function openOnboardingModal(stepIndex) {
+      currentOnboardingStep = typeof stepIndex === 'number' ? stepIndex : 0;
+      renderOnboardingStep();
+      document.getElementById('onboardingModal').classList.remove('hidden');
+    }
+
+    function closeOnboardingModal() {
+      document.getElementById('onboardingModal').classList.add('hidden');
+      localStorage.setItem('langpeanut_onboarding_completed', 'true');
+    }
+
+    function renderOnboardingStep() {
+      const step = onboardingSteps[currentOnboardingStep];
+      const container = document.getElementById('onboardingSlideContent');
+      document.getElementById('onboardingStepIndicator').innerText = 'Step ' + (currentOnboardingStep + 1) + ' of ' + onboardingSteps.length;
+
+      const prevBtn = document.getElementById('onboardingPrevBtn');
+      const nextBtn = document.getElementById('onboardingNextBtn');
+
+      if (currentOnboardingStep === 0) {
+        prevBtn.classList.add('hidden');
+      } else {
+        prevBtn.classList.remove('hidden');
+      }
+
+      if (currentOnboardingStep === onboardingSteps.length - 1) {
+        nextBtn.innerText = 'Get Started';
+      } else {
+        nextBtn.innerText = 'Next';
+      }
+
+      container.innerHTML =
+        '<div class="space-y-3.5">' +
+          '<div class="flex items-center gap-3">' +
+            '<div class="w-10 h-10 rounded-xl bg-sky-500/10 border border-sky-500/20 text-sky-400 flex items-center justify-center text-base shrink-0">' +
+              '<i class="' + step.icon + '"></i>' +
+            '</div>' +
+            '<div>' +
+              '<h3 class="text-sm font-bold text-zinc-100">' + step.title + '</h3>' +
+              '<p class="text-xs text-sky-400 font-mono">' + step.subtitle + '</p>' +
+            '</div>' +
+          '</div>' +
+          '<div class="p-4 rounded-xl bg-[#07090e] border border-zinc-800/80 space-y-2 text-xs text-zinc-300">' +
+            step.bullets.map(function(b) {
+              return '<div class="flex items-start gap-2 leading-relaxed">' +
+                '<span class="text-sky-400 font-mono font-bold mt-0.5">•</span>' +
+                '<span>' + b + '</span>' +
+              '</div>';
+            }).join('') +
+          '</div>' +
+        '</div>';
+    }
+
+    function nextOnboardingStep() {
+      if (currentOnboardingStep < onboardingSteps.length - 1) {
+        currentOnboardingStep++;
+        renderOnboardingStep();
+      } else {
+        closeOnboardingModal();
+        showToast('Welcome to langPeanut Studio', 'success');
+      }
+    }
+
+    function prevOnboardingStep() {
+      if (currentOnboardingStep > 0) {
+        currentOnboardingStep--;
+        renderOnboardingStep();
+      }
+    }
+
     // ---------- Startup & Init ----------
     async function loadStudioInit() {
       try {
@@ -3207,6 +3381,10 @@ const InteractiveAppHTML = `<!DOCTYPE html>
         loadTreeAndCandidates();
         await loadSettings();
         await loadCopilotWorkspace();
+
+        if (!localStorage.getItem('langpeanut_onboarding_completed')) {
+          setTimeout(() => openOnboardingModal(0), 400);
+        }
       } catch (err) {
         showToast('Connection to Studio server failed', 'error');
       }
@@ -4754,7 +4932,12 @@ const InteractiveAppHTML = `<!DOCTYPE html>
       if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
         if (document.activeElement?.id !== 'copilotInput') {
           e.preventDefault();
-          executeLocalization();
+          const runnerVisible = document.getElementById('screenRunner')?.classList.contains('hidden') === false;
+          if (runnerVisible) {
+            executeLocalization();
+          } else {
+            switchScreen('runner');
+          }
           return;
         }
       }

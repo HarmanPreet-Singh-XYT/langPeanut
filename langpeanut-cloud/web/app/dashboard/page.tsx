@@ -15,8 +15,8 @@ import {
   DialogTitle,
   DialogDescription,
 } from '@/components/ui/dialog'
-import { cn } from '@/lib/utils'
-import { Lock, Plus, RefreshCw, Play, Trash2 } from 'lucide-react'
+import { cn, decodeHtmlEntities } from '@/lib/utils'
+import { Lock, Plus, RefreshCw, Play, Trash2, HelpCircle, Code, Shield, Cpu, CheckCheck } from 'lucide-react'
 
 const fetcher = (url: string) =>
   fetch(url, { credentials: 'include' }).then((r) => {
@@ -71,6 +71,49 @@ const PROVIDER_MODELS: Record<string, { label: string; tag: string; placeholder:
   custom: { label: 'Custom / Local Ollama', tag: 'LOC', placeholder: 'http://localhost:11434/v1 or custom key', envVar: 'CUSTOM_API_KEY' },
 }
 
+const ONBOARDING_STEPS = [
+  {
+    title: 'Universal Codebase AST Extraction',
+    subtitle: 'Zero Regex Drift with Tree-sitter Grammars',
+    icon: Code,
+    bullets: [
+      'Direct AST parsing for TypeScript/React, Flutter/Dart, SwiftUI, Kotlin, Vue, HTML, and Go.',
+      'Extracts hardcoded UI strings, JSX children, attribute props, and template literals with line-exact byte coordinates.',
+      'Automatically skips technical identifiers, regex patterns, import statements, and code logic.',
+    ],
+  },
+  {
+    title: 'ICU Syntax & Interpolation Safety',
+    subtitle: 'Deterministic Token & Pluralization Protection',
+    icon: Shield,
+    bullets: [
+      'Preserves template variables ({count}, {name}, %d, $price) and complex ICU plural formatting.',
+      'Eliminates broken runtime templates and variable distortion across multi-language catalogs.',
+      'Protects brand names, punctuation formatting, and glossary keywords.',
+    ],
+  },
+  {
+    title: 'Autonomous Multi-Agent Translation',
+    subtitle: 'Frontier LLMs or 100% Offline Local Neural Engine',
+    icon: Cpu,
+    bullets: [
+      'Translate via Google Gemini 3.7 Flash, Claude Sonnet 3.7, GPT-4.5, or run 100% offline via local Meta NLLB-200 / Ollama.',
+      'Smart token budgeting packs up to 50,000 tokens per request to minimize API rounds and latency.',
+      'Maintains cultural idiom fidelity and tone personas (Professional, Casual, Corporate Formal, Gen-Z).',
+    ],
+  },
+  {
+    title: '4-Tier Critic Verification & Surgical Patching',
+    subtitle: 'Continuous Quality Assurance & Code Integration',
+    icon: CheckCheck,
+    bullets: [
+      'Every translation is audited across syntax, ICU placeholder matching, UI expansion budget, and key parity.',
+      'Applies byte-range surgical code diffs directly to source files without full-file hallucination.',
+      'Automatically opens GitHub Pull Requests with verified translation catalogs on push triggers.',
+    ],
+  },
+]
+
 export default function DashboardPage() {
   const router = useRouter()
   const [authChecked, setAuthChecked] = useState(false)
@@ -87,6 +130,9 @@ export default function DashboardPage() {
         }
         setAuthed(true)
         setAuthChecked(true)
+        if (typeof window !== 'undefined' && !localStorage.getItem('langpeanut_onboarding_completed')) {
+          setShowOnboardingModal(true)
+        }
       })
       .catch(() => {
         if (!cancelled) router.replace('/login')
@@ -107,7 +153,9 @@ export default function DashboardPage() {
 
   const [showImportModal, setShowImportModal] = useState(false)
   const [showVaultModal, setShowVaultModal] = useState(false)
-  const [vaultProvider, setVaultProvider] = useState<string>('openai')
+  const [showOnboardingModal, setShowOnboardingModal] = useState(false)
+  const [onboardingStep, setOnboardingStep] = useState(0)
+  const [vaultProvider, setVaultProvider] = useState<string>('gemini')
   const [vaultKeyInput, setVaultKeyInput] = useState<string>('')
   const [savingVaultKey, setSavingVaultKey] = useState(false)
   const [vaultFeedback, setVaultFeedback] = useState<string>('')
@@ -296,7 +344,18 @@ export default function DashboardPage() {
             </p>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2.5">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => { setOnboardingStep(0); setShowOnboardingModal(true) }}
+              className="bg-white/[0.05] hover:bg-white/[0.1] border-white/10 text-slate-200 gap-1.5"
+              title="Studio Overview & Quick Start Guide"
+            >
+              <HelpCircle className="w-3.5 h-3.5 text-sky-400" />
+              <span>Guide</span>
+            </Button>
+
             <Button
               variant="outline"
               size="sm"
@@ -629,9 +688,22 @@ export default function DashboardPage() {
           <DialogHeader>
             <DialogTitle className="font-bold text-base text-white">Import from GitHub App</DialogTitle>
             <DialogDescription className="text-xs text-slate-400">
-              Select any repository granted to your installed GitHub App.
+              Select any repository granted to your installed GitHub App or install on new accounts.
             </DialogDescription>
           </DialogHeader>
+
+          {/* GitHub App Installation Action Banner */}
+          <div className="p-3 rounded-xl bg-sky-500/10 border border-sky-500/20 flex items-center justify-between gap-3 text-xs">
+            <div className="space-y-0.5">
+              <span className="font-semibold text-sky-300">Grant Access to Repositories</span>
+              <p className="text-[11px] text-slate-400">Install the GitHub App on your personal account or organization.</p>
+            </div>
+            <Button asChild size="sm" variant="outline" className="text-xs h-7 border-sky-500/40 text-sky-300 hover:bg-sky-500/20 shrink-0">
+              <a href="https://github.com/apps/langpeanut/installations/new" target="_blank" rel="noopener noreferrer">
+                Install App ↗
+              </a>
+            </Button>
+          </div>
 
           {loadingAvailable ? (
             <div className="space-y-2 py-4">
@@ -642,17 +714,17 @@ export default function DashboardPage() {
           ) : !availableRepos || availableRepos.length === 0 ? (
             <div className="p-8 text-center text-xs text-slate-300 space-y-4">
               <div className="w-12 h-12 rounded-2xl bg-sky-500/10 border border-sky-500/20 text-sky-400 flex items-center justify-center mx-auto text-xl font-bold font-mono">
-                KEY
+                APP
               </div>
               <div className="space-y-1">
                 <p className="font-bold text-white text-sm">No Repositories Found</p>
                 <p className="text-slate-400 text-xs max-w-md mx-auto">
-                  To grant access to repositories, install the <strong className="text-slate-200">langPeanut Localization Bot</strong> on your personal GitHub account or organization.
+                  To grant access, install the <strong className="text-slate-200">langPeanut GitHub App</strong> on your personal account or organization, then click Refresh.
                 </p>
               </div>
               <div className="flex items-center justify-center gap-3 pt-2">
                 <Button asChild size="sm" className="bg-blue-600 hover:bg-blue-500 shadow-lg shadow-blue-600/30">
-                  <a href="https://github.com/settings/apps" target="_blank" rel="noopener noreferrer">
+                  <a href="https://github.com/apps/langpeanut/installations/new" target="_blank" rel="noopener noreferrer">
                     Install GitHub App ↗
                   </a>
                 </Button>
@@ -663,7 +735,7 @@ export default function DashboardPage() {
               </div>
             </div>
           ) : (
-            <div className="max-h-80 overflow-y-auto space-y-2 pr-1">
+            <div className="max-h-80 overflow-y-auto space-y-2 pr-1 custom-scrollbar">
               {availableRepos.map((r) => {
                 const key = `${r.owner}/${r.name}`
                 const isImporting = importingKey === key
@@ -675,7 +747,7 @@ export default function DashboardPage() {
                   >
                     <div>
                       <p className="font-semibold text-white">
-                        {r.owner}/{r.name}
+                        {decodeHtmlEntities(r.owner)}/{decodeHtmlEntities(r.name)}
                       </p>
                       <p className="text-[11px] text-slate-500 font-mono">
                         branch: {r.default_branch} • {r.private ? 'Private' : 'Public'}
@@ -702,6 +774,98 @@ export default function DashboardPage() {
               })}
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* ─── Dialog: Product Walkthrough & Onboarding ───────────────────────────── */}
+      <Dialog open={showOnboardingModal} onOpenChange={(open) => {
+        if (!open) localStorage.setItem('langpeanut_onboarding_completed', 'true')
+        setShowOnboardingModal(open)
+      }}>
+        <DialogContent className="bg-[#0b0e14] border-white/10 text-white max-w-xl space-y-5 p-6">
+          <DialogHeader>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-sky-400" />
+                <span className="text-xs font-mono font-bold tracking-wider text-sky-400 uppercase">
+                  langPeanut Platform Guide
+                </span>
+                <span className="text-[10px] font-mono text-slate-500 ml-2">
+                  Step {onboardingStep + 1} of {ONBOARDING_STEPS.length}
+                </span>
+              </div>
+            </div>
+          </DialogHeader>
+
+          {(() => {
+            const step = ONBOARDING_STEPS[onboardingStep]
+            const Icon = step.icon
+            return (
+              <div className="space-y-4 min-h-[220px]">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-sky-500/10 border border-sky-500/20 text-sky-400 flex items-center justify-center text-base shrink-0">
+                    <Icon className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-white">{step.title}</h3>
+                    <p className="text-xs text-sky-400 font-mono">{step.subtitle}</p>
+                  </div>
+                </div>
+
+                <div className="p-4 rounded-xl bg-[#07090e] border border-white/[0.08] space-y-2 text-xs text-slate-300">
+                  {step.bullets.map((b, idx) => (
+                    <div key={idx} className="flex items-start gap-2 leading-relaxed">
+                      <span className="text-sky-400 font-mono font-bold mt-0.5">•</span>
+                      <span>{b}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )
+          })()}
+
+          <div className="flex items-center justify-between pt-3 border-t border-white/[0.08]">
+            <button
+              type="button"
+              onClick={() => {
+                localStorage.setItem('langpeanut_onboarding_completed', 'true')
+                setShowOnboardingModal(false)
+              }}
+              className="text-xs text-slate-500 hover:text-slate-300 font-medium cursor-pointer"
+            >
+              Skip Walkthrough
+            </button>
+
+            <div className="flex items-center gap-2">
+              {onboardingStep > 0 && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setOnboardingStep((s) => Math.max(0, s - 1))}
+                  className="border-white/10 text-slate-300 hover:text-white"
+                >
+                  Previous
+                </Button>
+              )}
+              <Button
+                type="button"
+                size="sm"
+                onClick={() => {
+                  if (onboardingStep < ONBOARDING_STEPS.length - 1) {
+                    setOnboardingStep((s) => s + 1)
+                  } else {
+                    localStorage.setItem('langpeanut_onboarding_completed', 'true')
+                    setShowOnboardingModal(false)
+                    showToast('Welcome to langPeanut Cloud!')
+                  }
+                }}
+                className="bg-blue-600 hover:bg-blue-500 text-white shadow-md shadow-blue-600/30"
+              >
+                {onboardingStep === ONBOARDING_STEPS.length - 1 ? 'Get Started' : 'Next'}
+              </Button>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
     </div>
