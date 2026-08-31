@@ -1775,6 +1775,32 @@ jobs:
               </div>
             </div>
 
+            {/* API Key Missing Alert Banner */}
+            {!isProviderConfigured(selectedProvider) && !repo.settings?.has_api_key_override && selectedProvider !== 'custom' && (
+              <div className="mx-6 mt-4 p-3 rounded-xl bg-amber-500/10 border border-amber-500/25 flex items-center justify-between gap-3 shrink-0">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-7 h-7 rounded-lg bg-amber-500/20 text-amber-400 flex items-center justify-center text-xs shrink-0">
+                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="m21 2-2 2m-6 6 2 2m-2-2-4 4-2-2-4 4 2 2-4 4 4 4 4-4 2 2 4-4-2-2 4-4Z"/></svg>
+                  </div>
+                  <div>
+                    <div className="text-xs font-semibold text-amber-300">
+                      No API Key Configured for {PROVIDER_MODELS[selectedProvider]?.label || selectedProvider}
+                    </div>
+                    <div className="text-[11px] text-zinc-400">
+                      Configure your API key in Vault Keys to enable live {selectedModel} completions.
+                    </div>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('settings')}
+                  className="px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-zinc-950 text-xs font-bold transition-all cursor-pointer shrink-0 shadow-sm"
+                >
+                  Configure Key
+                </button>
+              </div>
+            )}
+
             {/* Conversation Messages with Modern Styled Cards */}
             <div ref={chatContainerRef} className="flex-1 p-6 overflow-y-auto space-y-6 text-sm custom-scrollbar">
               {centralCopilotMessages.map((msg, idx) => (

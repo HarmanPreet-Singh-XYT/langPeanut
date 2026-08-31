@@ -4071,6 +4071,7 @@ const InteractiveAppHTML = `<!DOCTYPE html>
       try {
         const res = await fetch('/api/settings');
         const data = await res.json();
+        window.lastSettingsData = data;
 
         if (data.active_provider) {
           document.getElementById('settingsActiveProvider').value = data.active_provider;
@@ -4822,22 +4823,68 @@ const InteractiveAppHTML = `<!DOCTYPE html>
 
     function renderCopilotWelcome() {
       const container = document.getElementById('copilotMessages');
-      container.innerHTML =
-        '<div class="flex gap-2.5 items-start">' +
-          '<div class="pk-avatar">LP</div>' +
-          '<div class="pk-msg-assistant flex-1">' +
-            '<div class="flex items-center gap-2 mb-2">' +
-              '<span class="text-sky-400 font-semibold text-xs" style="font-family:\'Geist Mono\',monospace">Autonomous Orchestrator</span>' +
-              '<span class="badge badge-emerald">Ready</span>' +
+      if (!container) return;
+
+      const prov = window.lastSettingsData?.active_provider || 'gemini';
+      const model = window.lastSettingsData?.active_model || 'gemini-3.7-flash';
+      const hasKey = window.lastSettingsData?.has_keys?.[prov] || false;
+      const candCount = (typeof tuiCandidates !== 'undefined' && tuiCandidates) ? tuiCandidates.length : 0;
+      const framework = document.getElementById('frameworkDisplay')?.innerText || 'Generic';
+
+      let keyBannerHtml = '';
+      if (!hasKey && prov !== 'local' && prov !== 'ollama') {
+        const provName = prov === 'gemini' ? 'Google Gemini' : (prov === 'claude' ? 'Anthropic Claude' : (prov === 'openai' ? 'OpenAI' : prov));
+        keyBannerHtml =
+          '<div class="p-3 rounded-xl mb-3 flex items-center justify-between gap-3" style="background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.25)">' +
+            '<div class="flex items-center gap-2.5">' +
+              '<div class="w-7 h-7 rounded-lg flex items-center justify-center text-xs shrink-0" style="background:rgba(245,158,11,0.2);color:#fbbf24">' +
+                '<i class="fa-solid fa-key"></i>' +
+              '</div>' +
+              '<div>' +
+                '<div class="text-xs font-semibold text-amber-300">No API Key Detected for ' + escapeHtml(provName) + '</div>' +
+                '<div class="text-[11px] text-zinc-400">Add your API key in Settings to enable live ' + escapeHtml(model) + ' translations.</div>' +
+              '</div>' +
             '</div>' +
-            '<p class="text-[11px] leading-relaxed" style="color:#9ca3af">' +
-              'Direct the supervisor agent to audit AST strings, execute model-aware translation batches, verify ICU variable integrity with the 4-tier critic, or simulate Google SERP rankings.' +
+            '<div class="flex items-center gap-2 shrink-0">' +
+              '<button onclick="switchScreen(\'settings\')" class="px-2.5 py-1.5 rounded-lg text-xs font-semibold cursor-pointer transition-colors" style="background:#fbbf24;color:#090d16">' +
+                '<i class="fa-solid fa-gear text-[10px] mr-1"></i>Configure Key' +
+              '</button>' +
+            '</div>' +
+          '</div>';
+      }
+
+      container.innerHTML =
+        '<div class="flex gap-3 items-start">' +
+          '<div class="pk-avatar shrink-0">LP</div>' +
+          '<div class="pk-msg-assistant flex-1 space-y-3">' +
+            '<div class="flex items-center justify-between">' +
+              '<div class="flex items-center gap-2">' +
+                '<span class="text-sky-400 font-bold text-xs font-mono">Autonomous Copilot</span>' +
+                '<span class="badge badge-emerald">Ready</span>' +
+              '</div>' +
+              '<span class="text-[10px] font-mono text-zinc-400">' + escapeHtml(framework) + ' · ' + candCount + ' strings found</span>' +
+            '</div>' +
+            keyBannerHtml +
+            '<p class="text-xs leading-relaxed text-zinc-300">' +
+              'I am your pair-programming internationalization partner. I parse Tree-sitter ASTs with zero regex flaws, manage ICU variable safety, execute multi-agent translations, and verify code with the 4-tier critic.' +
             '</p>' +
-            '<div class="grid grid-cols-2 gap-1.5 mt-3">' +
-              '<button onclick="sendCopilotPrompt(\'Scan project AST and report coverage\')" class="btn btn-secondary btn-sm text-left justify-start gap-1.5"><i class="fa-solid fa-radar text-sky-400 text-[10px]"></i>Scan AST</button>' +
-              '<button onclick="sendCopilotPrompt(\'Translate all missing keys to es, de, ja\')" class="btn btn-secondary btn-sm text-left justify-start gap-1.5"><i class="fa-solid fa-language text-emerald-400 text-[10px]"></i>Translate</button>' +
-              '<button onclick="sendCopilotPrompt(\'Run 4-tier verification critic\')" class="btn btn-secondary btn-sm text-left justify-start gap-1.5"><i class="fa-solid fa-shield-halved text-purple-400 text-[10px]"></i>4-Tier Critic</button>' +
-              '<button onclick="sendCopilotPrompt(\'Show Japanese SERP preview\')" class="btn btn-secondary btn-sm text-left justify-start gap-1.5"><i class="fa-solid fa-magnifying-glass text-pink-400 text-[10px]"></i>SERP Preview</button>' +
+            '<div class="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">' +
+              '<button onclick="sendCopilotPrompt(\'Scan repository and report coverage matrix\')" class="p-2.5 rounded-xl text-left flex items-start gap-2.5 transition-all cursor-pointer hover:border-sky-500/40" style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08)">' +
+                '<div class="w-6 h-6 rounded-lg bg-sky-500/20 text-sky-400 flex items-center justify-center text-[10px] shrink-0 mt-0.5"><i class="fa-solid fa-radar"></i></div>' +
+                '<div><div class="text-xs font-semibold text-zinc-200">Scan AST Strings</div><div class="text-[10px] text-zinc-400">Discover all hardcoded UI string candidates</div></div>' +
+              '</button>' +
+              '<button onclick="sendCopilotPrompt(\'Translate missing keys into target locales\')" class="p-2.5 rounded-xl text-left flex items-start gap-2.5 transition-all cursor-pointer hover:border-emerald-500/40" style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08)">' +
+                '<div class="w-6 h-6 rounded-lg bg-emerald-500/20 text-emerald-400 flex items-center justify-center text-[10px] shrink-0 mt-0.5"><i class="fa-solid fa-language"></i></div>' +
+                '<div><div class="text-xs font-semibold text-zinc-200">Translate Missing Keys</div><div class="text-[10px] text-zinc-400">Generate translations with strict ICU token safety</div></div>' +
+              '</button>' +
+              '<button onclick="sendCopilotPrompt(\'Run 4-tier verification critic\')" class="p-2.5 rounded-xl text-left flex items-start gap-2.5 transition-all cursor-pointer hover:border-purple-500/40" style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08)">' +
+                '<div class="w-6 h-6 rounded-lg bg-purple-500/20 text-purple-400 flex items-center justify-center text-[10px] shrink-0 mt-0.5"><i class="fa-solid fa-shield-halved"></i></div>' +
+                '<div><div class="text-xs font-semibold text-zinc-200">4-Tier Critic Verification</div><div class="text-[10px] text-zinc-400">Validate syntax, ICU tokens, expansion & parity</div></div>' +
+              '</button>' +
+              '<button onclick="sendCopilotPrompt(\'Simulate Google SERP previews for global markets\')" class="p-2.5 rounded-xl text-left flex items-start gap-2.5 transition-all cursor-pointer hover:border-pink-500/40" style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08)">' +
+                '<div class="w-6 h-6 rounded-lg bg-pink-500/20 text-pink-400 flex items-center justify-center text-[10px] shrink-0 mt-0.5"><i class="fa-solid fa-magnifying-glass"></i></div>' +
+                '<div><div class="text-xs font-semibold text-zinc-200">Google SERP Preview</div><div class="text-[10px] text-zinc-400">Simulate 600px desktop/mobile search rankings</div></div>' +
+              '</button>' +
             '</div>' +
           '</div>' +
         '</div>';
@@ -4994,7 +5041,7 @@ const InteractiveAppHTML = `<!DOCTYPE html>
         '<div class="grid grid-cols-2 md:grid-cols-4 gap-3 font-mono text-xs">' +
           '<div class="p-3.5 rounded-lg bg-[#0b0e14] border border-[#181b24] space-y-1">' +
             '<div class="text-[10px] uppercase text-zinc-500">Source Keys</div>' +
-            '<div class="text-lg font-bold text-zinc-100">' + (studioCandidates ? studioCandidates.length : 0) + '</div>' +
+            '<div class="text-lg font-bold text-zinc-100">' + ((typeof tuiCandidates !== 'undefined' && tuiCandidates) ? tuiCandidates.length : 0) + '</div>' +
           '</div>' +
           '<div class="p-3.5 rounded-lg bg-[#0b0e14] border border-[#181b24] space-y-1">' +
             '<div class="text-[10px] uppercase text-zinc-500">Target Locales</div>' +
