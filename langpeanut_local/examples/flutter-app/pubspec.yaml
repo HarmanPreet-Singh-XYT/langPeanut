@@ -1,0 +1,17 @@
+name: flutter_example_app
+description: "A real Flutter demo application for langPeanut localization"
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+  intl: any
+
+flutter:
+  generate: true
+  uses-material-design: true

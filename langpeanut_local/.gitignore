@@ -1,0 +1,23 @@
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Build artifacts
+/langPeanut
+/bin/
+*.exe
+
+# Go
+*.test
+*.out
+
+# Runtime state & CLI cache
+.langPeanut/
+.langpeanut/
+.langpeanut-cache/
+benchmark/workspace/
+
+# OS
+.DS_Store
+
