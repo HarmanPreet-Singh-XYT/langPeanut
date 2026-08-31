@@ -276,8 +276,6 @@ export default function HomePage() {
   const [activeSnippetKey, setActiveSnippetKey] = useState<string>('react')
   const [activeWorkflowId, setActiveWorkflowId] = useState<string>('push-autopilot')
   const [activePreviewLocale, setActivePreviewLocale] = useState<string>('es')
-  const [copiedCLI, setCopiedCLI] = useState(false)
-
   // Live Terminal Inspector State
   const [showTerminal, setShowTerminal] = useState(false)
   const [simulating, setSimulating] = useState(false)
@@ -310,12 +308,6 @@ export default function HomePage() {
         }
       }, (idx + 1) * 600)
     })
-  }
-
-  function copyCliCommand() {
-    navigator.clipboard.writeText('curl -fsSL https://langpeanut.ai/install.sh | bash')
-    setCopiedCLI(true)
-    setTimeout(() => setCopiedCLI(false), 3000)
   }
 
   const selectedWorkflow = WORKFLOWS.find((w) => w.id === activeWorkflowId) || WORKFLOWS[0]
@@ -358,24 +350,6 @@ export default function HomePage() {
           <Button asChild variant="ghost" size="lg" className="rounded-xl glass-panel hover:bg-white/[0.04] text-slate-200 font-semibold px-6 py-3 text-xs h-auto">
             <a href="#benchmark">View Benchmark</a>
           </Button>
-        </div>
-
-        {/* CLI Quick Start Banner */}
-        <div className="pt-2 max-w-xl mx-auto">
-          <div className="glass-panel rounded-xl p-2.5 flex items-center justify-between gap-3 text-xs font-mono border border-white/[0.08]">
-            <div className="flex items-center gap-2 truncate text-slate-300">
-              <span className="text-sky-400">$</span>
-              <span className="truncate">curl -fsSL https://langpeanut.ai/install.sh | bash</span>
-            </div>
-            <Button
-              onClick={copyCliCommand}
-              variant="ghost"
-              size="sm"
-              className="rounded-lg bg-white/5 hover:bg-white/10 text-slate-300 text-[11px] px-3 py-1 h-auto shrink-0"
-            >
-              {copiedCLI ? '✓ Copied' : 'Copy CLI'}
-            </Button>
-          </div>
         </div>
 
         {/* Key Benchmark Metrics */}
