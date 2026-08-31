@@ -93,15 +93,34 @@ jobs:
           PUBSUB_WEBHOOK_TOPIC: ${{ secrets.PUBSUB_WEBHOOK_TOPIC || 'langpeanut-webhooks' }}
           PUBSUB_WEBHOOK_SUBSCRIPTION: ${{ secrets.PUBSUB_WEBHOOK_SUBSCRIPTION || 'langpeanut-webhooks-server' }}
         run: |
+          set -euo pipefail
+
+          # Enabling the API requires serviceusage.services.enable, which this
+          # deploy identity may not have. Best-effort only — if the API is
+          # already enabled (or another admin enables it once), this is a
+          # no-op; if it's genuinely disabled and this identity can't enable
+          # it, the topic/subscription steps below will fail with a clear
+          # "API not enabled" error rather than silently doing nothing.
+          echo "Ensuring Pub/Sub API is enabled..."
+          gcloud services enable pubsub.googleapis.com --project="${GCP_PROJECT}" || \
+            echo "Could not enable Pub/Sub API (missing serviceusage permission?) — continuing, assuming it's already enabled."
+
           echo "Ensuring Pub/Sub topic '${PUBSUB_WEBHOOK_TOPIC}' exists..."
-          gcloud pubsub topics create "${PUBSUB_WEBHOOK_TOPIC}" \
-            --project="${GCP_PROJECT}" 2>/dev/null || echo "Topic already exists, continuing."
+          if gcloud pubsub topics describe "${PUBSUB_WEBHOOK_TOPIC}" --project="${GCP_PROJECT}" >/dev/null 2>&1; then
+            echo "Topic already exists, continuing."
+          else
+            gcloud pubsub topics create "${PUBSUB_WEBHOOK_TOPIC}" --project="${GCP_PROJECT}"
+          fi
 
           echo "Ensuring Pub/Sub subscription '${PUBSUB_WEBHOOK_SUBSCRIPTION}' exists..."
-          gcloud pubsub subscriptions create "${PUBSUB_WEBHOOK_SUBSCRIPTION}" \
-            --topic="${PUBSUB_WEBHOOK_TOPIC}" \
-            --ack-deadline=30 \
-            --project="${GCP_PROJECT}" 2>/dev/null || echo "Subscription already exists, continuing."
+          if gcloud pubsub subscriptions describe "${PUBSUB_WEBHOOK_SUBSCRIPTION}" --project="${GCP_PROJECT}" >/dev/null 2>&1; then
+            echo "Subscription already exists, continuing."
+          else
+            gcloud pubsub subscriptions create "${PUBSUB_WEBHOOK_SUBSCRIPTION}" \
+              --topic="${PUBSUB_WEBHOOK_TOPIC}" \
+              --ack-deadline=30 \
+              --project="${GCP_PROJECT}"
+          fi
 
           echo "Granting the VM's attached service account Pub/Sub publisher/subscriber roles..."
           VM_SA=$(gcloud compute instances describe "${GCE_INSTANCE}" \
@@ -112,14 +131,12 @@ jobs:
           gcloud pubsub topics add-iam-policy-binding "${PUBSUB_WEBHOOK_TOPIC}" \
             --project="${GCP_PROJECT}" \
             --member="serviceAccount:${VM_SA}" \
-            --role="roles/pubsub.publisher" \
-            --condition=None >/dev/null
+            --role="roles/pubsub.publisher" >/dev/null
 
           gcloud pubsub subscriptions add-iam-policy-binding "${PUBSUB_WEBHOOK_SUBSCRIPTION}" \
             --project="${GCP_PROJECT}" \
             --member="serviceAccount:${VM_SA}" \
-            --role="roles/pubsub.subscriber" \
-            --condition=None >/dev/null
+            --role="roles/pubsub.subscriber" >/dev/null
 
           echo "Pub/Sub provisioning complete (VM SA: ${VM_SA})."
 
