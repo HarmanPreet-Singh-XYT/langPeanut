@@ -25,6 +25,7 @@ import (
 
 	"github.com/langPeanut/langpeanut-cloud/internal/auth"
 	"github.com/langPeanut/langpeanut-cloud/internal/db"
+	pubsubint "github.com/langPeanut/langpeanut-cloud/internal/pubsub"
 	"github.com/langPeanut/langPeanut/pkg/agents"
 	"github.com/langPeanut/langPeanut/pkg/chat"
 	"github.com/langPeanut/langPeanut/pkg/genkit"
@@ -50,6 +51,12 @@ type Handler struct {
 	OAuthClientSecret string
 	WebhookSecret     string // GITHUB_WEBHOOK_SECRET; verifies X-Hub-Signature-256
 	PublicBaseURL     string // e.g. https://app.langpeanut.ai — used to build the OAuth callback URL
+
+	// WebhookPublisher, when non-nil, makes handleWebhook publish verified
+	// GitHub deliveries to Pub/Sub instead of processing them inline — see
+	// internal/pubsub. Left nil in local dev and in tests, which fall back
+	// to synchronous in-process handling.
+	WebhookPublisher *pubsubint.Publisher
 }
 
 // RegisterRoutes wires all API routes onto mux.
@@ -1409,9 +1416,15 @@ func (h *Handler) verifyWebhookSignature(r *http.Request, body []byte) bool {
 	return hmac.Equal(sig, expected)
 }
 
+// handleWebhook verifies the incoming GitHub delivery and either publishes
+// it to Pub/Sub for durable async processing (when Publisher is configured)
+// or falls back to processing it synchronously in-line. Either way, the
+// actual event handling lives in ProcessWebhookEvent so both paths run
+// identical logic.
 func (h *Handler) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	event := r.Header.Get("X-GitHub-Event")
-	slog.Info("webhook: received", "event", event)
+	delivery := r.Header.Get("X-GitHub-Delivery")
+	slog.Info("webhook: received", "event", event, "delivery", delivery)
 
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -1425,42 +1438,77 @@ func (h *Handler) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	evt := pubsubint.WebhookEvent{EventType: event, Delivery: delivery, Body: body}
+
+	if h.WebhookPublisher != nil {
+		if err := h.WebhookPublisher.Publish(r.Context(), evt); err != nil {
+			// Publishing failed — fall back to synchronous processing rather
+			// than dropping a verified GitHub delivery on the floor.
+			slog.Error("webhook: pubsub publish failed, processing synchronously", "event", event, "err", err)
+			if perr := h.ProcessWebhookEvent(r.Context(), evt); perr != nil {
+				writeError(w, http.StatusInternalServerError, "process webhook: "+perr.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]string{"status": "processed_sync_fallback"})
+			return
+		}
+		slog.Info("webhook: published for async processing", "event", event, "delivery", delivery)
+		writeJSON(w, http.StatusAccepted, map[string]string{"status": "queued"})
+		return
+	}
+
+	// No Pub/Sub configured (local dev / tests) — process inline.
+	if err := h.ProcessWebhookEvent(r.Context(), evt); err != nil {
+		writeError(w, http.StatusInternalServerError, "process webhook: "+err.Error())
+		return
+	}
+}
+
+// ProcessWebhookEvent runs the actual GitHub event handling — repo lookup,
+// settings checks, branch filtering, and job creation. It's called directly
+// from handleWebhook when Pub/Sub isn't configured, and from the Pub/Sub
+// subscriber (internal/pubsub.RunSubscriber) when it is. It satisfies
+// internal/pubsub.Handler.
+//
+// Unlike handleWebhook it has no http.ResponseWriter — outcomes are
+// communicated via the returned error (nil = ack, non-nil = nack/redeliver)
+// and via logging, matching what the original inline switch already did for
+// "soft" outcomes (ignored/disabled/etc. are logged, not treated as errors).
+func (h *Handler) ProcessWebhookEvent(ctx context.Context, incoming pubsubint.WebhookEvent) error {
+	event := incoming.EventType
+	body := incoming.Body
+
 	switch event {
 	case "push":
 		var pushEv ghpkg.PushEvent
 		if err := json.Unmarshal(body, &pushEv); err != nil {
-			writeError(w, http.StatusBadRequest, "decode push: "+err.Error())
-			return
+			return fmt.Errorf("decode push: %w", err)
 		}
 
 		branch := strings.TrimPrefix(pushEv.Ref, "refs/heads/")
 		// Ignore deleted branches, tags, and internal langpeanut PR branches to prevent recursion loops
 		if pushEv.Deleted || !strings.HasPrefix(pushEv.Ref, "refs/heads/") || strings.HasPrefix(branch, "langpeanut/") {
-			writeJSON(w, http.StatusOK, map[string]string{"status": "ignored_internal_or_tag"})
-			return
+			slog.Info("webhook: ignored internal or tag ref", "ref", pushEv.Ref)
+			return nil
 		}
 
 		repo, err := h.DB.GetRepoByOwnerAndName(pushEv.Repository.Owner.Login, pushEv.Repository.Name)
 		if err != nil || repo == nil {
-			writeJSON(w, http.StatusOK, map[string]string{"status": "repo_not_enabled"})
-			return
+			slog.Info("webhook: repo not enabled", "repo", pushEv.Repository.Owner.Login+"/"+pushEv.Repository.Name)
+			return nil
 		}
 
 		// Check settings
 		settings, err := h.DB.GetRepoSettings(repo.ID)
 		if err != nil || settings == nil || len(settings.Locales) == 0 {
-			writeJSON(w, http.StatusOK, map[string]string{"status": "no_locales_configured"})
-			return
+			slog.Info("webhook: no locales configured", "repo", repo.Owner+"/"+repo.Name)
+			return nil
 		}
 
 		// Check if push autopilot is enabled
 		if !settings.WebhookPushEnabled {
 			slog.Info("webhook: push ignored because push autopilot is disabled in repo settings", "repo", repo.Owner+"/"+repo.Name, "branch", branch)
-			writeJSON(w, http.StatusOK, map[string]string{
-				"status": "push_trigger_disabled",
-				"reason": "Push webhook autopilot is disabled in repository settings.",
-			})
-			return
+			return nil
 		}
 
 		// Check branch against settings.WebhookBranchFilter
@@ -1492,56 +1540,42 @@ func (h *Handler) handleWebhook(w http.ResponseWriter, r *http.Request) {
 
 		if !branchMatches {
 			slog.Info("webhook: push ignored due to branch filter", "repo", repo.Owner+"/"+repo.Name, "branch", branch, "filter", settings.WebhookBranchFilter, "custom", settings.WebhookCustomBranches)
-			writeJSON(w, http.StatusOK, map[string]string{
-				"status": "ignored_branch_filter",
-				"branch": branch,
-				"reason": fmt.Sprintf("Branch '%s' does not match repository branch filter '%s'", branch, settings.WebhookBranchFilter),
-			})
-			return
+			return nil
 		}
 
 		// Queue job with target branch for continuous autopilot workflow
 		job, err := h.DB.CreateJobWithBranch(repo.ID, "webhook_push", branch)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "queue job: "+err.Error())
-			return
+			return fmt.Errorf("queue job: %w", err)
 		}
 		slog.Info("webhook: queued push job for branch", "job_id", job.ID, "repo", repo.Owner+"/"+repo.Name, "branch", branch)
-		writeJSON(w, http.StatusOK, map[string]any{"status": "job_queued", "job_id": job.ID, "branch": branch})
-		return
+		return nil
 
 	case "issue_comment":
 		var commentEv ghpkg.IssueCommentEvent
 		if err := json.Unmarshal(body, &commentEv); err != nil {
-			writeError(w, http.StatusBadRequest, "decode issue_comment: "+err.Error())
-			return
+			return fmt.Errorf("decode issue_comment: %w", err)
 		}
 
 		if !commentEv.IsPullRequestComment() {
-			writeJSON(w, http.StatusOK, map[string]string{"status": "ignored_non_pr_comment"})
-			return
+			return nil
 		}
 
 		botCmd, isBotCmd := ghpkg.ParseBotCommand(commentEv.Comment.Body)
 		if !isBotCmd || botCmd == nil {
-			writeJSON(w, http.StatusOK, map[string]string{"status": "no_bot_command"})
-			return
+			return nil
 		}
 
 		repo, err := h.DB.GetRepoByOwnerAndName(commentEv.Repository.Owner.Login, commentEv.Repository.Name)
 		if err != nil || repo == nil {
-			writeJSON(w, http.StatusOK, map[string]string{"status": "repo_not_enabled"})
-			return
+			slog.Info("webhook: repo not enabled", "repo", commentEv.Repository.Owner.Login+"/"+commentEv.Repository.Name)
+			return nil
 		}
 
 		settings, _ := h.DB.GetRepoSettings(repo.ID)
 		if settings != nil && !settings.WebhookPRCommentsEnabled {
 			slog.Info("webhook: PR comment ignored because PR comments are disabled in repo settings", "repo", repo.Owner+"/"+repo.Name)
-			writeJSON(w, http.StatusOK, map[string]string{
-				"status": "pr_comments_disabled",
-				"reason": "PR bot comment commands (@langpeanut) are disabled in repository settings.",
-			})
-			return
+			return nil
 		}
 
 		targetBranch := repo.DefaultBranch
@@ -1550,9 +1584,9 @@ func (h *Handler) handleWebhook(w http.ResponseWriter, r *http.Request) {
 			pk, pErr := ghpkg.ParsePrivateKeyPEM(h.PrivateKeyPEM)
 			if pErr == nil && pk != nil {
 				appCfg := ghpkg.AppConfig{AppID: h.AppID, PrivateKey: pk}
-				tok, tErr := ghpkg.CreateInstallationToken(r.Context(), appCfg, inst.InstallationID)
+				tok, tErr := ghpkg.CreateInstallationToken(ctx, appCfg, inst.InstallationID)
 				if tErr == nil && tok != nil && tok.Token != "" {
-					prReq, _ := http.NewRequestWithContext(r.Context(), "GET",
+					prReq, _ := http.NewRequestWithContext(ctx, "GET",
 						fmt.Sprintf("https://api.github.com/repos/%s/%s/pulls/%d", repo.Owner, repo.Name, commentEv.Issue.Number), nil)
 					if prReq != nil {
 						prReq.Header.Set("Authorization", "Bearer "+tok.Token)
@@ -1583,26 +1617,18 @@ func (h *Handler) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		// Queue PR bot on-demand localization job
 		job, err := h.DB.CreateJobWithBranch(repo.ID, "webhook_pr_comment", targetBranch)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "queue bot job: "+err.Error())
-			return
+			return fmt.Errorf("queue bot job: %w", err)
 		}
 		slog.Info("webhook: queued @langpeanut PR bot job", "job_id", job.ID, "action", botCmd.Action, "pr", commentEv.Issue.Number, "branch", targetBranch)
-		writeJSON(w, http.StatusOK, map[string]any{
-			"status":     "bot_job_queued",
-			"job_id":     job.ID,
-			"bot_action": botCmd.Action,
-			"pr_number":  commentEv.Issue.Number,
-			"branch":     targetBranch,
-		})
-		return
+		return nil
 
 	case "installation_repositories", "installation":
 		slog.Info("webhook: sync installation repositories event")
-		writeJSON(w, http.StatusOK, map[string]string{"status": "installations_synced"})
-		return
+		return nil
 
 	default:
-		writeJSON(w, http.StatusOK, map[string]string{"status": "unhandled_event", "event": event})
+		slog.Info("webhook: unhandled event", "event", event)
+		return nil
 	}
 }
 

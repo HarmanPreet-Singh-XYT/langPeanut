@@ -80,6 +80,49 @@ jobs:
         with:
           version: '>= 460.0.0'
 
+      # ── Provision Pub/Sub webhook intake (idempotent) ─────────────────────────
+      # Durable GitHub webhook delivery: the server publishes verified
+      # deliveries here instead of processing them inline, so a deploy or
+      # restart can't drop a webhook mid-flight. Local dev never touches
+      # this — only enabled on the deployed VM via GCP_PROJECT_ID in .env.
+      - name: Provision Pub/Sub topic, subscription, and IAM
+        env:
+          GCP_PROJECT: ${{ secrets.GCP_PROJECT_ID }}
+          GCE_INSTANCE: ${{ secrets.GCE_INSTANCE_NAME }}
+          GCE_ZONE: ${{ secrets.GCE_ZONE }}
+          PUBSUB_WEBHOOK_TOPIC: ${{ secrets.PUBSUB_WEBHOOK_TOPIC || 'langpeanut-webhooks' }}
+          PUBSUB_WEBHOOK_SUBSCRIPTION: ${{ secrets.PUBSUB_WEBHOOK_SUBSCRIPTION || 'langpeanut-webhooks-server' }}
+        run: |
+          echo "Ensuring Pub/Sub topic '${PUBSUB_WEBHOOK_TOPIC}' exists..."
+          gcloud pubsub topics create "${PUBSUB_WEBHOOK_TOPIC}" \
+            --project="${GCP_PROJECT}" 2>/dev/null || echo "Topic already exists, continuing."
+
+          echo "Ensuring Pub/Sub subscription '${PUBSUB_WEBHOOK_SUBSCRIPTION}' exists..."
+          gcloud pubsub subscriptions create "${PUBSUB_WEBHOOK_SUBSCRIPTION}" \
+            --topic="${PUBSUB_WEBHOOK_TOPIC}" \
+            --ack-deadline=30 \
+            --project="${GCP_PROJECT}" 2>/dev/null || echo "Subscription already exists, continuing."
+
+          echo "Granting the VM's attached service account Pub/Sub publisher/subscriber roles..."
+          VM_SA=$(gcloud compute instances describe "${GCE_INSTANCE}" \
+            --zone="${GCE_ZONE}" \
+            --project="${GCP_PROJECT}" \
+            --format='value(serviceAccounts[0].email)')
+
+          gcloud pubsub topics add-iam-policy-binding "${PUBSUB_WEBHOOK_TOPIC}" \
+            --project="${GCP_PROJECT}" \
+            --member="serviceAccount:${VM_SA}" \
+            --role="roles/pubsub.publisher" \
+            --condition=None >/dev/null
+
+          gcloud pubsub subscriptions add-iam-policy-binding "${PUBSUB_WEBHOOK_SUBSCRIPTION}" \
+            --project="${GCP_PROJECT}" \
+            --member="serviceAccount:${VM_SA}" \
+            --role="roles/pubsub.subscriber" \
+            --condition=None >/dev/null
+
+          echo "Pub/Sub provisioning complete (VM SA: ${VM_SA})."
+
       # ── Deploy Pre-Built Bundle to Compute Engine VM ──────────────────────────
       - name: Execute Deployment on GCE VM
         env:
@@ -106,7 +149,13 @@ jobs:
           
           # GitHub App RSA Private Key PEM
           GITHUB_APP_PRIVATE_KEY_PEM: ${{ secrets.GH_APP_PRIVATE_KEY_PEM || secrets.APP_PRIVATE_KEY_PEM || secrets.PRIVATE_KEY_PEM || secrets.BOT_PRIVATE_KEY_PEM }}
-          
+
+          # Pub/Sub durable webhook intake (cloud-only — leave GCP_PROJECT_ID
+          # unset for local dev/other environments to keep webhooks synchronous)
+          PUBSUB_GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+          PUBSUB_WEBHOOK_TOPIC: ${{ secrets.PUBSUB_WEBHOOK_TOPIC || 'langpeanut-webhooks' }}
+          PUBSUB_WEBHOOK_SUBSCRIPTION: ${{ secrets.PUBSUB_WEBHOOK_SUBSCRIPTION || 'langpeanut-webhooks-server' }}
+
           # Deployment options
           ENABLE_CADDY: ${{ github.event.inputs.enable_caddy || 'yes' }}
         run: |
@@ -139,6 +188,9 @@ jobs:
           MIRRORS_DIR=/data/mirrors
           JOBS_DIR=/data/jobs
           RUNNER_IMAGE=langpeanut-runner:latest
+          GCP_PROJECT_ID=${PUBSUB_GCP_PROJECT_ID}
+          PUBSUB_WEBHOOK_TOPIC=${PUBSUB_WEBHOOK_TOPIC}
+          PUBSUB_WEBHOOK_SUBSCRIPTION=${PUBSUB_WEBHOOK_SUBSCRIPTION}
           ENV_BLOCK
             # Substitute environment variables into local.env
             envsubst < local.env > local.env.tmp && mv local.env.tmp local.env

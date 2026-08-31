@@ -16,6 +16,12 @@ services:
       # langpeanut-runner containers (sandboxes). The runner containers
       # themselves do NOT get this socket mounted (see Dockerfile.runner).
       - /var/run/docker.sock:/var/run/docker.sock
+    # Lets the container reach the GCE metadata server so Google's Go client
+    # libraries can fetch Application Default Credentials from the VM's
+    # attached service account — needed for Pub/Sub webhook intake (only
+    # active when GCP_PROJECT_ID is set in .env; harmless no-op otherwise).
+    extra_hosts:
+      - "metadata.google.internal:169.254.169.254"
     env_file:
       - .env          # MASTER_KEY, GITHUB_APP_ID, etc. — never committed to git
     environment:

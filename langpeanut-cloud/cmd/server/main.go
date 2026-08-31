@@ -25,6 +25,7 @@ import (
 	"github.com/langPeanut/langpeanut-cloud/internal/auth"
 	"github.com/langPeanut/langpeanut-cloud/internal/db"
 	"github.com/langPeanut/langpeanut-cloud/internal/mirror"
+	"github.com/langPeanut/langpeanut-cloud/internal/pubsub"
 	"github.com/langPeanut/langpeanut-cloud/internal/worker"
 )
 
@@ -66,6 +67,29 @@ func main() {
 		os.Exit(1)
 	}
 
+	// ── Graceful shutdown context ─────────────────────────────────────────────
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	// ── Webhook Pub/Sub (optional) ────────────────────────────────────────────
+	// GCP_PROJECT_ID unset => nil publisher => handleWebhook processes
+	// deliveries synchronously in-process. This keeps local dev and CI free
+	// of any GCP dependency while still giving production durable webhook
+	// intake (see internal/pubsub for the reasoning).
+	var webhookPublisher *pubsub.Publisher
+	if cfg.gcpProjectID != "" {
+		p, err := pubsub.NewPublisher(ctx, cfg.gcpProjectID, cfg.pubsubWebhookTopic)
+		if err != nil {
+			slog.Error("pubsub publisher init", "err", err)
+			os.Exit(1)
+		}
+		defer p.Close()
+		webhookPublisher = p
+		slog.Info("pubsub webhook intake enabled", "project", cfg.gcpProjectID, "topic", cfg.pubsubWebhookTopic)
+	} else {
+		slog.Info("pubsub webhook intake disabled (GCP_PROJECT_ID not set); processing webhooks synchronously")
+	}
+
 	// ── HTTP server ───────────────────────────────────────────────────────────
 	mux := http.NewServeMux()
 	h := &api.Handler{
@@ -78,6 +102,7 @@ func main() {
 		OAuthClientSecret: cfg.oauthClientSecret,
 		WebhookSecret:     cfg.webhookSecret,
 		PublicBaseURL:     cfg.publicBaseURL,
+		WebhookPublisher:  webhookPublisher,
 	}
 	api.RegisterRoutes(mux, h)
 
@@ -99,10 +124,6 @@ func main() {
 		IdleTimeout:  120 * time.Second,
 	}
 
-	// ── Graceful shutdown context ─────────────────────────────────────────────
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-
 	// ── Worker goroutine ──────────────────────────────────────────────────────
 	workerCfg := worker.Config{
 		DB:            database,
@@ -114,6 +135,15 @@ func main() {
 		PrivateKeyPEM: cfg.privateKeyPEM,
 	}
 	go worker.Run(ctx, workerCfg)
+
+	// ── Webhook Pub/Sub subscriber goroutine (optional) ─────────────────────────
+	if cfg.gcpProjectID != "" {
+		go func() {
+			if err := pubsub.RunSubscriber(ctx, cfg.gcpProjectID, cfg.pubsubWebhookSubscription, h); err != nil {
+				slog.Error("pubsub subscriber stopped", "err", err)
+			}
+		}()
+	}
 
 	// ── HTTP server goroutine ─────────────────────────────────────────────────
 	go func() {
@@ -152,6 +182,12 @@ type serverConfig struct {
 	oauthClientSecret string
 	webhookSecret     string
 	publicBaseURL     string
+
+	// Pub/Sub webhook intake — all optional. When gcpProjectID is empty,
+	// webhooks are processed synchronously and no GCP client is created.
+	gcpProjectID              string
+	pubsubWebhookTopic        string
+	pubsubWebhookSubscription string
 }
 
 func mustConfig() serverConfig {
@@ -168,6 +204,10 @@ func mustConfig() serverConfig {
 		oauthClientSecret: mustGetenv("GITHUB_APP_CLIENT_SECRET"),
 		webhookSecret:     mustGetenv("GITHUB_WEBHOOK_SECRET"),
 		publicBaseURL:     getenv("PUBLIC_BASE_URL", "http://localhost:8080"),
+
+		gcpProjectID:              getenv("GCP_PROJECT_ID", ""),
+		pubsubWebhookTopic:        getenv("PUBSUB_WEBHOOK_TOPIC", "langpeanut-webhooks"),
+		pubsubWebhookSubscription: getenv("PUBSUB_WEBHOOK_SUBSCRIPTION", "langpeanut-webhooks-server"),
 	}
 	if cfg.sessionSecret == "" {
 		// Fall back to MASTER_KEY so a single generated key covers both purposes
