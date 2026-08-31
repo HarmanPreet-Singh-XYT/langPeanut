@@ -27,15 +27,13 @@ Thumbs.db
 *.db-wal
 
 # Compiled Go Binaries & Tests
-server
-runner
-langPeanut
-langpeanut-cloud
-langpeanut-runner
+/langpeanut-cloud/server
+/langpeanut-cloud/runner
+/langpeanut_local/bin/
+/langpeanut-cloud/bin/
 *.exe
 *.test
 *.out
-**/bin/
 
 # Next.js Web UI / Node
 node_modules/

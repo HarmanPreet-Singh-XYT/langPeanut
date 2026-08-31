@@ -262,6 +262,92 @@ To pull the latest code improvements and restart without downtime (add
 `--profile caddy` to the last command if you're using bundled Caddy):
 ```bash
 git pull && \
-docker build -f Dockerfile.runner -t langpeanut-runner:latest . && \
+docker build -f Dockerfile.runner -t langpeanut-runner:latest \
+  --build-context langpeanut_local=../langpeanut_local . && \
 docker compose up -d --build
 ```
+
+---
+
+## 11. Automated Continuous Deployment to Google Compute Engine (GCE)
+
+A dedicated GitHub Actions workflow is provided at [`.github/workflows/deploy-gce.yml`](../.github/workflows/deploy-gce.yml) to automatically deploy `langpeanut-cloud` to a Google Cloud Compute Engine VM on push or manual trigger.
+
+### 11.1 Create the GCE VM Instance
+
+In the [Google Cloud Console](https://console.cloud.google.com/compute/instances) or via `gcloud`:
+
+```bash
+gcloud compute instances create langpeanut-vm \
+  --project="YOUR_PROJECT_ID" \
+  --zone="us-central1-a" \
+  --machine-type="e2-medium" \
+  --image-family="ubuntu-2404-lts-amd64" \
+  --image-project="ubuntu-os-cloud" \
+  --boot-disk-size="30GB" \
+  --tags="http-server,https-server"
+```
+
+Allow HTTP and HTTPS traffic in your VPC firewall rules for ports 80 and 443.
+
+### 11.2 Provision the VM (Run Once)
+
+SSH into your new GCE instance:
+```bash
+gcloud compute ssh langpeanut-vm --zone="us-central1-a"
+```
+
+Run the automated provisioning script to install Docker Engine, Compose v2, Git, and directories:
+```bash
+curl -fsSL https://raw.githubusercontent.com/langPeanut/langTranslate/main/langpeanut-cloud/scripts/setup-gce-vm.sh | bash
+```
+*(Or clone the repo and execute `bash langpeanut-cloud/scripts/setup-gce-vm.sh`).*
+
+### 11.3 Create a GCP Service Account for GitHub Actions
+
+Create a service account with permissions to SSH into the GCE VM:
+
+```bash
+# 1. Create service account
+gcloud iam service-accounts create github-deployer \
+  --description="Service account for GitHub Actions GCE deployment" \
+  --display-name="GitHub Deployer"
+
+# 2. Grant Compute Admin and Service Account User roles
+gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
+  --member="serviceAccount:github-deployer@YOUR_PROJECT_ID.iam.gserviceaccount.com" \
+  --role="roles/compute.admin"
+
+gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
+  --member="serviceAccount:github-deployer@YOUR_PROJECT_ID.iam.gserviceaccount.com" \
+  --role="roles/iam.serviceAccountUser"
+
+# 3. Generate JSON key
+gcloud iam service-accounts keys create sa-key.json \
+  --iam-account="github-deployer@YOUR_PROJECT_ID.iam.gserviceaccount.com"
+```
+
+### 11.4 Configure GitHub Repository Secrets
+
+In your GitHub repository, go to **Settings → Secrets and variables → Actions** and add the following repository secrets:
+
+| Secret Name | Description | Example / Source |
+| :--- | :--- | :--- |
+| `GCP_PROJECT_ID` | Google Cloud Project ID | `my-gcp-project-12345` |
+| `GCE_INSTANCE_NAME` | Name of your GCE VM | `langpeanut-vm` |
+| `GCE_ZONE` | Compute Engine Zone | `us-central1-a` |
+| `GCP_SA_KEY` | Contents of `sa-key.json` | `{"type": "service_account", ...}` |
+| `MASTER_KEY` | 32-byte hex encryption key | `openssl rand -hex 32` |
+| `GITHUB_APP_ID` | Numeric GitHub App ID | `123456` |
+| `GITHUB_WEBHOOK_SECRET`| Secret string from your GitHub App | `your_webhook_secret` |
+| `GITHUB_APP_PRIVATE_KEY_PEM` | RSA private key downloaded from GitHub App | `-----BEGIN RSA PRIVATE KEY-----...` |
+| `GITHUB_CLIENT_ID` | *(Optional)* GitHub OAuth Client ID | `Iv1.xxx` |
+| `GITHUB_CLIENT_SECRET` | *(Optional)* GitHub OAuth Client Secret | `xxx` |
+| `GEMINI_API_KEY` | *(Optional)* Google Gemini API Key | `AIzaSy...` |
+| `ANTHROPIC_API_KEY` | *(Optional)* Anthropic API Key | `sk-ant-...` |
+| `OPENAI_API_KEY` | *(Optional)* OpenAI API Key | `sk-...` |
+
+### 11.5 Trigger Deployment
+
+* **Automatic**: Push any changes to `main` (under `langpeanut-cloud/` or `langpeanut_local/`).
+* **Manual**: Go to **Actions → Deploy langPeanut Cloud to Google Compute Engine → Run workflow**. Select whether to enable Caddy automatic TLS (`yes`/`no`) and click **Run**.

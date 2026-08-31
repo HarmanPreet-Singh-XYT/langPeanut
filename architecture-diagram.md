@@ -8,22 +8,23 @@
 ## Table of Contents
 
 1. [High-Level System Topology & Monorepo Architecture](#1-high-level-system-topology--monorepo-architecture)
-2. [System A: Localization Engine & Autonomous Agent DAG](#2-system-a-localization-engine--autonomous-agent-dag)
-3. [System A: 4-Tier Verification Critic & Reflection Loop](#3-system-a-4-tier-verification-critic--reflection-loop)
-4. [System A: Autonomous Code Repair & Compiler Baseline Diffing](#4-system-a-autonomous-code-repair--compiler-baseline-diffing)
-5. [System B: Central AI Copilot (19-Tool Control Plane)](#5-system-b-central-ai-copilot-19-tool-control-plane)
-6. [System C: SEO & Growth Studio (5-Agent Pipeline)](#6-system-c-seo--growth-studio-5-agent-pipeline)
-7. [Deterministic AST Range Patch Engine ("Zero-Generation" Principle)](#7-deterministic-ast-range-patch-engine-zero-generation-principle)
-8. [Multi-Platform AST Adapters & Parser Support Matrix](#8-multi-platform-ast-adapters--parser-support-matrix)
-9. [Translation Memory (TM) & Enterprise Interoperability](#9-translation-memory-tm--enterprise-interoperability)
-10. [Multi-Provider LLM & Zero-Cost Offline Inference Architecture](#10-multi-provider-llm--zero-cost-offline-inference-architecture)
-11. [Local Architecture (`langpeanut_local`)](#11-local-architecture-langpeanut_local)
-12. [Cloud Architecture (`langpeanut-cloud`)](#12-cloud-architecture-langpeanut-cloud)
-13. [Cloud Security Architecture & Container Sandbox Isolation](#13-cloud-security-architecture--container-sandbox-isolation)
-14. [End-to-End Cloud Job Execution Lifecycle (Sequence Diagram)](#14-end-to-end-cloud-job-execution-lifecycle-sequence-diagram)
-15. [Data Models & Persistence Architecture (Local vs Cloud)](#15-data-models--persistence-architecture-local-vs-cloud)
-16. [Local vs Cloud Capability Comparison Matrix](#16-local-vs-cloud-capability-comparison-matrix)
-17. [Architectural Decision Records (ADRs) & Deep Engineering Rationale](#17-architectural-decision-records-adrs--deep-engineering-rationale)
+2. [AI vs. Deterministic Architecture & Boundary Map (Where AI is Used)](#2-ai-vs-deterministic-architecture--boundary-map-where-ai-is-used)
+3. [System A: Localization Engine & Autonomous Agent DAG](#3-system-a-localization-engine--autonomous-agent-dag)
+4. [System A: 4-Tier Verification Critic & Reflection Loop](#4-system-a-4-tier-verification-critic--reflection-loop)
+5. [System A: Autonomous Code Repair & Compiler Baseline Diffing](#5-system-a-autonomous-code-repair--compiler-baseline-diffing)
+6. [System B: Central AI Copilot (19-Tool Control Plane)](#6-system-b-central-ai-copilot-19-tool-control-plane)
+7. [System C: SEO & Growth Studio (5-Agent Pipeline)](#7-system-c-seo--growth-studio-5-agent-pipeline)
+8. [Deterministic AST Range Patch Engine ("Zero-Generation" Principle)](#8-deterministic-ast-range-patch-engine-zero-generation-principle)
+9. [Multi-Platform AST Adapters & Parser Support Matrix](#9-multi-platform-ast-adapters--parser-support-matrix)
+10. [Translation Memory (TM) & Enterprise Interoperability](#10-translation-memory-tm--enterprise-interoperability)
+11. [Multi-Provider LLM & Zero-Cost Offline Inference Architecture](#11-multi-provider-llm--zero-cost-offline-inference-architecture)
+12. [Local Architecture (`langpeanut_local`)](#12-local-architecture-langpeanut_local)
+13. [Cloud Architecture (`langpeanut-cloud`)](#13-cloud-architecture-langpeanut-cloud)
+14. [Cloud Security Architecture & Container Sandbox Isolation](#14-cloud-security-architecture--container-sandbox-isolation)
+15. [End-to-End Cloud Job Execution Lifecycle (Sequence Diagram)](#15-end-to-end-cloud-job-execution-lifecycle-sequence-diagram)
+16. [Data Models & Persistence Architecture (Local vs Cloud)](#16-data-models--persistence-architecture-local-vs-cloud)
+17. [Local vs Cloud Capability Comparison Matrix](#17-local-vs-cloud-capability-comparison-matrix)
+18. [Architectural Decision Records (ADRs) & Deep Engineering Rationale](#18-architectural-decision-records-adrs--deep-engineering-rationale)
 
 ---
 
@@ -83,7 +84,93 @@ flowchart TB
 
 ---
 
-## 2. System A: Localization Engine & Autonomous Agent DAG
+## 2. AI vs. Deterministic Architecture & Boundary Map (Where AI is Used)
+
+`langPeanut` adheres to a strict design pattern: **"Narrow AI Judgment + Deterministic Sandbox Execution"**. AI/LLMs are never given broad code generation authority; they are deployed exclusively where linguistic, semantic, or intent reasoning is mandatory, while all syntax parsing, AST traversal, code splicing, and invariant verification remain 100% deterministic.
+
+```mermaid
+flowchart TD
+    classDef aiNode fill:#fef3c7,stroke:#d97706,stroke-width:2px,color:#78350f;
+    classDef detNode fill:#dbeafe,stroke:#2563eb,stroke-width:2px,color:#1e3a8a;
+    classDef boundaryNode fill:#f1f5f9,stroke:#64748b,stroke-width:2px,stroke-dasharray: 5 5;
+
+    subgraph SystemA ["System A: Localization Pipeline"]
+        A_Scout["⚙️ AST Scout Extractor\n(Deterministic Tree-sitter AST Grammars)\n- Filters URLs, loggers, regex, traps\n- Zero LLM tokens spent"]:::detNode
+        
+        A_Context["🧠 Semantic Context Agent\n(AI / LLM Judgment: pkg/agents/context_agent.go)\n- Disambiguates polysemous words (e.g. Book)\n- Synthesizes semantic camelCase keys\n- Uses AST hierarchy & sibling vector prompts"]:::aiNode
+        
+        A_Patch["⚙️ AST Range Patch Engine\n(Deterministic Range Splicing: pkg/agents/patch_engine.go)\n- Exact byte-offset substitutions\n- In-memory AST re-parsing verification\n- 0.0% formatting / comment drift"]:::detNode
+        
+        A_Trans["🧠 Cultural & ICU Translator\n(AI / LLM Inference: pkg/agents/translator.go)\n- Cultural adaptation + Tone Presets\n- Strict ICU placeholder preservation\n- Dynamic token-budget chunking"]:::aiNode
+        
+        A_Critic["⚙️ 4-Tier Verification Critic\n(Deterministic Invariant Checks: pkg/agents/verifier_critic.go)\n- Exact regex token set equality\n- Tree-sitter parse validation\n- Length expansion ratio limits"]:::detNode
+        
+        A_Reflect["🧠 Self-Healing Reflection Loop\n(AI / LLM Re-Prompting)\n- Injects structured error diagnostics\n- Surgical retry (≤ 2 attempts)"]:::aiNode
+        
+        A_RepairHeuristic["⚙️ Code Repair: Heuristic Pass\n(Deterministic import & syntax fixer)"]:::detNode
+        
+        A_RepairLLM["🧠 Code Repair: ReAct Loop\n(AI / LLM: pkg/agents/repair.go)\n- Resolves introduced compiler error delta\n- Bounded surgical code patch"]:::aiNode
+        
+        A_Directive["🧠 Directive Agent\n(AI / LLM ReAct Loop: pkg/agents/directive_agent.go)\n- Executes free-form NL developer instructions\n- Outline-and-window AST windowing"]:::aiNode
+
+        A_Persona["🧠 Persona Scout Agent\n(AI / LLM: pkg/agents/persona_scout.go)\n- Inferred tone, audience & brand lexicon"]:::aiNode
+        
+        A_Pruner["⚙️ Dead-Key Pruner\n(Deterministic Static AST usage counter)"]:::detNode
+    end
+
+    subgraph SystemB ["System B: Central AI Copilot (19 Tools)"]
+        B_Planner["🧠 Copilot Tool Planner (planWithLLM)\n(AI / LLM: pkg/chat/engine.go)\n- Multi-turn conversational intent classification\n- Multi-step tool call sequence generation"]:::aiNode
+        
+        B_Fallback["⚙️ Keyword Fallback Router (detectToolCallsFallback)\n(Deterministic regex pattern matcher for offline mode)"]:::detNode
+        
+        B_Tools["⚙️ 19 Tool Executors\n(Deterministic Go library package calls)"]:::detNode
+        
+        B_Cards["⚙️ Rich UI Card Renderer\n(Deterministic card formatting & SERP visualizer)"]:::detNode
+    end
+
+    subgraph SystemC ["System C: SEO & Growth Studio (5 Agents)"]
+        C_Scout["🧠 SERP Scout Agent\n(AI / LLM + HTTP Scraper: pkg/seo/scout.go)\n- Discovers competitor title patterns & intent"]:::aiNode
+        
+        C_Keywords["🧠 Keyword Intelligence Agent\n(AI / LLM: pkg/seo/keywords.go)\n- Search volume, difficulty & intent clusters"]:::aiNode
+        
+        C_Weaver["🧠 Semantic Copy Weaver\n(AI / LLM: pkg/seo/weaver.go)\n- Weaves keywords into copy with ICU preservation"]:::aiNode
+        
+        C_Sim["⚙️ SERP Simulator\n(Deterministic pixel-width clipping: ≤ 600px / 960px)"]:::detNode
+        
+        C_Critic["🧠 Growth Predictor Critic\n(AI / LLM: pkg/seo/critic.go)\n- CTR uplift score, stuffing penalty, sentiment"]:::aiNode
+    end
+
+    A_Scout --> A_Context
+    A_Context --> A_Patch
+    A_Patch --> A_Trans
+    A_Trans --> A_Critic
+    A_Critic -- "Critic Errors" --> A_Reflect --> A_Trans
+    A_Critic -- "Pass" --> A_RepairHeuristic --> A_RepairLLM --> A_Directive
+
+    B_Planner & B_Fallback --> B_Tools --> B_Cards
+    
+    C_Scout --> C_Keywords --> C_Weaver --> C_Sim --> C_Critic
+```
+
+### Comprehensive AI Utilization & Responsibility Matrix
+
+| Subsystem | Component / Agent | Execution Engine | AI Prompt Architecture | Specific Reasoning / Judgment Task Performed | Deterministic Guardrails & Safety Bounds |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **System A** | **Semantic Context Agent** (`context_agent.go`) | 🧠 Frontier LLM | Few-shot with JSON schema output | Analyzes component hierarchy (breadcrumbs) and sibling UI strings to disambiguate polysemous words (e.g., `"Book"` $\rightarrow$ reserve flight vs reading material) and synthesize clean camelCase keys (`flightBookBtn`). | Output must match strict JSON `{key, category, confidence}` schema; temperature set to `0.1`. |
+| **System A** | **Cultural & ICU Translator** (`translator.go`) | 🧠 LLM / Local NLLB-200 | Structured system prompt with dynamic word budget chunking | Translates UI copy into target locales while preserving ICU placeholders (`{count}`), plurals, gender selectors, and applying requested brand tone presets (Gen-Z, Corporate, Friendly). | Translation Memory cache checked first ($0$ tokens if hit); 4-Tier Critic validates output immediately. |
+| **System A** | **Self-Healing Reflection Loop** (`translator.go`) | 🧠 Frontier LLM | Diagnostic-augmented retry prompt | Receives failed translation + exact error message from Critic (e.g. `Missing placeholder {userName}`) and re-generates only the failing string with corrected syntax. | Maximum 2 retry attempts; escalates to human review if still invalid. |
+| **System A** | **Autonomous Code Repair** (`repair.go`) | 🧠 LLM ReAct Loop | Bounded multi-turn diagnostic prompt | Given the isolated compiler error delta ($E_{\text{introduced}} = E_{\text{post}} - E_{\text{base}}$) and surrounding code window, synthesizes surgical code fix for compiler regressions. | Heuristic fix pass runs first; max 3 iterations; AST re-parsed before disk write. |
+| **System A** | **Directive Agent** (`directive_agent.go`) | 🧠 LLM ReAct Loop | Outline-and-window prompt with tool calling | Interprets natural language developer instructions (e.g. *"add a language picker to navbar"*), identifies target AST windows in $>10\text{k}$ line files, and synthesizes AST changes. | Tree-sitter validates syntax after each patch; compiler diagnostics tested before finishing. |
+| **System A** | **Persona Scout Agent** (`persona_scout.go`) | 🧠 Frontier LLM | Zero-shot document extraction | Reads `README.md`, package manifests, and project docs to discover brand tone, target demographic, and non-translatable brand terms (brand lexicon). | Outputs structured tone profile stored in config; falls back to default neutral tone if absent. |
+| **System B** | **Copilot Tool Planner** (`pkg/chat/engine.go`) | 🧠 Frontier LLM | Multi-turn conversational tool-calling | Understands developer requests in plain English, decomposes goals into tool calls across 19 registered tools, and formats structured response cards. | Falls back to deterministic keyword router (`detectToolCallsFallback`) when offline or unauthenticated. |
+| **System C** | **SERP Scout Agent** (`pkg/seo/scout.go`) | 🧠 Frontier LLM | Contextual competitor analysis | Evaluates top ranking Google SERP patterns and search intent for target keywords in local markets (e.g. Japan vs Germany). | Output clamped to verified search categories; HTTP timeouts strictly enforced. |
+| **System C** | **Keyword Intelligence** (`pkg/seo/keywords.go`) | 🧠 Frontier LLM | Keyword clustering & scoring prompt | Models search volume, keyword difficulty, and classifies user search intent (Navigational, Informational, Transactional). | Filtered against brand persona lexicon to prevent brand term diluting. |
+| **System C** | **Semantic Copy Weaver** (`pkg/seo/weaver.go`) | 🧠 Frontier LLM | Constraint-bound copy rewrite | Rewrites localized copy to naturally incorporate target keywords without sounding robotic or repetitive. | Hard character count and pixel-width limits enforced; ICU variables must match 100%. |
+| **System C** | **Growth Predictor Critic** (`pkg/seo/critic.go`) | 🧠 Frontier LLM | Scoring & penalty rubric prompt | Evaluates expected Click-Through-Rate (CTR) uplift (0-100), detects keyword stuffing, and checks cultural sentiment parity. | Score $<70$ triggers automated rewrite pass; enforces strict readability thresholds. |
+
+---
+
+## 3. System A: Localization Engine & Autonomous Agent DAG
 
 The Localization Engine orchestrates a multi-agent Directed Acyclic Graph (DAG) managed by a Supervisor. It isolates UI strings, disambiguates polysemous words, refactors source code via deterministic byte offsets, translates copy, and executes multi-tier verification and automated self-repair.
 
@@ -132,7 +219,7 @@ flowchart TD
 
 ---
 
-## 3. System A: 4-Tier Verification Critic & Reflection Loop
+## 4. System A: 4-Tier Verification Critic & Reflection Loop
 
 Rather than relying on vague prompt instructions, `langPeanut` implements a 4-tier critic that enforces hard invariants and reflects structured error diagnostics back into a self-correction loop.
 
@@ -204,7 +291,7 @@ flowchart TD
 
 ---
 
-## 4. System A: Autonomous Code Repair & Compiler Baseline Diffing
+## 5. System A: Autonomous Code Repair & Compiler Baseline Diffing
 
 The Code Repair Agent prevents false blames by recording a baseline compiler diagnosis before touching code and fixing only new errors introduced by the refactoring process.
 
@@ -242,7 +329,7 @@ flowchart TD
 
 ---
 
-## 5. System B: Central AI Copilot (19-Tool Control Plane)
+## 6. System B: Central AI Copilot (19-Tool Control Plane)
 
 The Central AI Copilot (`langPeanut chat`) provides a conversational interface over the entire platform. It uses a dual-engine architecture: a frontier LLM planner when connected, and a deterministic keyword fallback router when operating offline.
 
@@ -307,7 +394,7 @@ flowchart TB
 
 ---
 
-## 6. System C: SEO & Growth Studio (5-Agent Pipeline)
+## 7. System C: SEO & Growth Studio (5-Agent Pipeline)
 
 The SEO & Growth Studio (`pkg/seo/`) is an independent 5-agent pipeline that transforms raw localized copy into high-ranking, culturally resonant content. It operates directly on the shared locale files on disk.
 
@@ -338,7 +425,7 @@ flowchart TD
 
 ---
 
-## 7. Deterministic AST Range Patch Engine ("Zero-Generation" Principle)
+## 8. Deterministic AST Range Patch Engine ("Zero-Generation" Principle)
 
 A foundational architectural principle of `langPeanut` is the **Zero-Generation Principle**: an LLM is never allowed to regenerate an entire source code file. Instead, tree-sitter AST parsers calculate exact byte offsets, and substitutions are applied deterministically.
 
@@ -390,7 +477,7 @@ flowchart LR
 
 ---
 
-## 8. Multi-Platform AST Adapters & Parser Support Matrix
+## 9. Multi-Platform AST Adapters & Parser Support Matrix
 
 `pkg/platforms/` defines a uniform `Platform` interface implemented by dedicated adapters for each supported framework.
 
@@ -436,7 +523,7 @@ flowchart TB
 
 ---
 
-## 9. Translation Memory (TM) & Enterprise Interoperability
+## 10. Translation Memory (TM) & Enterprise Interoperability
 
 `pkg/memory/` maintains a persistent, hash-indexed Translation Memory across runs and provides bidirectional conversion between native catalogs and standard enterprise translation interchange formats.
 
@@ -474,7 +561,7 @@ flowchart LR
 
 ---
 
-## 10. Multi-Provider LLM & Zero-Cost Offline Inference Architecture
+## 11. Multi-Provider LLM & Zero-Cost Offline Inference Architecture
 
 `pkg/llm/` provides a unified client interface across cloud frontier models and local on-device models, including token tracking and cost analytics.
 
@@ -514,7 +601,7 @@ flowchart TD
 
 ---
 
-## 11. Local Architecture (`langpeanut_local`)
+## 12. Local Architecture (`langpeanut_local`)
 
 `langpeanut_local` ships as a **single, static Go binary** containing the CLI, the Bubble Tea TUI, the zero-build web Studio, and the full multi-agent core.
 
@@ -562,7 +649,7 @@ flowchart TB
 
 ---
 
-## 12. Cloud Architecture (`langpeanut-cloud`)
+## 13. Cloud Architecture (`langpeanut-cloud`)
 
 `langpeanut-cloud` packages the shared engine into a **self-sufficient, single-VPS service** acting as a hosted GitHub App and web dashboard.
 
@@ -632,7 +719,7 @@ flowchart TB
 
 ---
 
-## 13. Cloud Security Architecture & Container Sandbox Isolation
+## 14. Cloud Security Architecture & Container Sandbox Isolation
 
 `langpeanut-cloud` implements strict privilege separation between the trusted host server process and untrusted, ephemeral runner containers.
 
@@ -680,7 +767,7 @@ flowchart TD
 
 ---
 
-## 14. End-to-End Cloud Job Execution Lifecycle (Sequence Diagram)
+## 15. End-to-End Cloud Job Execution Lifecycle (Sequence Diagram)
 
 The 12-step lifecycle of an automated localization job triggered via GitHub Webhook or the Cloud Web Dashboard:
 
@@ -743,9 +830,9 @@ sequenceDiagram
 
 ---
 
-## 15. Data Models & Persistence Architecture (Local vs Cloud)
+## 16. Data Models & Persistence Architecture (Local vs Cloud)
 
-### 15.1 Local Filesystem State Layout (`langpeanut_local`)
+### 16.1 Local Filesystem State Layout (`langpeanut_local`)
 
 ```
 <project_root>/
@@ -761,7 +848,7 @@ sequenceDiagram
 └── <source_code_and_locales>    # Modified in-place with 0.0% formatting drift
 ```
 
-### 15.2 Cloud SQLite Relational Schema (`langpeanut-cloud`)
+### 16.2 Cloud SQLite Relational Schema (`langpeanut-cloud`)
 
 ```mermaid
 erDiagram
@@ -854,7 +941,7 @@ erDiagram
 
 ---
 
-## 16. Local vs Cloud Capability Comparison Matrix
+## 17. Local vs Cloud Capability Comparison Matrix
 
 | Feature / Capability | `langpeanut_local` (CLI / TUI / Web) | `langpeanut-cloud` (Hosted Bot / Dashboard) |
 | :--- | :--- | :--- |
@@ -875,7 +962,7 @@ erDiagram
 
 ---
 
-## 17. Architectural Decision Records (ADRs) & Deep Engineering Rationale
+## 18. Architectural Decision Records (ADRs) & Deep Engineering Rationale
 
 This section details the fundamental design trade-offs, problems, alternatives evaluated, and core engineering rationale behind `langPeanut`'s architecture.
 
