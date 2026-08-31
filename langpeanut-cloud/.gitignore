@@ -12,10 +12,10 @@ data/
 *.db-wal
 
 # Compiled Go Binaries & Tests
-server
-runner
-langpeanut-cloud
-langpeanut-runner
+/server
+/runner
+/langpeanut-cloud
+/langpeanut-runner
 *.exe
 *.test
 *.out
