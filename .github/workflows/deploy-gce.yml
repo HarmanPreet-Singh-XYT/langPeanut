@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
     inputs:
       enable_caddy:
-        description: 'Enable bundled Caddy for automatic Let'\''s Encrypt HTTPS (yes/no)'
+        description: "Enable bundled Caddy for automatic Let's Encrypt HTTPS (yes/no)"
         required: false
         default: 'yes'
       custom_branch:
