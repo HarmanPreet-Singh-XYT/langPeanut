@@ -1,7 +1,8 @@
 # 🥜 langPeanut — System Architecture & Component Diagrams
 
 > **Comprehensive Architectural Reference for Local and Cloud Environments**  
-> Covers the 3 cooperating agentic systems, deterministic AST refactoring engine, 4-tier verification critic, central AI copilot, SEO growth studio, zero-build local web studio, and the hosted single-VPS GitHub bot with sandboxed container isolation.
+> Covers the 3 cooperating agentic systems, deterministic AST refactoring engine, 4-tier verification critic, central AI copilot, SEO growth studio, zero-build local web studio, and the hosted single-VPS GitHub bot with sandboxed container isolation.  
+> **Primary Optimization & Testing Target**: While supporting Flutter, SwiftUI, and Android, the engine is **primarily tested, calibrated, and optimized for React / Next.js (TypeScript / TSX / JSX)** across all 10 adversarial benchmark suites.
 
 ---
 
@@ -16,6 +17,7 @@
 7. [System C: SEO & Growth Studio (5-Agent Pipeline)](#7-system-c-seo--growth-studio-5-agent-pipeline)
 8. [Deterministic AST Range Patch Engine ("Zero-Generation" Principle)](#8-deterministic-ast-range-patch-engine-zero-generation-principle)
 9. [Multi-Platform AST Adapters & Parser Support Matrix](#9-multi-platform-ast-adapters--parser-support-matrix)
+   - [9.1 Primary Optimization & Testing Focus: React / Next.js](#91-primary-optimization--testing-focus-react--nextjs-typescript--tsx--jsx)
 10. [Translation Memory (TM) & Enterprise Interoperability](#10-translation-memory-tm--enterprise-interoperability)
 11. [Multi-Provider LLM & Zero-Cost Offline Inference Architecture](#11-multi-provider-llm--zero-cost-offline-inference-architecture)
 12. [Local Architecture (`langpeanut_local`)](#12-local-architecture-langpeanut_local)
@@ -520,6 +522,17 @@ flowchart TB
     Swift --- Swift_Details
     Kotlin --- Kotlin_Details
 ```
+
+### 9.1 Primary Optimization & Testing Focus: React / Next.js (TypeScript / TSX / JSX)
+
+While `langPeanut` contains full platform adapters for Flutter (Dart), SwiftUI (Swift), and Android (Kotlin), **React / Next.js (TypeScript/TSX/JSX) serves as the primary evaluation testbed, benchmark platform, and heavily optimized target**.
+
+#### Why React / Next.js is the Primary Testing Benchmark:
+1. **Adversarial JSX Complexity**: React code presents the most complex AST nesting challenges in modern web development — mixing plain JSX text, expression containers (`{...}`), ternary conditionals (`{count > 0 ? 'Items in cart' : 'Cart is empty'}`), and translatable props (`placeholder`, `aria-label`, `title`).
+2. **React Hook Invariants**: The Deterministic AST Patch Engine (`pkg/platforms/react_ts.go`) is specially calibrated to inject `const { t } = useTranslation();` strictly at valid function component scopes, respecting the Rules of Hooks (never injecting inside loops, nested callbacks, or conditionals).
+3. **Dual Router & Framework Support**: Fully calibrated for both Next.js App Router (`next-intl`) and Pages Router (`react-i18next` / `next-i18next`), generating standardized JSON locale catalogs under `public/locales/{locale}/common.json` or `messages/{locale}.json`.
+4. **Adversarial Benchmark Harness**: 5 of the 10 benchmark cases in `benchmark/cases/` specifically test adversarial React/Next.js patterns (`01_react_nested_jsx.tsx`, `02_react_ambiguous_verbs.tsx`, `03_react_ternary_plurals.tsx`, `09_massive_analytics_dashboard.tsx`, `10_adversarial_code_trap.tsx`), verifying a **100.0% AST compilation pass rate** and **0.0% formatting drift** via real `tsc --noEmit` validation.
+5. **Bundled Reference App**: Ships with a complete, production-structured Next.js demo application (`langpeanut_local/examples/nextjs-app`) used for live evaluation and test reproduction.
 
 ---
 

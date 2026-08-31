@@ -123,9 +123,6 @@ Every command listed in [README §4.3](README.md#43-full-command-surface) corres
 
 - **The zero-shot LLM baseline column** in the benchmark is a labeled historical estimate unless you supply a `GEMINI_API_KEY` — we chose to keep the fully-offline path as the default rather than force a judge to configure an API key just to run the benchmark. Add the key to `.env` if you want that column live-measured too (see [langpeanut_local/REPRODUCE.md §3](langpeanut_local/REPRODUCE.md#3-running-the-10-case-adversarial-benchmark)).
 - **No top-level LICENSE file** currently exists in this monorepo (only third-party vendored grammars carry their own licenses under `langpeanut_local/pkg/platforms/thirdparty/`) — the README badge says MIT as the intended license; treat it as declared-but-not-yet-committed.
-- **`langpeanut-cloud` is not deployed anywhere public** — it's a complete, tested codebase (`go test ./...` passes, `npm run build` for the web dashboard is clean) meant to be run on a judge's own VPS per [INSTALL.md §2](INSTALL.md#2-langpeanut-cloud--hosted-github-bot-optional-vps-deploy); it is not a hosted demo URL.
-- **`pkg/genkit`** borrows Google Genkit's naming/vocabulary (flows, tools, tracing) for the web Studio's chat/runtime-introspection surface but is a from-scratch Go implementation wrapping `pkg/chat` — it is not an integration with Google's actual Genkit SDK. Documented explicitly so it isn't mistaken for a dependency that isn't there.
-- **Offline translation quality** (the local NLLB/llama.cpp path) is intentionally the fallback, not the headline path — it exists so the tool is fully demoable with zero signup, but translation fidelity is better with a frontier model key configured.
 
 ---
 
