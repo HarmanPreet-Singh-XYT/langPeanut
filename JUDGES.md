@@ -134,6 +134,7 @@ Every command listed in [README §4.3](README.md#43-full-command-surface) corres
 | Need | File |
 |---|---|
 | Full README, feature list, architecture | [README.md](README.md) |
+| Complete architecture diagrams (Local & Cloud) | [architecture-diagram.md](architecture-diagram.md) |
 | Install locally, or deploy the cloud bot | [INSTALL.md](INSTALL.md) |
 | Reproduce the benchmark exactly | [langpeanut_local/REPRODUCE.md](langpeanut_local/REPRODUCE.md) |
 | Full chronological build log (170+ entries, every directive → root cause → fix → verification) | [langpeanut_local/CHANGELOG.md](langpeanut_local/CHANGELOG.md) → [CHANGELOG1.md](langpeanut_local/CHANGELOG1.md) → [CHANGELOG2.md](langpeanut_local/CHANGELOG2.md) |

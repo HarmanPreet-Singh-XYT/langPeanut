@@ -315,6 +315,7 @@ See [`langpeanut-cloud/README.md`](langpeanut-cloud/README.md) and [`langpeanut-
 
 ## 13. Repository Documentation
 
+* 📐 [architecture-diagram.md](architecture-diagram.md) — complete architectural diagrams and system reference (Local & Cloud).
 * 📥 [INSTALL.md](INSTALL.md) — full install guide (local binary, Docker/VPS cloud deploy).
 * 🏛️ [JUDGES.md](JUDGES.md) — everything judges need in one place: problem, proof, architecture, how to verify.
 * 📖 [langpeanut_local/REPRODUCE.md](langpeanut_local/REPRODUCE.md) — step-by-step reproduction instructions for judges.
