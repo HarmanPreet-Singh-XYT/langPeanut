@@ -3,12 +3,14 @@ set -euo pipefail
 
 DEPLOY_PATH="/opt/langpeanut"
 
-echo "==> 1. Preparing deployment directory at ${DEPLOY_PATH}..."
+echo "==> 1. Preparing deployment directory and Docker permissions..."
 sudo mkdir -p "${DEPLOY_PATH}"
 sudo chown -R "$(whoami):$(whoami)" "${DEPLOY_PATH}"
 sudo chmod -R 775 "${DEPLOY_PATH}"
 sudo git config --system --add safe.directory '*' || true
 git config --global --add safe.directory '*' || true
+sudo usermod -aG docker "$(whoami)" || true
+sudo chmod 666 /var/run/docker.sock || true
 
 cd "${DEPLOY_PATH}"
 

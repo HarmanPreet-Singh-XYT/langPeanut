@@ -1,5 +1,5 @@
 # ── Stage 0: Build Next.js Web UI ─────────────────────────────────────────────
-FROM node:22-alpine AS web-builder
+FROM node:24-alpine AS web-builder
 
 WORKDIR /web
 COPY web/package.json ./
