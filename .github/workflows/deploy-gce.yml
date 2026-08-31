@@ -61,10 +61,10 @@ jobs:
           # Secrets for .env
           ENV_FILE: ${{ secrets.ENV_FILE || secrets.GCP_ENV_FILE }}
           MASTER_KEY: ${{ secrets.MASTER_KEY }}
-          GITHUB_APP_ID: ${{ secrets.GITHUB_APP_ID }}
-          GITHUB_WEBHOOK_SECRET: ${{ secrets.GITHUB_WEBHOOK_SECRET }}
-          GITHUB_APP_CLIENT_ID: ${{ secrets.GITHUB_APP_CLIENT_ID || secrets.GITHUB_CLIENT_ID }}
-          GITHUB_APP_CLIENT_SECRET: ${{ secrets.GITHUB_APP_CLIENT_SECRET || secrets.GITHUB_CLIENT_SECRET }}
+          GITHUB_APP_ID: ${{ secrets.GH_APP_ID || secrets.APP_ID || secrets.BOT_APP_ID }}
+          GITHUB_WEBHOOK_SECRET: ${{ secrets.GH_WEBHOOK_SECRET || secrets.WEBHOOK_SECRET || secrets.BOT_WEBHOOK_SECRET }}
+          GITHUB_APP_CLIENT_ID: ${{ secrets.GH_APP_CLIENT_ID || secrets.GH_CLIENT_ID || secrets.APP_CLIENT_ID || secrets.CLIENT_ID }}
+          GITHUB_APP_CLIENT_SECRET: ${{ secrets.GH_APP_CLIENT_SECRET || secrets.GH_CLIENT_SECRET || secrets.APP_CLIENT_SECRET || secrets.CLIENT_SECRET }}
           PUBLIC_BASE_URL: ${{ secrets.PUBLIC_BASE_URL || 'https://34.135.83.146.sslip.io' }}
           SESSION_SECRET: ${{ secrets.SESSION_SECRET }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
@@ -74,7 +74,7 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           
           # GitHub App RSA Private Key PEM
-          GITHUB_APP_PRIVATE_KEY_PEM: ${{ secrets.GITHUB_APP_PRIVATE_KEY_PEM }}
+          GITHUB_APP_PRIVATE_KEY_PEM: ${{ secrets.GH_APP_PRIVATE_KEY_PEM || secrets.APP_PRIVATE_KEY_PEM || secrets.PRIVATE_KEY_PEM || secrets.BOT_PRIVATE_KEY_PEM }}
           
           # Deployment options
           ENABLE_CADDY: ${{ github.event.inputs.enable_caddy || 'yes' }}
