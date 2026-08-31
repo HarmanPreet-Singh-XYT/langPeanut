@@ -468,6 +468,59 @@ function RepoDetailsContent() {
     }
   }, [centralCopilotMessages, centralCopilotThinking])
 
+  // Restore persisted chat messages for this repository
+  useEffect(() => {
+    if (!repo?.ID) return
+    try {
+      const savedMessages = localStorage.getItem(`langpeanut_copilot_messages_${repo.ID}`)
+      if (savedMessages) {
+        const parsed = JSON.parse(savedMessages)
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setCentralCopilotMessages(parsed)
+        }
+      }
+      const savedCards = localStorage.getItem(`langpeanut_copilot_cards_${repo.ID}`)
+      if (savedCards) {
+        const parsedCards = JSON.parse(savedCards)
+        if (Array.isArray(parsedCards) && parsedCards.length > 0) {
+          setLastCopilotCards(parsedCards)
+        }
+      }
+      const savedCanvas = localStorage.getItem(`langpeanut_copilot_canvas_${repo.ID}`)
+      if (savedCanvas && ['matrix', 'diff', 'critic', 'serp', 'cost'].includes(savedCanvas)) {
+        setCentralCanvasTab(savedCanvas as any)
+      }
+    } catch (e) {
+      console.error('Failed to load saved chat history:', e)
+    }
+  }, [repo?.ID])
+
+  // Persist messages whenever they change
+  useEffect(() => {
+    if (!repo?.ID || centralCopilotThinking) return
+    if (centralCopilotMessages.length > 1 || (centralCopilotMessages.length === 1 && centralCopilotMessages[0].role === 'user')) {
+      try {
+        localStorage.setItem(`langpeanut_copilot_messages_${repo.ID}`, JSON.stringify(centralCopilotMessages))
+      } catch (e) {}
+    }
+  }, [centralCopilotMessages, repo?.ID, centralCopilotThinking])
+
+  // Persist cards whenever they change
+  useEffect(() => {
+    if (!repo?.ID || lastCopilotCards.length === 0) return
+    try {
+      localStorage.setItem(`langpeanut_copilot_cards_${repo.ID}`, JSON.stringify(lastCopilotCards))
+    } catch (e) {}
+  }, [lastCopilotCards, repo?.ID])
+
+  // Persist canvas tab whenever it changes
+  useEffect(() => {
+    if (!repo?.ID) return
+    try {
+      localStorage.setItem(`langpeanut_copilot_canvas_${repo.ID}`, centralCanvasTab)
+    } catch (e) {}
+  }, [centralCanvasTab, repo?.ID])
+
   const sendCentralCopilotMessage = async (promptText: string) => {
     if (!promptText.trim() || !repo || centralCopilotThinking) return
     const text = promptText.trim()
@@ -1699,14 +1752,21 @@ jobs:
                 </div>
 
                 <button
-                  onClick={() =>
-                    setCentralCopilotMessages([
+                  onClick={() => {
+                    const defaultMsg = [
                       {
-                        role: 'assistant',
+                        role: 'assistant' as const,
                         content: 'I am your langPeanut Copilot. I can inspect your AST for hardcoded UI strings, translate missing keys into target locales, run 4-tier ICU verification critics, simulate Google SERP previews, and modify repository settings. How can I help you today?',
                       },
-                    ])
-                  }
+                    ]
+                    setCentralCopilotMessages(defaultMsg)
+                    setLastCopilotCards([])
+                    if (repo?.ID) {
+                      localStorage.removeItem(`langpeanut_copilot_messages_${repo.ID}`)
+                      localStorage.removeItem(`langpeanut_copilot_cards_${repo.ID}`)
+                      localStorage.removeItem(`langpeanut_copilot_canvas_${repo.ID}`)
+                    }
+                  }}
                   title="Reset conversation"
                   className="p-2 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors text-xs cursor-pointer border border-transparent hover:border-white/10"
                 >

@@ -103,10 +103,14 @@ func NewStudioServer(projectRoot string) *StudioServer {
 		Logs:          []string{fmt.Sprintf("[%s] Attached to project: %s", time.Now().Format("15:04:05"), targetPath)},
 	}
 
-	chatEngine, _ := chat.NewEngine(targetPath, nil)
-	s.ChatEngine = chatEngine
 	genkitEngine, _ := genkit.NewGenkitEngine(targetPath, nil)
 	s.GenkitEngine = genkitEngine
+	if genkitEngine != nil {
+		s.ChatEngine = genkitEngine.UnderlyingEngine
+	} else {
+		chatEngine, _ := chat.NewEngine(targetPath, nil)
+		s.ChatEngine = chatEngine
+	}
 
 	// Trigger initial scan
 	s.performScan()
@@ -201,8 +205,12 @@ func (s *StudioServer) handleSwitchProject(w http.ResponseWriter, r *http.Reques
 	s.ScannedFiles = 0
 	s.LastResult = nil
 	s.RefactorPlans = make(map[string]*types.FileRefactorPlan)
-	s.ChatEngine, _ = chat.NewEngine(absRoot, nil)
 	s.GenkitEngine, _ = genkit.NewGenkitEngine(absRoot, nil)
+	if s.GenkitEngine != nil {
+		s.ChatEngine = s.GenkitEngine.UnderlyingEngine
+	} else {
+		s.ChatEngine, _ = chat.NewEngine(absRoot, nil)
+	}
 	s.Logs = append(s.Logs, fmt.Sprintf("[%s] Switched project to: %s (%s)",
 		time.Now().Format("15:04:05"), absRoot, platform.DisplayName()))
 	s.mu.Unlock()
@@ -1618,17 +1626,25 @@ func (s *StudioServer) handleGenkitFlows(w http.ResponseWriter, r *http.Request)
 
 func (s *StudioServer) handleChatHistory(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	if s.ChatEngine == nil {
-		if s.GenkitEngine != nil {
-			s.ChatEngine = s.GenkitEngine.UnderlyingEngine
-		} else {
-			s.ChatEngine, _ = chat.NewEngine(s.ProjectRoot, nil)
-		}
+	if s.GenkitEngine == nil {
+		s.GenkitEngine, _ = genkit.NewGenkitEngine(s.ProjectRoot, nil)
 	}
-	_ = json.NewEncoder(w).Encode(s.ChatEngine.GetHistory())
+	if s.GenkitEngine != nil {
+		s.ChatEngine = s.GenkitEngine.UnderlyingEngine
+	} else if s.ChatEngine == nil {
+		s.ChatEngine, _ = chat.NewEngine(s.ProjectRoot, nil)
+	}
+	if s.ChatEngine != nil {
+		_ = json.NewEncoder(w).Encode(s.ChatEngine.GetHistory())
+	} else {
+		_ = json.NewEncoder(w).Encode([]any{})
+	}
 }
 
 func (s *StudioServer) handleChatReset(w http.ResponseWriter, r *http.Request) {
+	if s.GenkitEngine != nil && s.GenkitEngine.UnderlyingEngine != nil {
+		s.GenkitEngine.UnderlyingEngine.ResetHistory()
+	}
 	if s.ChatEngine != nil {
 		s.ChatEngine.ResetHistory()
 	}
@@ -4751,20 +4767,40 @@ const InteractiveAppHTML = `<!DOCTYPE html>
     }
 
     async function loadCopilotHistory() {
+      const container = document.getElementById('copilotMessages');
       try {
         const res = await fetch('/api/chat/history');
-        if (!res.ok) return;
-        const history = await res.json();
-        const container = document.getElementById('copilotMessages');
-        container.innerHTML = '';
+        let history = [];
+        if (res.ok) {
+          history = await res.json();
+        }
         if (!history || history.length === 0) {
-          renderCopilotWelcome();
+          const cached = localStorage.getItem('langpeanut_local_chat_history');
+          if (cached) {
+            try { history = JSON.parse(cached); } catch (e) {}
+          }
+        }
+        if (!history || history.length === 0) {
+          if (!container.querySelector('.pk-msg-user, .pk-msg-assistant')) {
+            renderCopilotWelcome();
+          }
           return;
         }
+        localStorage.setItem('langpeanut_local_chat_history', JSON.stringify(history));
+        container.innerHTML = '';
         history.forEach(msg => appendCopilotMessageToDOM(msg));
         container.scrollTop = container.scrollHeight;
       } catch (err) {
         console.error('Failed loading chat history:', err);
+        const cached = localStorage.getItem('langpeanut_local_chat_history');
+        if (cached && !container.querySelector('.pk-msg-user, .pk-msg-assistant')) {
+          try {
+            const history = JSON.parse(cached);
+            container.innerHTML = '';
+            history.forEach(msg => appendCopilotMessageToDOM(msg));
+            container.scrollTop = container.scrollHeight;
+          } catch (e) {}
+        }
       }
     }
 
@@ -5154,6 +5190,15 @@ const InteractiveAppHTML = `<!DOCTYPE html>
         if (tb) tb.remove();
 
         appendCopilotMessageToDOM(assistantMsg);
+        try {
+          const histRes = await fetch('/api/chat/history');
+          if (histRes.ok) {
+            const h = await histRes.json();
+            if (h && h.length > 0) {
+              localStorage.setItem('langpeanut_local_chat_history', JSON.stringify(h));
+            }
+          }
+        } catch(e) {}
       } catch (err) {
         const tb = document.getElementById('copilotThinkingBubble');
         if (tb) tb.remove();
@@ -5170,6 +5215,7 @@ const InteractiveAppHTML = `<!DOCTYPE html>
     async function resetCopilotChat() {
       try {
         await fetch('/api/chat/reset', { method: 'POST' });
+        localStorage.removeItem('langpeanut_local_chat_history');
         lastCopilotCards = [];
         renderCopilotWelcome();
         renderActiveCanvasTab();
