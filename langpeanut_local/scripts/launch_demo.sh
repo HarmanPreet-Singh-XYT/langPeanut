@@ -12,11 +12,28 @@ echo "   langPeanut: Live Interactive Web Demo Launcher"
 echo "   Starting at http://localhost:${PORT}"
 echo "============================================================="
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "$SCRIPT_DIR/go.mod" ]; then
+    PROJECT_DIR="$SCRIPT_DIR"
+elif [ -f "$SCRIPT_DIR/../go.mod" ]; then
+    PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+else
+    PROJECT_DIR="$(pwd)"
+fi
+cd "$PROJECT_DIR"
+
 # Build latest binary if needed
-if [ ! -f "./langPeanut" ]; then
+if [ ! -f "./bin/langPeanut" ] && [ ! -f "./langPeanut" ]; then
   echo "📦 Compiling langPeanut static binary..."
-  go build -o langPeanut ./cmd/langPeanut
+  mkdir -p bin
+  go build -o bin/langPeanut ./cmd/langPeanut
+  ln -sf bin/langPeanut langPeanut
+fi
+
+BIN="./bin/langPeanut"
+if [ ! -f "$BIN" ]; then
+  BIN="./langPeanut"
 fi
 
 echo "🚀 Booting live web server..."
-./langPeanut demo --port "${PORT}" --open
+"$BIN" web --port "${PORT}" --open

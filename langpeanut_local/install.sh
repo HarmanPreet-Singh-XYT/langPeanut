@@ -50,7 +50,16 @@ fi
 
 # ── 2. Download Dependencies ─────────────────────────────────────────────────
 echo -e "\n${SKY}▶ Step 2/5: Downloading Go module dependencies...${NC}"
-cd "$(dirname "$0")"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "$SCRIPT_DIR/go.mod" ]; then
+    PROJECT_DIR="$SCRIPT_DIR"
+elif [ -f "$SCRIPT_DIR/../go.mod" ]; then
+    PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+else
+    PROJECT_DIR="$(pwd)"
+fi
+cd "$PROJECT_DIR"
+
 go mod download
 echo -e "  ${GREEN}✓${NC} All dependencies cached."
 
