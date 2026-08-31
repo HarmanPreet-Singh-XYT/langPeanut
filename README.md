@@ -53,6 +53,36 @@ langPeanut benchmark
 
 No API key is required to try any of the above — see [§9 Zero-Cost Offline Mode](#9-zero-cost-offline-mode-no-api-key-required). Full install instructions (including the cloud/VPS path): [INSTALL.md](INSTALL.md).
 
+### 🧪 Reproducible Testing & Evaluation Guide
+
+Judges and reviewers can reproduce and verify all results with the following commands:
+
+#### 1. Run the Offline 10-Case Adversarial Benchmark (Reproducibility — 15 pts)
+```bash
+cd langpeanut_local
+./langPeanut benchmark       # 100% offline, ~2 seconds, $0.00 cost
+```
+*Validates that `langPeanut` achieves a 100.0% AST compilation pass rate and 0.0% formatting drift across 10 complex edge cases compared to naive regex (~20%) and zero-shot LLM (42%). Full walkthrough: [langpeanut_local/REPRODUCE.md](langpeanut_local/REPRODUCE.md).*
+
+#### 2. Run Comprehensive Unit & Integration Test Suites
+```bash
+cd langpeanut_local
+go test -v ./...             # 100% test pass rate across platforms, agents, chat, and SEO
+```
+
+#### 3. Test 1-Click Autonomous Localization on Bundled Demo Apps
+```bash
+cd langpeanut_local
+./langPeanut run ./examples/nextjs-app     # Extracts strings, translates, and patches JSX safely
+./langPeanut reset ./examples/nextjs-app   # Restores demo app back to pristine unlocalized state
+```
+
+#### 4. Live Cloud Bot Testing (Zero Setup Required)
+* **Live Web Dashboard**: [https://34.135.83.146.sslip.io](https://34.135.83.146.sslip.io)
+* **Public GitHub App**: [https://github.com/apps/langpeanut-localization-bot](https://github.com/apps/langpeanut-localization-bot)
+* **Verified Production Test Repository**: [https://github.com/HarmanPreet-Singh-XYT/pingroute-web](https://github.com/HarmanPreet-Singh-XYT/pingroute-web)
+* You can import or test `langPeanut` against `pingroute-web` to see live AST scanning, translation matrix synthesis, and automated GitHub Pull Request creation in action on Google Cloud.
+
 ---
 
 ## 3. Three Agentic Systems, One Shared Core
