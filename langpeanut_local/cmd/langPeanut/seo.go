@@ -40,28 +40,64 @@ var seoCmd = &cobra.Command{
 
 		client := llm.AutoDetectClient()
 
-		// 1. Discover Project Persona & Category
-		scoutAgent := agents.NewPersonaScoutAgent(client)
-		persona, _ := scoutAgent.DiscoverPersona(absRoot)
-		projName := filepath.Base(absRoot)
-		cat := "Software Platform"
-		if persona != nil {
-			if persona.ProjectName != "" {
-				projName = persona.ProjectName
-			}
-			if persona.Audience != "" && len(persona.Audience) <= 25 {
-				cat = persona.Audience
-			} else if persona.Summary != "" && len(persona.Summary) <= 30 && !strings.HasPrefix(persona.Summary, "Autonomous localization") {
-				cat = persona.Summary
-			} else if strings.Contains(strings.ToLower(projName), "store") || strings.Contains(strings.ToLower(projName), "shop") || strings.Contains(strings.ToLower(projName), "commerce") {
-				cat = "E-Commerce Platform"
-			} else if strings.Contains(strings.ToLower(projName), "app") {
-				cat = "Application"
+		// 1. Extract existing keys and target translations
+		registry := platforms.NewRegistry()
+		platform, _ := registry.AutoDetect(absRoot)
+
+		sourceKeys := make(map[string]string)
+		var extractedStrings []string
+		if platform != nil {
+			sourceKeys = seo.ExtractLocaleCatalog(absRoot, platform, "en")
+			for _, v := range sourceKeys {
+				if v != "" {
+					extractedStrings = append(extractedStrings, v)
+				}
 			}
 		}
 
-		// 2. Parse Locales
-		locales := []string{"ja", "de", "es"}
+		if len(sourceKeys) == 0 {
+			// Fallback sample keys for testing
+			sourceKeys = map[string]string{
+				"home.hero.title": "The fastest workflow for modern developers",
+				"home.hero.desc":  "Automate your daily coding and deployment workflows seamlessly.",
+				"cta.button":      "Get Started Free",
+			}
+			for _, v := range sourceKeys {
+				extractedStrings = append(extractedStrings, v)
+			}
+		}
+
+		// 2. Discover Project Domain & Overview with Grounded UI Strings
+		ctx := context.Background()
+		projName := filepath.Base(absRoot)
+		cat, desc := seo.InferSoftwareOverview(ctx, client, projName, extractedStrings, "", "")
+		if cat == "" || cat == "Software Platform" {
+			scoutAgent := agents.NewPersonaScoutAgent(client)
+			persona, _ := scoutAgent.DiscoverPersona(absRoot)
+			if persona != nil {
+				if persona.ProjectName != "" {
+					projName = persona.ProjectName
+				}
+				if persona.Audience != "" && len(persona.Audience) <= 25 {
+					cat = persona.Audience
+				} else if persona.Summary != "" && len(persona.Summary) <= 30 && !strings.HasPrefix(persona.Summary, "Autonomous localization") {
+					cat = persona.Summary
+				} else if strings.Contains(strings.ToLower(projName), "store") || strings.Contains(strings.ToLower(projName), "shop") || strings.Contains(strings.ToLower(projName), "commerce") {
+					cat = "E-Commerce Platform"
+				} else if strings.Contains(strings.ToLower(projName), "app") {
+					cat = "Application"
+				}
+			}
+			if cat == "" {
+				cat = "Developer Tool & Software"
+			}
+			if desc == "" {
+				desc = fmt.Sprintf("Autonomous software solution: %s", projName)
+			}
+		}
+
+		// 3. Parse Locales
+		locales := []string{"en", "ja", "de", "es"}
 		if seoLocalesFlag != "" {
 			parts := strings.Split(seoLocalesFlag, ",")
 			locales = make([]string, 0, len(parts))
@@ -73,7 +109,7 @@ var seoCmd = &cobra.Command{
 			}
 		}
 
-		// 3. Parse Competitors
+		// 4. Parse Competitors
 		var competitors []string
 		if seoCompetitorsFlag != "" {
 			parts := strings.Split(seoCompetitorsFlag, ",")
@@ -98,35 +134,21 @@ var seoCmd = &cobra.Command{
 		strategy := &seo.SEOStrategy{
 			ProjectName:        projName,
 			Category:           cat,
-			ProductDescription: fmt.Sprintf("Autonomous software solution: %s", projName),
+			ProductDescription: desc,
 			TargetLocales:      locales,
 			Goal:               goal,
 			ScopeTier:          scope,
 			CompetitorURLs:     competitors,
 		}
 
-		// 4. Extract existing keys and target translations
-		registry := platforms.NewRegistry()
-		platform, _ := registry.AutoDetect(absRoot)
-
-		sourceKeys := make(map[string]string)
 		baselineMatrix := make(map[string]map[string]string)
-
 		if platform != nil {
-			sourceKeys = seo.ExtractLocaleCatalog(absRoot, platform, "en")
 			for _, loc := range locales {
-				if entries := seo.ExtractLocaleCatalog(absRoot, platform, loc); entries != nil {
+				if loc == "en" {
+					baselineMatrix["en"] = sourceKeys
+				} else if entries := seo.ExtractLocaleCatalog(absRoot, platform, loc); entries != nil {
 					baselineMatrix[loc] = entries
 				}
-			}
-		}
-
-		if len(sourceKeys) == 0 {
-			// Fallback sample keys for testing
-			sourceKeys = map[string]string{
-				"home.hero.title": "The fastest workflow for modern developers",
-				"home.hero.desc":  "Automate your daily coding and deployment workflows seamlessly.",
-				"cta.button":      "Get Started Free",
 			}
 		}
 
@@ -142,7 +164,6 @@ var seoCmd = &cobra.Command{
 		fmt.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n")
 
 		orchestrator := seo.NewStudioOrchestrator(client)
-		ctx := context.Background()
 		result, err := orchestrator.RunStudio(ctx, strategy, sourceKeys, baselineMatrix)
 		if err != nil {
 			return fmt.Errorf("SEO Studio run failed: %w", err)
@@ -241,7 +262,7 @@ var seoCmd = &cobra.Command{
 }
 
 func init() {
-	seoCmd.Flags().StringVarP(&seoLocalesFlag, "locales", "l", "ja,de,es", "Target locales to optimize (comma-separated)")
+	seoCmd.Flags().StringVarP(&seoLocalesFlag, "locales", "l", "en,ja,de,es", "Target locales to optimize (comma-separated)")
 	seoCmd.Flags().StringVarP(&seoGoalFlag, "goal", "g", "traffic", "SEO growth goal (traffic, conversion, trust)")
 	seoCmd.Flags().StringVarP(&seoCompetitorsFlag, "competitors", "c", "", "Competitor URLs to scout (comma-separated)")
 	seoCmd.Flags().StringVar(&seoScopeFlag, "scope", "high_impact", "Key optimization scope (high_impact, full_site)")

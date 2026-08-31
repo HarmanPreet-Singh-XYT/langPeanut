@@ -44,6 +44,7 @@ type StudioServer struct {
 	LastResult    *agents.PipelineResult             `json:"last_result"`
 	LastBenchmark []benchmark.BenchmarkResult        `json:"last_benchmark"`
 	LastSEOResult *seo.SEOResult                     `json:"last_seo_result"`
+	SEOStrategy   *seo.SEOStrategy                   `json:"seo_strategy,omitempty"`
 	RefactorPlans map[string]*types.FileRefactorPlan `json:"refactor_plans"`
 	ChatEngine    *chat.Engine                       `json:"-"`
 	GenkitEngine  *genkit.GenkitEngine               `json:"-"`
@@ -99,6 +100,16 @@ func NewStudioServer(projectRoot string) *StudioServer {
 		SourceLocale:  "en",
 		TargetLocales: []string{"es", "fr", "de", "ja"},
 		ToneStyle:     "default",
+		SEOStrategy: &seo.SEOStrategy{
+			ProjectName:        filepath.Base(targetPath),
+			Category:           "",
+			ProductDescription: "",
+			TargetLocales:      []string{"en", "es", "fr", "de", "ja"},
+			Goal:               seo.GoalTopTraffic,
+			ScopeTier:          seo.ScopeHighImpact,
+			CompetitorURLs:     []string{},
+			UpdatedAt:          time.Now(),
+		},
 		RefactorPlans: make(map[string]*types.FileRefactorPlan),
 		Logs:          []string{fmt.Sprintf("[%s] Attached to project: %s", time.Now().Format("15:04:05"), targetPath)},
 	}
@@ -204,6 +215,17 @@ func (s *StudioServer) handleSwitchProject(w http.ResponseWriter, r *http.Reques
 	s.Candidates = nil
 	s.ScannedFiles = 0
 	s.LastResult = nil
+	s.LastSEOResult = nil
+	s.SEOStrategy = &seo.SEOStrategy{
+		ProjectName:        filepath.Base(absRoot),
+		Category:           "",
+		ProductDescription: "",
+		TargetLocales:      []string{"en", "es", "fr", "de", "ja"},
+		Goal:               seo.GoalTopTraffic,
+		ScopeTier:          seo.ScopeHighImpact,
+		CompetitorURLs:     []string{},
+		UpdatedAt:          time.Now(),
+	}
 	s.RefactorPlans = make(map[string]*types.FileRefactorPlan)
 	s.GenkitEngine, _ = genkit.NewGenkitEngine(absRoot, nil)
 	if s.GenkitEngine != nil {
@@ -1380,17 +1402,438 @@ func (s *StudioServer) handleDependencies(w http.ResponseWriter, r *http.Request
 	_ = json.NewEncoder(w).Encode(status)
 }
 
+func (s *StudioServer) getOrInitSEOStrategy() *seo.SEOStrategy {
+	if s.SEOStrategy == nil {
+		locales := []string{"en"}
+		for _, loc := range s.TargetLocales {
+			if loc != "en" {
+				locales = append(locales, loc)
+			}
+		}
+		if len(locales) == 1 {
+			locales = []string{"en", "es", "fr", "de", "ja"}
+		}
+		s.SEOStrategy = &seo.SEOStrategy{
+			ProjectName:        filepath.Base(s.ProjectRoot),
+			Category:           "",
+			ProductDescription: "",
+			TargetLocales:      locales,
+			Goal:               seo.GoalTopTraffic,
+			ScopeTier:          seo.ScopeHighImpact,
+			CompetitorURLs:     []string{},
+			UpdatedAt:          time.Now(),
+		}
+	}
+	return s.SEOStrategy
+}
+
+func (s *StudioServer) ensureSourceStringsExtracted() ([]string, map[string]string) {
+	sourceKeys := make(map[string]string)
+	var extractedStrings []string
+
+	// 1. Try reading from existing locale catalog on disk
+	if s.Platform != nil {
+		if diskKeys := seo.ExtractLocaleCatalog(s.ProjectRoot, s.Platform, "en"); len(diskKeys) > 0 {
+			for k, v := range diskKeys {
+				if v != "" {
+					sourceKeys[k] = v
+					extractedStrings = append(extractedStrings, v)
+				}
+			}
+		}
+	}
+
+	// 2. Supplement from scanned AST candidates
+	if len(s.Candidates) == 0 {
+		s.performScan()
+	}
+	for _, c := range s.Candidates {
+		cleanVal := strings.TrimSpace(c.CleanValue)
+		if cleanVal == "" {
+			cleanVal = strings.TrimSpace(c.RawValue)
+		}
+		if cleanVal != "" {
+			if sourceKeys[c.Key] == "" {
+				sourceKeys[c.Key] = cleanVal
+			}
+			extractedStrings = append(extractedStrings, cleanVal)
+		}
+	}
+
+	// 3. If still empty, supply reasonable default keys
+	if len(sourceKeys) == 0 {
+		projName := filepath.Base(s.ProjectRoot)
+		sourceKeys["home.hero.title"] = fmt.Sprintf("Welcome to %s", projName)
+		sourceKeys["home.hero.desc"] = fmt.Sprintf("The modern, high-performance platform for %s.", projName)
+		sourceKeys["cta.button"] = "Get Started Free"
+		extractedStrings = append(extractedStrings, sourceKeys["home.hero.title"], sourceKeys["home.hero.desc"], sourceKeys["cta.button"])
+	}
+
+	return extractedStrings, sourceKeys
+}
+
+func (s *StudioServer) resolveClient() llm.Client {
+	cfg := memory.LoadConfig(s.ProjectRoot)
+	if cfg.ActiveProvider != "" && cfg.ActiveProvider != "local" {
+		if cfg.GetAPIKey(cfg.ActiveProvider) != "" || cfg.ActiveProvider == "ollama" {
+			return llm.NewClient(llm.ProviderType(cfg.ActiveProvider), cfg.ActiveModel)
+		}
+	}
+	return llm.AutoDetectClient()
+}
+
+func inferCategoryHeuristic(projName string, stringsList []string) string {
+	joined := strings.ToLower(strings.Join(stringsList, " ") + " " + projName)
+	if strings.Contains(joined, "cart") || strings.Contains(joined, "checkout") || strings.Contains(joined, "price") || strings.Contains(joined, "product") || strings.Contains(joined, "store") || strings.Contains(joined, "shop") {
+		return "E-Commerce & Storefront App"
+	}
+	if strings.Contains(joined, "translate") || strings.Contains(joined, "locale") || strings.Contains(joined, "i18n") || strings.Contains(joined, "language") {
+		return "Software Localization & Translation AI"
+	}
+	if strings.Contains(joined, "todo") || strings.Contains(joined, "task") || strings.Contains(joined, "project") || strings.Contains(joined, "board") {
+		return "Task & Project Management Software"
+	}
+	if strings.Contains(joined, "chat") || strings.Contains(joined, "message") || strings.Contains(joined, "conversation") {
+		return "Real-Time Team Collaboration & Chat"
+	}
+	if strings.Contains(joined, "crypto") || strings.Contains(joined, "bank") || strings.Contains(joined, "finance") || strings.Contains(joined, "wallet") || strings.Contains(joined, "invoice") {
+		return "Financial Management & Billing SaaS"
+	}
+	if strings.Contains(joined, "audio") || strings.Contains(joined, "headphone") || strings.Contains(joined, "music") || strings.Contains(joined, "sound") {
+		return "Audio & Consumer Electronics"
+	}
+	return "Developer Tool & Cloud Platform"
+}
+
 func (s *StudioServer) handleGetSEO(w http.ResponseWriter, r *http.Request) {
-	s.mu.RLock()
+	s.mu.Lock()
+	strategy := s.getOrInitSEOStrategy()
+	extractedStrings, _ := s.ensureSourceStringsExtracted()
+
+	if s.LastSEOResult == nil {
+		s.LastSEOResult = &seo.SEOResult{
+			Strategy:      strategy,
+			Competitors:   make(map[string][]seo.CompetitorProfile),
+			KeywordPool:   make(map[string][]seo.KeywordInsight),
+			Optimizations: make(map[string][]seo.KeyOptimization),
+			Metrics:       make(map[string]*seo.GrowthMetrics),
+			Simulations:   make(map[string]*seo.SERPSimulation),
+		}
+	}
 	res := s.LastSEOResult
-	s.mu.RUnlock()
+	res.Strategy = strategy
+	s.mu.Unlock()
 
 	w.Header().Set("Content-Type", "application/json")
-	if res == nil {
-		_ = json.NewEncoder(w).Encode(map[string]any{"configured": false})
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"configured":           true,
+		"strategy":             res.Strategy,
+		"competitors":          res.Competitors,
+		"keyword_pool":         res.KeywordPool,
+		"keywords":             res.KeywordPool,
+		"optimizations":        res.Optimizations,
+		"metrics":              res.Metrics,
+		"simulations":          res.Simulations,
+		"extracted_keys_count": len(extractedStrings),
+	})
+}
+
+func (s *StudioServer) handleSaveSEOStrategy(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	_ = json.NewEncoder(w).Encode(res)
+
+	var req struct {
+		ProjectName        string   `json:"project_name"`
+		Category           string   `json:"category"`
+		ProductDescription string   `json:"product_description"`
+		Goal               string   `json:"goal"`
+		ScopeTier          string   `json:"scope_tier"`
+		TargetLocales      []string `json:"target_locales"`
+		CompetitorURLs     []string `json:"competitor_urls"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid payload: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	s.mu.Lock()
+	strategy := s.getOrInitSEOStrategy()
+	if req.ProjectName != "" {
+		strategy.ProjectName = req.ProjectName
+	}
+	strategy.Category = req.Category
+	strategy.ProductDescription = req.ProductDescription
+	if req.Goal != "" {
+		strategy.Goal = seo.GrowthGoal(req.Goal)
+	}
+	if req.ScopeTier != "" {
+		strategy.ScopeTier = seo.KeyScopeTier(req.ScopeTier)
+	}
+	if len(req.TargetLocales) > 0 {
+		hasEn := false
+		for _, loc := range req.TargetLocales {
+			if loc == "en" {
+				hasEn = true
+				break
+			}
+		}
+		if !hasEn {
+			req.TargetLocales = append([]string{"en"}, req.TargetLocales...)
+		}
+		strategy.TargetLocales = req.TargetLocales
+	}
+	if req.CompetitorURLs != nil {
+		strategy.CompetitorURLs = req.CompetitorURLs
+	}
+	strategy.UpdatedAt = time.Now()
+	s.SEOStrategy = strategy
+	if s.LastSEOResult != nil {
+		s.LastSEOResult.Strategy = strategy
+	}
+	s.mu.Unlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"status":   "saved",
+		"strategy": strategy,
+	})
+}
+
+func (s *StudioServer) handleAnalyzeSEODomain(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	s.mu.Lock()
+	extractedStrings, _ := s.ensureSourceStringsExtracted()
+	projName := filepath.Base(s.ProjectRoot)
+	strategy := s.getOrInitSEOStrategy()
+	client := s.resolveClient()
+	s.mu.Unlock()
+
+	if len(extractedStrings) == 0 {
+		http.Error(w, "No UI strings found in repository to analyze", http.StatusBadRequest)
+		return
+	}
+
+	ctx := r.Context()
+	cat, desc := seo.InferSoftwareOverview(ctx, client, projName, extractedStrings, "", "")
+	if cat == "" {
+		cat = inferCategoryHeuristic(projName, extractedStrings)
+		desc = fmt.Sprintf("Modern application platform for %s with streamlined user experience.", projName)
+	}
+
+	s.mu.Lock()
+	strategy.Category = cat
+	strategy.ProductDescription = desc
+	strategy.UpdatedAt = time.Now()
+	s.SEOStrategy = strategy
+	if s.LastSEOResult != nil {
+		s.LastSEOResult.Strategy = strategy
+	}
+	s.Logs = append(s.Logs, fmt.Sprintf("[%s] AI Domain Grounding complete: Category=\"%s\", Analyzed %d strings",
+		time.Now().Format("15:04:05"), cat, len(extractedStrings)))
+	s.mu.Unlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"status":               "ok",
+		"category":             cat,
+		"product_description": desc,
+		"extracted_keys_count": len(extractedStrings),
+		"strategy":             strategy,
+	})
+}
+
+func (s *StudioServer) handleRunSEOScout(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Locale string `json:"locale"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	locale := req.Locale
+	if locale == "" {
+		locale = "en"
+	}
+
+	s.mu.Lock()
+	strategy := s.getOrInitSEOStrategy()
+	extractedStrings, _ := s.ensureSourceStringsExtracted()
+	client := s.resolveClient()
+	projName := filepath.Base(s.ProjectRoot)
+	s.mu.Unlock()
+
+	ctx := r.Context()
+	if strategy.Category == "" || strategy.Category == "Software Platform" {
+		cat, desc := seo.InferSoftwareOverview(ctx, client, projName, extractedStrings, strategy.Category, strategy.ProductDescription)
+		if cat != "" && cat != "Software Platform" {
+			strategy.Category = cat
+			strategy.ProductDescription = desc
+		} else if strategy.Category == "" {
+			strategy.Category = inferCategoryHeuristic(projName, extractedStrings)
+			strategy.ProductDescription = fmt.Sprintf("Application platform for %s.", projName)
+		}
+	}
+
+	scoutAgent := seo.NewSERPScoutAgent(client)
+	kwAgent := seo.NewKeywordIntelligenceAgent(client)
+
+	comps, err := scoutAgent.ScoutLocale(ctx, strategy, locale)
+	if err != nil {
+		http.Error(w, "Scout failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	kws, _ := kwAgent.AnalyzeKeywords(ctx, strategy, locale, comps)
+
+	s.mu.Lock()
+	if s.LastSEOResult == nil {
+		s.LastSEOResult = &seo.SEOResult{
+			Strategy:      strategy,
+			Competitors:   make(map[string][]seo.CompetitorProfile),
+			KeywordPool:   make(map[string][]seo.KeywordInsight),
+			Optimizations: make(map[string][]seo.KeyOptimization),
+			Metrics:       make(map[string]*seo.GrowthMetrics),
+			Simulations:   make(map[string]*seo.SERPSimulation),
+		}
+	}
+	s.LastSEOResult.Competitors[locale] = comps
+	s.LastSEOResult.KeywordPool[locale] = kws
+	s.Logs = append(s.Logs, fmt.Sprintf("[%s] Scouted %d competitors & %d keywords for [%s]",
+		time.Now().Format("15:04:05"), len(comps), len(kws), locale))
+	s.mu.Unlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"locale":      locale,
+		"competitors": comps,
+		"keywords":    kws,
+	})
+}
+
+func (s *StudioServer) handleRunSEOOptimize(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Locale string `json:"locale"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	locale := req.Locale
+	if locale == "" {
+		locale = "en"
+	}
+
+	s.mu.Lock()
+	strategy := s.getOrInitSEOStrategy()
+	extractedStrings, sourceKeys := s.ensureSourceStringsExtracted()
+	client := s.resolveClient()
+	projName := filepath.Base(s.ProjectRoot)
+	projRoot := s.ProjectRoot
+	plat := s.Platform
+	s.mu.Unlock()
+
+	ctx := r.Context()
+	if strategy.Category == "" || strategy.Category == "Software Platform" {
+		cat, desc := seo.InferSoftwareOverview(ctx, client, projName, extractedStrings, strategy.Category, strategy.ProductDescription)
+		if cat != "" && cat != "Software Platform" {
+			strategy.Category = cat
+			strategy.ProductDescription = desc
+		} else if strategy.Category == "" {
+			strategy.Category = inferCategoryHeuristic(projName, extractedStrings)
+			strategy.ProductDescription = fmt.Sprintf("Application platform for %s.", projName)
+		}
+	}
+
+	baselineTranslations := make(map[string]string)
+	if plat != nil && locale != "en" {
+		if diskCatalog := seo.ExtractLocaleCatalog(projRoot, plat, locale); diskCatalog != nil {
+			for k, v := range diskCatalog {
+				baselineTranslations[k] = v
+			}
+		}
+	}
+	for k, src := range sourceKeys {
+		if baselineTranslations[k] == "" {
+			baselineTranslations[k] = src
+		}
+	}
+
+	s.mu.RLock()
+	var kws []seo.KeywordInsight
+	if s.LastSEOResult != nil && s.LastSEOResult.KeywordPool != nil {
+		kws = s.LastSEOResult.KeywordPool[locale]
+	}
+	s.mu.RUnlock()
+
+	if len(kws) == 0 {
+		scoutAgent := seo.NewSERPScoutAgent(client)
+		comps, _ := scoutAgent.ScoutLocale(ctx, strategy, locale)
+		kwAgent := seo.NewKeywordIntelligenceAgent(client)
+		kws, _ = kwAgent.AnalyzeKeywords(ctx, strategy, locale, comps)
+		s.mu.Lock()
+		if s.LastSEOResult == nil {
+			s.LastSEOResult = &seo.SEOResult{
+				Strategy:      strategy,
+				Competitors:   make(map[string][]seo.CompetitorProfile),
+				KeywordPool:   make(map[string][]seo.KeywordInsight),
+				Optimizations: make(map[string][]seo.KeyOptimization),
+				Metrics:       make(map[string]*seo.GrowthMetrics),
+				Simulations:   make(map[string]*seo.SERPSimulation),
+			}
+		}
+		s.LastSEOResult.Competitors[locale] = comps
+		s.LastSEOResult.KeywordPool[locale] = kws
+		s.mu.Unlock()
+	}
+
+	weaverAgent := seo.NewSemanticCopyWeaverAgent(client)
+	criticAgent := seo.NewGrowthPredictorCritic()
+	simAgent := seo.NewSERPSimulatorAgent()
+
+	opts, err := weaverAgent.WeaveTranslations(ctx, strategy, locale, sourceKeys, baselineTranslations, kws)
+	if err != nil {
+		http.Error(w, "Copy weaving failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	metrics := criticAgent.EvaluateGrowth(strategy, locale, kws, opts)
+	sim := simAgent.GenerateSimulation(strategy, locale, kws, opts)
+
+	s.mu.Lock()
+	if s.LastSEOResult == nil {
+		s.LastSEOResult = &seo.SEOResult{
+			Strategy:      strategy,
+			Competitors:   make(map[string][]seo.CompetitorProfile),
+			KeywordPool:   make(map[string][]seo.KeywordInsight),
+			Optimizations: make(map[string][]seo.KeyOptimization),
+			Metrics:       make(map[string]*seo.GrowthMetrics),
+			Simulations:   make(map[string]*seo.SERPSimulation),
+		}
+	}
+	s.LastSEOResult.Optimizations[locale] = opts
+	s.LastSEOResult.Metrics[locale] = metrics
+	s.LastSEOResult.Simulations[locale] = sim
+	s.Logs = append(s.Logs, fmt.Sprintf("[%s] Semantic Copy Weaver optimized %d keys for [%s]",
+		time.Now().Format("15:04:05"), len(opts), locale))
+	s.mu.Unlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"locale":        locale,
+		"optimizations": opts,
+		"metrics":       metrics,
+		"simulation":    sim,
+	})
 }
 
 func (s *StudioServer) handleRunSEO(w http.ResponseWriter, r *http.Request) {
@@ -1405,82 +1848,84 @@ func (s *StudioServer) handleRunSEO(w http.ResponseWriter, r *http.Request) {
 		Scope       string   `json:"scope"`
 		Competitors []string `json:"competitors"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
 
 	s.mu.Lock()
-	s.Logs = append(s.Logs, fmt.Sprintf("[%s] Launching SEO & Growth Studio optimization for %v...", time.Now().Format("15:04:05"), req.Locales))
+	strategy := s.getOrInitSEOStrategy()
+	if req.Goal != "" {
+		strategy.Goal = seo.GrowthGoal(req.Goal)
+	}
+	if req.Scope != "" {
+		strategy.ScopeTier = seo.KeyScopeTier(req.Scope)
+	}
+	if len(req.Competitors) > 0 {
+		strategy.CompetitorURLs = req.Competitors
+	}
+
+	locales := req.Locales
+	if len(locales) == 0 {
+		locales = strategy.TargetLocales
+	}
+	hasEn := false
+	for _, l := range locales {
+		if l == "en" {
+			hasEn = true
+			break
+		}
+	}
+	if !hasEn {
+		locales = append([]string{"en"}, locales...)
+	}
+	strategy.TargetLocales = locales
+	strategy.UpdatedAt = time.Now()
+
+	extractedStrings, sourceKeys := s.ensureSourceStringsExtracted()
+	projName := filepath.Base(s.ProjectRoot)
 	projRoot := s.ProjectRoot
 	plat := s.Platform
+	client := s.resolveClient()
+
+	s.Logs = append(s.Logs, fmt.Sprintf("[%s] Launching SEO & Growth Studio optimization for %v...", time.Now().Format("15:04:05"), locales))
 	s.mu.Unlock()
 
 	go func() {
-		client := llm.AutoDetectClient()
-		scoutAgent := agents.NewPersonaScoutAgent(client)
-		persona, _ := scoutAgent.DiscoverPersona(projRoot)
-		projName := filepath.Base(projRoot)
-		cat := "Software Platform"
-		if persona != nil {
-			if persona.ProjectName != "" {
-				projName = persona.ProjectName
-			}
-			if persona.Audience != "" && len(persona.Audience) <= 25 {
-				cat = persona.Audience
-			} else if persona.Summary != "" && len(persona.Summary) <= 30 && !strings.HasPrefix(persona.Summary, "Autonomous localization") {
-				cat = persona.Summary
-			} else if strings.Contains(strings.ToLower(projName), "store") || strings.Contains(strings.ToLower(projName), "shop") || strings.Contains(strings.ToLower(projName), "commerce") {
-				cat = "E-Commerce Platform"
-			} else if strings.Contains(strings.ToLower(projName), "app") {
-				cat = "Application"
+		ctx := context.Background()
+
+		if strategy.Category == "" || strategy.Category == "Software Platform" {
+			cat, desc := seo.InferSoftwareOverview(ctx, client, projName, extractedStrings, strategy.Category, strategy.ProductDescription)
+			if cat != "" && cat != "Software Platform" {
+				strategy.Category = cat
+				strategy.ProductDescription = desc
+			} else if strategy.Category == "" {
+				strategy.Category = inferCategoryHeuristic(projName, extractedStrings)
+				strategy.ProductDescription = fmt.Sprintf("Application platform for %s.", projName)
 			}
 		}
 
-		goal := seo.GrowthGoal(req.Goal)
-		if goal == "" {
-			goal = seo.GoalTopTraffic
-		}
-		scope := seo.KeyScopeTier(req.Scope)
-		if scope == "" {
-			scope = seo.ScopeHighImpact
-		}
-		locales := req.Locales
-		if len(locales) == 0 {
-			locales = []string{"ja", "de", "es"}
-		}
-
-		strategy := &seo.SEOStrategy{
-			ProjectName:        projName,
-			Category:           cat,
-			ProductDescription: fmt.Sprintf("Autonomous software platform: %s", projName),
-			TargetLocales:      locales,
-			Goal:               goal,
-			ScopeTier:          scope,
-			CompetitorURLs:     req.Competitors,
-		}
-
-		sourceKeys := make(map[string]string)
 		baselineMatrix := make(map[string]map[string]string)
 		if plat != nil {
-			sourceKeys = seo.ExtractLocaleCatalog(projRoot, plat, "en")
 			for _, loc := range locales {
-				if entries := seo.ExtractLocaleCatalog(projRoot, plat, loc); entries != nil {
+				if loc == "en" {
+					baselineMatrix["en"] = sourceKeys
+				} else if entries := seo.ExtractLocaleCatalog(projRoot, plat, loc); entries != nil {
 					baselineMatrix[loc] = entries
 				}
 			}
 		}
 
 		orchestrator := seo.NewStudioOrchestrator(client)
-		ctx := context.Background()
 		result, err := orchestrator.RunStudio(ctx, strategy, sourceKeys, baselineMatrix)
 
 		s.mu.Lock()
-		s.LastSEOResult = result
+		s.SEOStrategy = strategy
+		if result != nil {
+			s.LastSEOResult = result
+		}
 		if err != nil {
 			s.Logs = append(s.Logs, fmt.Sprintf("[%s] SEO Studio error: %v", time.Now().Format("15:04:05"), err))
 		} else {
-			s.Logs = append(s.Logs, fmt.Sprintf("[%s] SEO Studio optimization completed across %d locales!", time.Now().Format("15:04:05"), len(locales)))
+			s.Logs = append(s.Logs, fmt.Sprintf("[%s] SEO Studio optimization completed across %d locales! Domain: \"%s\"",
+				time.Now().Format("15:04:05"), len(locales), strategy.Category))
 		}
 		s.mu.Unlock()
 	}()
@@ -1495,6 +1940,11 @@ func (s *StudioServer) handleApplySEO(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var req struct {
+		Locale string `json:"locale,omitempty"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -1503,7 +1953,11 @@ func (s *StudioServer) handleApplySEO(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	appliedCount := 0
 	for loc, opts := range s.LastSEOResult.Optimizations {
+		if req.Locale != "" && req.Locale != loc {
+			continue
+		}
 		targetMap := make(map[string]string)
 		if existing := seo.ExtractLocaleCatalog(s.ProjectRoot, s.Platform, loc); existing != nil {
 			for k, v := range existing {
@@ -1512,13 +1966,18 @@ func (s *StudioServer) handleApplySEO(w http.ResponseWriter, r *http.Request) {
 		}
 		for _, o := range opts {
 			targetMap[o.Key] = o.OptimizedTranslation
+			appliedCount++
 		}
 		_ = seo.WriteLocaleCatalog(s.ProjectRoot, s.Platform, loc, targetMap)
 	}
 
-	s.Logs = append(s.Logs, fmt.Sprintf("[%s] Applied all SEO optimizations to disk!", time.Now().Format("15:04:05")))
+	s.Logs = append(s.Logs, fmt.Sprintf("[%s] Applied %d SEO optimizations directly to locale catalogs!",
+		time.Now().Format("15:04:05"), appliedCount))
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{"status": "applied"})
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"status":        "applied",
+		"applied_count": appliedCount,
+	})
 }
 
 func (s *StudioServer) handleChatStream(w http.ResponseWriter, r *http.Request) {
@@ -1689,6 +2148,10 @@ func StartInteractiveWebStudio(projectRoot string, port int, autoOpen bool) erro
 	mux.HandleFunc("/api/critic", studio.handleGetCritic)
 	mux.HandleFunc("/api/stats", studio.handleGetStats)
 	mux.HandleFunc("/api/seo", studio.handleGetSEO)
+	mux.HandleFunc("/api/seo/strategy", studio.handleSaveSEOStrategy)
+	mux.HandleFunc("/api/seo/analyze-domain", studio.handleAnalyzeSEODomain)
+	mux.HandleFunc("/api/seo/scout", studio.handleRunSEOScout)
+	mux.HandleFunc("/api/seo/optimize", studio.handleRunSEOOptimize)
 	mux.HandleFunc("/api/seo/run", studio.handleRunSEO)
 	mux.HandleFunc("/api/seo/apply", studio.handleApplySEO)
 	mux.HandleFunc("/api/chat", studio.handleChatStream)
@@ -2618,32 +3081,41 @@ const InteractiveAppHTML = `<!DOCTYPE html>
         <div class="p-5 rounded-xl panel space-y-4">
           <div class="flex flex-wrap items-center justify-between gap-3 border-b border-[#181b24] pb-4">
             <div>
-              <h2 class="text-sm font-bold text-zinc-100 flex items-center gap-2">
+              <div class="inline-flex items-center gap-2 px-2.5 py-0.5 rounded-full bg-pink-500/10 border border-pink-500/30 text-pink-300 text-[11px] font-semibold mb-1.5">
                 <i class="fa-solid fa-bullseye text-pink-400"></i> Autonomous Multilingual SEO & Market Growth Studio
-              </h2>
-              <p class="text-xs text-zinc-400 mt-0.5">Scouts regional competitor SERP landscapes, mines high-intent buyer keywords, semantically optimizes UI copy, and models growth projections.</p>
+              </div>
+              <h2 class="text-base font-bold text-zinc-100 tracking-tight">Regional SERP & Keyword Optimization Studio</h2>
+              <p class="text-xs text-zinc-400 mt-0.5 max-w-2xl">Transform technical AST localization keys into high-ranking search copy. Scout local competitors, discover intent-rich native keywords, simulate live Google SERPs, and preview growth metrics.</p>
             </div>
-            <div class="flex items-center gap-2.5">
-              <button onclick="runSEOOptimization()" id="btnRunSEO" class="px-3.5 py-1.5 rounded-lg bg-pink-500/90 hover:bg-pink-500 text-white font-semibold text-xs transition flex items-center gap-2 shadow-lg shadow-pink-500/20">
-                <i class="fa-solid fa-wand-magic-sparkles"></i> Run SEO Optimization
+            <div class="flex flex-wrap items-center gap-2">
+              <button onclick="triggerSEOScout()" id="btnScoutSEO" class="px-3 py-1.5 rounded-lg bg-sky-600/20 hover:bg-sky-600/30 border border-sky-500/40 text-sky-200 font-semibold text-xs transition flex items-center gap-2 shadow-lg shadow-sky-950/40">
+                <i class="fa-solid fa-magnifying-glass"></i> <span id="btnScoutSEOLabel">Scout Competitors & Keywords</span>
               </button>
-              <button onclick="applySEOToDisk()" id="btnApplySEO" class="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs transition flex items-center gap-2 shadow-lg shadow-emerald-500/20">
+              <button onclick="triggerSEOOptimize()" id="btnOptSEO" class="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs transition flex items-center gap-2 shadow-lg shadow-indigo-500/20">
+                <i class="fa-solid fa-wand-magic-sparkles"></i> <span id="btnOptSEOLabel">Run Semantic Copy Weaver</span>
+              </button>
+              <button onclick="runSEOOptimization()" id="btnRunSEO" class="px-3 py-1.5 rounded-lg bg-pink-500/90 hover:bg-pink-500 text-white font-semibold text-xs transition flex items-center gap-2 shadow-lg shadow-pink-500/20">
+                <i class="fa-solid fa-bolt"></i> <span id="btnRunSEOLabel">Run Full SEO Studio</span>
+              </button>
+              <button onclick="applySEOToDisk()" id="btnApplySEO" class="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs transition flex items-center gap-2 shadow-lg shadow-emerald-500/20">
                 <i class="fa-solid fa-floppy-disk"></i> Apply SEO to Disk
               </button>
             </div>
           </div>
 
-          <!-- Controls row -->
+          <!-- AST Discovery & Domain Overview Readiness Banner -->
+          <div id="seoReadinessBanner" class="p-3 rounded-xl border text-xs"></div>
+
+          <!-- Strategic Controls row -->
           <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 text-xs font-mono">
             <div>
-              <label class="block text-[11px] font-semibold text-zinc-400 uppercase tracking-wider mb-1.5">Active Target Market</label>
-              <div id="seoLocaleTabs" class="flex flex-wrap gap-1.5">
-                <!-- Populated dynamically: ja, de, es, fr, etc. -->
-              </div>
+              <label class="block text-[11px] font-semibold text-zinc-400 uppercase tracking-wider mb-1.5">Target Market / Language</label>
+              <select id="seoLocaleSelect" onchange="switchSEOLocale(this.value)" class="w-full px-3 py-1.5 rounded-md field text-xs text-zinc-200 font-medium"></select>
+              <div id="seoLocaleTabs" class="flex flex-wrap gap-1.5 mt-2"></div>
             </div>
             <div>
               <label class="block text-[11px] font-semibold text-zinc-400 uppercase tracking-wider mb-1.5">Commercial Goal</label>
-              <select id="seoGoalSelect" class="w-full px-3 py-1.5 rounded-md field text-xs text-zinc-200">
+              <select id="seoGoalSelect" onchange="saveSEOStrategy()" class="w-full px-3 py-1.5 rounded-md field text-xs text-zinc-200">
                 <option value="traffic">Top-of-Funnel Reach (Discovery)</option>
                 <option value="conversion">High-Intent Commercial (Buyers)</option>
                 <option value="trust">Regional Compliance & Local Trust</option>
@@ -2651,14 +3123,38 @@ const InteractiveAppHTML = `<!DOCTYPE html>
             </div>
             <div>
               <label class="block text-[11px] font-semibold text-zinc-400 uppercase tracking-wider mb-1.5">Key Scope Tier</label>
-              <select id="seoScopeSelect" class="w-full px-3 py-1.5 rounded-md field text-xs text-zinc-200">
-                <option value="high_impact">High Impact Only (Meta, Hero, Headings)</option>
+              <select id="seoScopeSelect" onchange="saveSEOStrategy()" class="w-full px-3 py-1.5 rounded-md field text-xs text-zinc-200">
+                <option value="high_impact">High Impact Only (Meta, Hero, Headings, FAQs)</option>
                 <option value="full_site">Full Site Catalog (All UI Keys)</option>
               </select>
             </div>
             <div>
               <label class="block text-[11px] font-semibold text-zinc-400 uppercase tracking-wider mb-1.5">Competitor URLs (Optional)</label>
-              <input type="text" id="seoCompetitorInput" placeholder="competitor.com, leader.jp" class="w-full px-3 py-1.5 rounded-md field text-xs text-zinc-200 placeholder-zinc-600">
+              <input type="text" id="seoCompetitorInput" placeholder="competitor.com, leader.jp" onblur="saveSEOStrategy()" class="w-full px-3 py-1.5 rounded-md field text-xs text-zinc-200 placeholder-zinc-600">
+            </div>
+          </div>
+
+          <!-- Product Domain & Value Proposition Customizer -->
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4 pt-3 border-t border-[#181b24] text-xs">
+            <div class="space-y-1.5">
+              <div class="flex items-center justify-between">
+                <label class="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">Product Domain / Category</label>
+                <div class="flex items-center gap-1.5">
+                  <button type="button" onclick="triggerAnalyzeDomain()" id="btnAnalyzeDomain" class="text-[10px] px-2 py-0.5 rounded bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 border border-sky-500/30 transition-all flex items-center gap-1 cursor-pointer">
+                    <i class="fa-solid fa-wand-magic-sparkles text-[9px]"></i> <span>Analyze with AI</span>
+                  </button>
+                  <button type="button" onclick="setSeoCategoryPreset('Localization AI')" class="text-[10px] px-1.5 py-0.5 rounded bg-zinc-800 hover:bg-sky-500/20 text-zinc-400 hover:text-sky-300 border border-zinc-700 transition-all cursor-pointer">Localization AI</button>
+                  <button type="button" onclick="setSeoCategoryPreset('Developer Tool')" class="text-[10px] px-1.5 py-0.5 rounded bg-zinc-800 hover:bg-sky-500/20 text-zinc-400 hover:text-sky-300 border border-zinc-700 transition-all cursor-pointer">Developer Tool</button>
+                  <button type="button" onclick="setSeoCategoryPreset('SaaS Platform')" class="text-[10px] px-1.5 py-0.5 rounded bg-zinc-800 hover:bg-sky-500/20 text-zinc-400 hover:text-sky-300 border border-zinc-700 transition-all cursor-pointer">SaaS Platform</button>
+                  <button type="button" onclick="setSeoCategoryPreset('E-Commerce Store')" class="text-[10px] px-1.5 py-0.5 rounded bg-zinc-800 hover:bg-sky-500/20 text-zinc-400 hover:text-sky-300 border border-zinc-700 transition-all cursor-pointer">E-Commerce</button>
+                </div>
+              </div>
+              <input type="text" id="seoCategoryInput" placeholder="Click 'Analyze with AI' or type category..." onblur="saveSEOStrategy()" class="w-full px-3 py-1.5 rounded-md field text-xs text-zinc-200 font-medium placeholder-zinc-600">
+            </div>
+
+            <div class="space-y-1.5">
+              <label class="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">Product Overview & Core Value Prop</label>
+              <input type="text" id="seoDescriptionInput" placeholder="2-sentence product description inferred from extracted UI copy..." onblur="saveSEOStrategy()" class="w-full px-3 py-1.5 rounded-md field text-xs text-zinc-200 placeholder-zinc-600">
             </div>
           </div>
         </div>
@@ -2666,10 +3162,18 @@ const InteractiveAppHTML = `<!DOCTYPE html>
         <div id="seoEmptyState" class="hidden p-12 rounded-xl panel text-center space-y-3">
           <i class="fa-solid fa-bullseye text-zinc-600 text-3xl"></i>
           <p class="text-sm text-zinc-300 font-medium">No SEO intelligence computed yet for this project.</p>
-          <p class="text-xs text-zinc-500">Click <strong>"Run SEO Optimization"</strong> above to launch the autonomous market discovery and copy weaving agents.</p>
+          <p class="text-xs text-zinc-500">Click <strong>"Scout Competitors & Keywords"</strong> or <strong>"Run Full SEO Studio"</strong> above to launch the autonomous market discovery and copy weaving agents.</p>
         </div>
 
         <div id="seoDashboard" class="space-y-5">
+          <!-- Predictive Growth Metrics Scorecard -->
+          <div class="p-5 rounded-xl panel space-y-3">
+            <span class="text-xs font-bold uppercase tracking-wider text-zinc-300 flex items-center gap-2">
+              <i class="fa-solid fa-chart-line text-emerald-400"></i> Projected Growth & Safety Impact <span id="seoMetricsLocaleTag" class="text-[10px] px-1.5 py-0.5 rounded bg-zinc-800 text-sky-400 font-mono">[EN]</span>
+            </span>
+            <div id="seoMetricsGrid" class="grid grid-cols-2 sm:grid-cols-4 gap-3"></div>
+          </div>
+
           <!-- 2-Column Section -->
           <div class="grid grid-cols-1 lg:grid-cols-2 gap-5">
             <!-- Left: Competitors & Keywords -->
@@ -2678,7 +3182,7 @@ const InteractiveAppHTML = `<!DOCTYPE html>
               <div class="p-5 rounded-xl panel space-y-3">
                 <div class="flex items-center justify-between">
                   <span class="text-xs font-bold uppercase tracking-wider text-zinc-300 flex items-center gap-2">
-                    <i class="fa-solid fa-magnifying-glass-chart text-sky-400"></i> Regional Competitor Landscape
+                    <i class="fa-solid fa-magnifying-glass-chart text-sky-400"></i> Regional Competitor Landscape <span id="seoCompLocaleTag" class="text-[10px] font-mono text-zinc-400">[EN]</span>
                   </span>
                   <span id="seoCompetitorCount" class="text-[10px] px-2 py-0.5 rounded bg-zinc-800 text-zinc-400 font-mono">0 scouted</span>
                 </div>
@@ -2689,7 +3193,7 @@ const InteractiveAppHTML = `<!DOCTYPE html>
               <div class="p-5 rounded-xl panel space-y-3">
                 <div class="flex items-center justify-between">
                   <span class="text-xs font-bold uppercase tracking-wider text-zinc-300 flex items-center gap-2">
-                    <i class="fa-solid fa-key text-amber-400"></i> High-Intent Local Keywords
+                    <i class="fa-solid fa-key text-amber-400"></i> High-Intent Regional Keywords <span id="seoKwLocaleTag" class="text-[10px] font-mono text-zinc-400">[EN]</span>
                   </span>
                   <span id="seoKeywordCount" class="text-[10px] px-2 py-0.5 rounded bg-zinc-800 text-zinc-400 font-mono">0 keywords</span>
                 </div>
@@ -2697,13 +3201,12 @@ const InteractiveAppHTML = `<!DOCTYPE html>
               </div>
             </div>
 
-            <!-- Right: SERP Simulation & Growth Metrics -->
+            <!-- Right: Multi-Modal SERP Simulation -->
             <div class="space-y-5">
-              <!-- Multi-Modal SERP Simulator -->
               <div class="p-5 rounded-xl panel space-y-3">
                 <div class="flex items-center justify-between">
                   <span class="text-xs font-bold uppercase tracking-wider text-zinc-300 flex items-center gap-2">
-                    <i class="fa-solid fa-mobile-screen text-pink-400"></i> Google SERP Visual Simulator
+                    <i class="fa-solid fa-mobile-screen text-pink-400"></i> Multi-Modal Visual SERP & Social Simulator <span id="seoSimLocaleTag" class="text-[10px] font-mono text-zinc-400">[EN]</span>
                   </span>
                   <div class="flex items-center gap-1 bg-[#090b10] p-0.5 rounded-lg border border-[#181b24] text-[10px]">
                     <button onclick="setSeoSimMode('desktop')" id="btnSimDesktop" class="px-2 py-1 rounded font-mono font-semibold bg-zinc-800 text-zinc-200">Desktop (600px)</button>
@@ -2716,14 +3219,6 @@ const InteractiveAppHTML = `<!DOCTYPE html>
                   <!-- Rendered dynamically -->
                 </div>
               </div>
-
-              <!-- Predictive Growth Metrics Scorecard -->
-              <div class="p-5 rounded-xl panel space-y-3">
-                <span class="text-xs font-bold uppercase tracking-wider text-zinc-300 flex items-center gap-2">
-                  <i class="fa-solid fa-chart-line text-emerald-400"></i> Projected Growth & Safety Impact
-                </span>
-                <div id="seoMetricsGrid" class="grid grid-cols-2 sm:grid-cols-4 gap-3"></div>
-              </div>
             </div>
           </div>
 
@@ -2732,11 +3227,16 @@ const InteractiveAppHTML = `<!DOCTYPE html>
             <div class="flex flex-wrap items-center justify-between gap-2">
               <div>
                 <span class="text-xs font-bold uppercase tracking-wider text-zinc-300 flex items-center gap-2">
-                  <i class="fa-solid fa-code-compare text-emerald-400"></i> Semantic Copy Matrix & Injected Keywords
+                  <i class="fa-solid fa-code-compare text-emerald-400"></i> Semantic Copy Matrix & Injected Keywords <span id="seoOptLocaleTag" class="text-[10px] font-mono text-zinc-400">[EN]</span>
                 </span>
                 <p class="text-[11px] text-zinc-500 mt-0.5">Review side-by-side linguistic diffs, injected keyword tokens, character counts, and pixel widths.</p>
               </div>
-              <span id="seoOptCount" class="text-[10px] px-2 py-0.5 rounded bg-zinc-800 text-zinc-400 font-mono">0 keys optimized</span>
+              <div class="flex items-center gap-2">
+                <span id="seoOptCount" class="text-[10px] px-2 py-0.5 rounded bg-zinc-800 text-zinc-400 font-mono">0 keys optimized</span>
+                <button onclick="applySEOToDisk()" class="px-3 py-1 rounded-md bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs transition flex items-center gap-1.5 shadow">
+                  <i class="fa-solid fa-floppy-disk text-[10px]"></i> Apply to Disk
+                </button>
+              </div>
             </div>
 
             <div class="overflow-x-auto custom-scrollbar border border-[#181b24] rounded-lg">
@@ -4582,8 +5082,50 @@ const InteractiveAppHTML = `<!DOCTYPE html>
       if (p) switchProjectPath(p);
     }
 
+    // ---------- Language Metadata Directory ----------
+    const AVAILABLE_LANGUAGES = [
+      { code: 'en', label: 'English', native: 'Global / US / UK', tag: 'EN', region: 'americas' },
+      { code: 'es', label: 'Spanish', native: 'Español', tag: 'ES', region: 'eu' },
+      { code: 'fr', label: 'French', native: 'Français', tag: 'FR', region: 'eu' },
+      { code: 'de', label: 'German', native: 'Deutsch', tag: 'DE', region: 'eu' },
+      { code: 'ja', label: 'Japanese', native: '日本語', tag: 'JA', region: 'apac' },
+      { code: 'zh', label: 'Chinese (Simplified)', native: '简体中文', tag: 'ZH', region: 'apac' },
+      { code: 'zh-TW', label: 'Chinese (Traditional)', native: '繁體中文', tag: 'TW', region: 'apac' },
+      { code: 'ko', label: 'Korean', native: '한국어', tag: 'KO', region: 'apac' },
+      { code: 'pt', label: 'Portuguese (PT)', native: 'Português', tag: 'PT', region: 'eu' },
+      { code: 'pt-BR', label: 'Portuguese (BR)', native: 'Português do Brasil', tag: 'BR', region: 'americas' },
+      { code: 'it', label: 'Italian', native: 'Italiano', tag: 'IT', region: 'eu' },
+      { code: 'nl', label: 'Dutch', native: 'Nederlands', tag: 'NL', region: 'eu' },
+      { code: 'ru', label: 'Russian', native: 'Русский', tag: 'RU', region: 'eu' },
+      { code: 'ar', label: 'Arabic', native: 'العربية', tag: 'AR', region: 'me' },
+      { code: 'hi', label: 'Hindi', native: 'हिन्दी', tag: 'HI', region: 'apac' },
+      { code: 'tr', label: 'Turkish', native: 'Türkçe', tag: 'TR', region: 'eu' },
+      { code: 'pl', label: 'Polish', native: 'Polski', tag: 'PL', region: 'eu' },
+      { code: 'sv', label: 'Swedish', native: 'Svenska', tag: 'SV', region: 'nordics' },
+      { code: 'da', label: 'Danish', native: 'Dansk', tag: 'DA', region: 'nordics' },
+      { code: 'fi', label: 'Finnish', native: 'Suomi', tag: 'FI', region: 'nordics' },
+      { code: 'no', label: 'Norwegian', native: 'Norsk', tag: 'NO', region: 'nordics' },
+      { code: 'uk', label: 'Ukrainian', native: 'Українська', tag: 'UK', region: 'eu' },
+      { code: 'vi', label: 'Vietnamese', native: 'Tiếng Việt', tag: 'VI', region: 'apac' },
+      { code: 'th', label: 'Thai', native: 'ไทย', tag: 'TH', region: 'apac' },
+      { code: 'id', label: 'Indonesian', native: 'Bahasa Indonesia', tag: 'ID', region: 'apac' },
+      { code: 'ms', label: 'Malay', native: 'Bahasa Melayu', tag: 'MS', region: 'apac' },
+      { code: 'fil', label: 'Filipino', native: 'Filipino', tag: 'PH', region: 'apac' },
+      { code: 'he', label: 'Hebrew', native: 'עברית', tag: 'HE', region: 'me' },
+      { code: 'el', label: 'Greek', native: 'Ελληνικά', tag: 'EL', region: 'eu' },
+      { code: 'cs', label: 'Czech', native: 'Čeština', tag: 'CS', region: 'eu' },
+      { code: 'ro', label: 'Romanian', native: 'Română', tag: 'RO', region: 'eu' },
+      { code: 'hu', label: 'Hungarian', native: 'Magyar', tag: 'HU', region: 'eu' }
+    ];
+
+    function getLangMeta(code) {
+      const found = AVAILABLE_LANGUAGES.find(l => l.code === code);
+      if (found) return found;
+      return { code: code, label: code.toUpperCase(), native: code.toUpperCase(), tag: code.toUpperCase() };
+    }
+
     // ---------- SEO & Growth Studio ----------
-    let currentSeoLocale = 'ja';
+    let currentSeoLocale = 'en';
     let currentSeoSimMode = 'desktop';
     let lastSeoResult = null;
 
@@ -4594,51 +5136,134 @@ const InteractiveAppHTML = `<!DOCTYPE html>
         const empty = document.getElementById('seoEmptyState');
         const dash = document.getElementById('seoDashboard');
 
-        if (!data || data.configured === false || !data.strategy) {
+        if (!data || data.configured === false) {
           empty?.classList.remove('hidden');
           dash?.classList.add('hidden');
           return;
         }
 
-        empty?.classList.add('hidden');
-        dash?.classList.remove('hidden');
         lastSeoResult = data;
+        const strategy = data.strategy || {};
 
-        // Populate strategy inputs if present
-        if (data.strategy) {
-          if (data.strategy.goal) document.getElementById('seoGoalSelect').value = data.strategy.goal;
-          if (data.strategy.scope_tier) document.getElementById('seoScopeSelect').value = data.strategy.scope_tier;
-          if (data.strategy.competitor_urls && data.strategy.competitor_urls.length > 0) {
-            document.getElementById('seoCompetitorInput').value = data.strategy.competitor_urls.join(', ');
+        // Populate strategy inputs
+        if (strategy.goal && document.getElementById('seoGoalSelect')) {
+          document.getElementById('seoGoalSelect').value = strategy.goal;
+        }
+        if (strategy.scope_tier && document.getElementById('seoScopeSelect')) {
+          document.getElementById('seoScopeSelect').value = strategy.scope_tier;
+        }
+        if (document.getElementById('seoCompetitorInput')) {
+          document.getElementById('seoCompetitorInput').value = (strategy.competitor_urls && strategy.competitor_urls.length > 0) ? strategy.competitor_urls.join(', ') : '';
+        }
+        if (document.getElementById('seoCategoryInput')) {
+          document.getElementById('seoCategoryInput').value = strategy.category || '';
+        }
+        if (document.getElementById('seoDescriptionInput')) {
+          document.getElementById('seoDescriptionInput').value = strategy.product_description || '';
+        }
+
+        // Render Readiness Banner
+        const banner = document.getElementById('seoReadinessBanner');
+        if (banner) {
+          const keyCount = data.extracted_keys_count || 0;
+          const cat = strategy.category || '';
+          if (keyCount > 0 && cat) {
+            banner.className = 'flex flex-wrap items-center justify-between gap-2 px-3.5 py-2.5 rounded-xl bg-sky-500/10 border border-sky-500/30 text-xs text-sky-200';
+            banner.innerHTML = '<div class="flex items-center gap-2">' +
+                '<span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0"></span>' +
+                '<span><strong>AI Domain Grounded</strong>: Analyzed <strong>' + keyCount + '</strong> extracted UI strings. Inferred Domain: <em>"' + escapeHtml(cat) + '"</em></span>' +
+              '</div>' +
+              '<div class="flex items-center gap-2">' +
+                '<button type="button" onclick="triggerAnalyzeDomain()" class="text-[11px] font-medium px-2.5 py-1 rounded bg-sky-600/30 hover:bg-sky-600/50 text-sky-200 border border-sky-500/30 flex items-center gap-1.5 cursor-pointer transition-all">' +
+                  '<i class="fa-solid fa-wand-magic-sparkles text-[10px]"></i> Re-Analyze with AI' +
+                '</button>' +
+                '<button type="button" onclick="switchScreen(\'matrix\')" class="text-[11px] font-mono text-sky-400 hover:text-sky-300 underline cursor-pointer">' +
+                  'View Matrix' +
+                '</button>' +
+              '</div>';
+          } else if (keyCount > 0) {
+            banner.className = 'flex flex-wrap items-center justify-between gap-2 px-3.5 py-2.5 rounded-xl bg-indigo-500/10 border border-indigo-500/30 text-xs text-indigo-200';
+            banner.innerHTML = '<div class="flex items-center gap-2">' +
+                '<span class="w-2 h-2 rounded-full bg-indigo-400 shrink-0"></span>' +
+                '<span><strong>Strings Extracted (' + keyCount + ' keys)</strong>: Run AI Domain Analysis to let the LLM inspect your UI copy and infer product overview.</span>' +
+              '</div>' +
+              '<button type="button" onclick="triggerAnalyzeDomain()" class="text-[11px] font-medium px-3 py-1 rounded bg-indigo-600/40 hover:bg-indigo-600/60 text-indigo-100 border border-indigo-500/40 flex items-center gap-1.5 cursor-pointer transition-all shadow-sm">' +
+                '<i class="fa-solid fa-wand-magic-sparkles text-[10px]"></i> Analyze Domain with AI' +
+              '</button>';
+          } else {
+            banner.className = 'flex flex-wrap items-center justify-between gap-2 px-3.5 py-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-200';
+            banner.innerHTML = '<div class="flex items-center gap-2">' +
+                '<span class="w-2 h-2 rounded-full bg-amber-400 shrink-0"></span>' +
+                '<span><strong>No Keys Scanned Yet</strong>: Extract UI strings from your codebase so the AI Agent can analyze your software domain.</span>' +
+              '</div>' +
+              '<button type="button" onclick="triggerAnalyzeDomain()" class="text-[11px] font-medium px-2.5 py-1 rounded bg-amber-600/30 hover:bg-amber-600/50 text-amber-100 border border-amber-500/40 flex items-center gap-1.5 cursor-pointer transition-all">' +
+                '<i class="fa-solid fa-magnifying-glass text-[10px]"></i> Scan & Analyze with AI' +
+              '</button>';
           }
         }
 
-        // Render Locale Tabs
-        const targetLocales = (data.strategy && data.strategy.target_locales) || Object.keys(data.optimizations || {}) || ['ja', 'de', 'es'];
-        if (!targetLocales.includes(currentSeoLocale) && targetLocales.length > 0) {
-          currentSeoLocale = targetLocales[0];
+        // Render Locale Select & Tabs (including 'en')
+        const rawLocales = strategy.target_locales || Object.keys(data.optimizations || {}) || ['en', 'es', 'fr', 'de', 'ja'];
+        const targetLocales = Array.from(new Set(['en', ...rawLocales]));
+        if (!targetLocales.includes(currentSeoLocale)) {
+          currentSeoLocale = targetLocales[0] || 'en';
+        }
+
+        const sel = document.getElementById('seoLocaleSelect');
+        if (sel) {
+          sel.innerHTML = targetLocales.map(loc => {
+            const m = getLangMeta(loc);
+            return '<option value="' + loc + '" ' + (loc === currentSeoLocale ? 'selected' : '') + '>' + m.label + ' (' + m.native + ')</option>';
+          }).join('');
         }
 
         const tabsContainer = document.getElementById('seoLocaleTabs');
         if (tabsContainer) {
           tabsContainer.innerHTML = targetLocales.map(loc => {
+            const m = getLangMeta(loc);
             const isActive = loc === currentSeoLocale;
-            const activeClass = isActive ? 'bg-pink-500 text-white font-bold' : 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700';
-            return '<button onclick="switchSEOLocale(\'' + loc + '\')" class="px-2.5 py-1 rounded text-xs transition uppercase ' + activeClass + '">' + loc + '</button>';
+            const activeClass = isActive ? 'bg-pink-500 text-white font-bold shadow-md shadow-pink-500/20' : 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700';
+            return '<button onclick="switchSEOLocale(\'' + loc + '\')" class="px-2.5 py-1 rounded text-xs transition uppercase ' + activeClass + '" title="' + m.label + ' (' + m.native + ')">' + (m.tag || loc.toUpperCase()) + '</button>';
           }).join('');
         }
 
-        renderSEOViewForLocale(currentSeoLocale);
+        const hasAnyData = Boolean(
+          (data.optimizations && Object.keys(data.optimizations).length > 0) ||
+          (data.competitors && Object.keys(data.competitors).length > 0) ||
+          (data.keyword_pool && Object.keys(data.keyword_pool).length > 0) ||
+          (data.keywords && Object.keys(data.keywords).length > 0)
+        );
+
+        if (!hasAnyData && !strategy.category) {
+          empty?.classList.remove('hidden');
+          dash?.classList.add('hidden');
+        } else {
+          empty?.classList.add('hidden');
+          dash?.classList.remove('hidden');
+          renderSEOViewForLocale(currentSeoLocale);
+        }
       } catch (err) {
-        showToast('Failed to load SEO studio state', 'error');
+        showToast('Failed to load SEO studio state: ' + err.message, 'error');
       }
     }
 
     function switchSEOLocale(loc) {
       currentSeoLocale = loc;
-      if (lastSeoResult) {
-        loadSEOData();
+      if (document.getElementById('seoLocaleSelect')) {
+        document.getElementById('seoLocaleSelect').value = loc;
       }
+      const tabsContainer = document.getElementById('seoLocaleTabs');
+      if (tabsContainer) {
+        const rawLocales = (lastSeoResult?.strategy?.target_locales) || ['en', 'es', 'fr', 'de', 'ja'];
+        const targetLocales = Array.from(new Set(['en', ...rawLocales]));
+        tabsContainer.innerHTML = targetLocales.map(l => {
+          const m = getLangMeta(l);
+          const isActive = l === currentSeoLocale;
+          const activeClass = isActive ? 'bg-pink-500 text-white font-bold shadow-md shadow-pink-500/20' : 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700';
+          return '<button onclick="switchSEOLocale(\'' + l + '\')" class="px-2.5 py-1 rounded text-xs transition uppercase ' + activeClass + '" title="' + m.label + ' (' + m.native + ')">' + (m.tag || l.toUpperCase()) + '</button>';
+        }).join('');
+      }
+      renderSEOViewForLocale(loc);
     }
 
     function setSeoSimMode(mode) {
@@ -4649,10 +5274,147 @@ const InteractiveAppHTML = `<!DOCTYPE html>
       renderSEOSimulation(currentSeoLocale);
     }
 
+    async function saveSEOStrategy() {
+      const goal = document.getElementById('seoGoalSelect')?.value || 'traffic';
+      const scope = document.getElementById('seoScopeSelect')?.value || 'high_impact';
+      const compsInput = document.getElementById('seoCompetitorInput')?.value || '';
+      const cat = document.getElementById('seoCategoryInput')?.value || '';
+      const desc = document.getElementById('seoDescriptionInput')?.value || '';
+      const comps = compsInput.split(',').map(s => s.trim()).filter(Boolean);
+
+      try {
+        await fetch('/api/seo/strategy', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            category: cat,
+            product_description: desc,
+            goal: goal,
+            scope_tier: scope,
+            competitor_urls: comps
+          })
+        });
+      } catch (err) {
+        console.error('Failed to save SEO strategy:', err);
+      }
+    }
+
+    async function triggerAnalyzeDomain() {
+      const btn = document.getElementById('btnAnalyzeDomain');
+      if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin text-[9px]"></i> Analyzing...';
+      }
+
+      try {
+        const res = await fetch('/api/seo/analyze-domain', { method: 'POST' });
+        const data = await res.json();
+        if (res.ok) {
+          if (document.getElementById('seoCategoryInput')) document.getElementById('seoCategoryInput').value = data.category || '';
+          if (document.getElementById('seoDescriptionInput')) document.getElementById('seoDescriptionInput').value = data.product_description || '';
+          showToast('AI analyzed ' + (data.extracted_keys_count || 0) + ' strings: Domain set to "' + (data.category || '') + '"', 'success');
+          await loadSEOData();
+        } else {
+          showToast(data.error || 'AI domain analysis failed', 'error');
+        }
+      } catch (err) {
+        showToast('Network error during AI domain analysis', 'error');
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.innerHTML = '<i class="fa-solid fa-wand-magic-sparkles text-[9px]"></i> <span>Analyze with AI</span>';
+        }
+      }
+    }
+
+    function setSeoCategoryPreset(preset) {
+      const catInput = document.getElementById('seoCategoryInput');
+      if (catInput) {
+        catInput.value = preset;
+        saveSEOStrategy();
+        showToast('Domain preset set to "' + preset + '"', 'info');
+      }
+    }
+
+    async function triggerSEOScout() {
+      const btn = document.getElementById('btnScoutSEO');
+      const label = document.getElementById('btnScoutSEOLabel');
+      btn.disabled = true;
+      btn.classList.add('btn-disabled');
+      if (label) label.innerText = 'Scouting SERP...';
+
+      await saveSEOStrategy();
+
+      try {
+        const res = await fetch('/api/seo/scout', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ locale: currentSeoLocale })
+        });
+        const data = await res.json();
+        if (res.ok) {
+          const compCount = data.competitors ? data.competitors.length : 0;
+          const kwCount = data.keywords ? data.keywords.length : 0;
+          showToast('Scouted ' + compCount + ' competitors & discovered ' + kwCount + ' keywords for [' + currentSeoLocale.toUpperCase() + ']', 'success');
+          await loadSEOData();
+        } else {
+          showToast(data.error || 'Scout failed', 'error');
+        }
+      } catch (err) {
+        showToast('Network error during competitor scouting', 'error');
+      } finally {
+        btn.disabled = false;
+        btn.classList.remove('btn-disabled');
+        if (label) label.innerText = 'Scout Competitors & Keywords';
+      }
+    }
+
+    async function triggerSEOOptimize() {
+      const btn = document.getElementById('btnOptSEO');
+      const label = document.getElementById('btnOptSEOLabel');
+      btn.disabled = true;
+      btn.classList.add('btn-disabled');
+      if (label) label.innerText = 'Weaving Copy...';
+
+      await saveSEOStrategy();
+
+      try {
+        const res = await fetch('/api/seo/optimize', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ locale: currentSeoLocale })
+        });
+        const data = await res.json();
+        if (res.ok) {
+          const optCount = data.optimizations ? data.optimizations.length : 0;
+          showToast('SEO-optimized ' + optCount + ' keys for [' + currentSeoLocale.toUpperCase() + ']', 'success');
+          await loadSEOData();
+        } else {
+          showToast(data.error || 'SEO optimization failed', 'error');
+        }
+      } catch (err) {
+        showToast('Network error during SEO optimization', 'error');
+      } finally {
+        btn.disabled = false;
+        btn.classList.remove('btn-disabled');
+        if (label) label.innerText = 'Run Semantic Copy Weaver';
+      }
+    }
+
     function renderSEOViewForLocale(loc) {
       if (!lastSeoResult) return;
+      const m = getLangMeta(loc);
+      const locTag = '[' + loc.toUpperCase() + ']';
+
+      // Update locale tags
+      if (document.getElementById('seoMetricsLocaleTag')) document.getElementById('seoMetricsLocaleTag').innerText = locTag;
+      if (document.getElementById('seoCompLocaleTag')) document.getElementById('seoCompLocaleTag').innerText = locTag;
+      if (document.getElementById('seoKwLocaleTag')) document.getElementById('seoKwLocaleTag').innerText = locTag;
+      if (document.getElementById('seoSimLocaleTag')) document.getElementById('seoSimLocaleTag').innerText = locTag;
+      if (document.getElementById('seoOptLocaleTag')) document.getElementById('seoOptLocaleTag').innerText = locTag;
+
       const comps = (lastSeoResult.competitors && lastSeoResult.competitors[loc]) || [];
-      const kws = (lastSeoResult.keyword_pool && lastSeoResult.keyword_pool[loc]) || [];
+      const kws = (lastSeoResult.keyword_pool && lastSeoResult.keyword_pool[loc]) || (lastSeoResult.keywords && lastSeoResult.keywords[loc]) || [];
       const metrics = (lastSeoResult.metrics && lastSeoResult.metrics[loc]) || null;
       const opts = (lastSeoResult.optimizations && lastSeoResult.optimizations[loc]) || [];
 
@@ -4660,14 +5422,17 @@ const InteractiveAppHTML = `<!DOCTYPE html>
       document.getElementById('seoCompetitorCount').innerText = comps.length + ' scouted';
       const compList = document.getElementById('seoCompetitorList');
       if (comps.length === 0) {
-        compList.innerHTML = '<p class="text-xs text-zinc-500">No competitor teardowns yet.</p>';
+        compList.innerHTML = '<div class="py-6 text-center space-y-2">' +
+            '<p class="text-xs text-zinc-500">No competitor teardowns yet for ' + m.label + ' [' + loc.toUpperCase() + '].</p>' +
+            '<button type="button" onclick="triggerSEOScout()" class="text-xs text-sky-400 hover:text-sky-300 font-semibold underline cursor-pointer">Click to Scout Market Competitors</button>' +
+          '</div>';
       } else {
         compList.innerHTML = comps.map(c => {
           const vpBadges = (c.value_props || []).slice(0, 3).map(vp => '<span class="text-[10px] px-1.5 py-0.5 rounded bg-zinc-800/80 text-zinc-400">' + escapeHtml(vp) + '</span>').join('');
           return '<div class="p-3 rounded-lg bg-[#0d1018] border border-[#181d28] space-y-1.5">' +
             '<div class="flex items-center justify-between text-xs">' +
               '<span class="font-bold text-sky-400">#' + c.rank + ' ' + escapeHtml(c.domain) + '</span>' +
-              '<span class="text-[10px] px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400 font-mono">' + (c.is_discovered ? 'Discovered' : 'User URL') + '</span>' +
+              '<span class="text-[10px] px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400 font-mono">' + (c.is_discovered ? 'AI Discovered' : 'User URL') + '</span>' +
             '</div>' +
             '<p class="text-xs font-semibold text-zinc-200">' + escapeHtml(c.title || c.domain) + '</p>' +
             (c.meta_description ? '<p class="text-[11px] text-zinc-400 line-clamp-2">' + escapeHtml(c.meta_description) + '</p>' : '') +
@@ -4680,7 +5445,10 @@ const InteractiveAppHTML = `<!DOCTYPE html>
       document.getElementById('seoKeywordCount').innerText = kws.length + ' keywords';
       const kwCloud = document.getElementById('seoKeywordCloud');
       if (kws.length === 0) {
-        kwCloud.innerHTML = '<p class="text-xs text-zinc-500">No keywords discovered yet.</p>';
+        kwCloud.innerHTML = '<div class="py-6 text-center space-y-2 w-full">' +
+            '<p class="text-xs text-zinc-500">No keyword pool synthesized yet for ' + m.label + ' [' + loc.toUpperCase() + '].</p>' +
+            '<button type="button" onclick="triggerSEOScout()" class="text-xs text-sky-400 hover:text-sky-300 font-semibold underline cursor-pointer">Scout Regional Search Intelligence</button>' +
+          '</div>';
       } else {
         kwCloud.innerHTML = kws.map(k => {
           const isPrimary = k.is_primary;
@@ -4702,27 +5470,42 @@ const InteractiveAppHTML = `<!DOCTYPE html>
       // 4. Metrics Grid
       const mGrid = document.getElementById('seoMetricsGrid');
       if (!metrics) {
-        mGrid.innerHTML = '<p class="col-span-4 text-xs text-zinc-500">No predictive growth projections computed.</p>';
+        mGrid.innerHTML = '<div class="col-span-2 sm:col-span-4 p-4 rounded-lg bg-[#0d1018] border border-[#181d28] text-center text-xs text-zinc-500 space-y-1">' +
+            '<p>No predictive growth projections computed yet for [' + loc.toUpperCase() + '].</p>' +
+            '<button type="button" onclick="triggerSEOOptimize()" class="text-xs text-indigo-400 hover:text-indigo-300 font-semibold underline cursor-pointer">Run Semantic Copy Weaver to calculate reach</button>' +
+          '</div>';
       } else {
-        mGrid.innerHTML = '<div class="p-3 rounded-lg bg-[#0d1018] border border-[#181d28] space-y-1">' +
-            '<span class="text-[10px] text-zinc-500 uppercase font-mono font-semibold">Search Volume Reach</span>' +
-            '<div class="text-lg font-bold text-zinc-100">' + (metrics.search_volume_optimized || 0).toLocaleString() + '<span class="text-xs text-zinc-400 font-normal">/mo</span></div>' +
-            '<span class="text-[10px] text-emerald-400 font-semibold">+' + (metrics.search_volume_uplift_pct || 0) + '% uplift</span>' +
+        mGrid.innerHTML = '<div class="p-3.5 rounded-xl bg-emerald-950/20 border border-emerald-500/20 space-y-1">' +
+            '<div class="flex items-center justify-between">' +
+              '<span class="text-[10px] text-emerald-400 uppercase font-mono font-semibold">Search Volume Reach</span>' +
+              '<span class="text-[10px] text-emerald-400 font-bold px-1.5 py-0.5 rounded bg-emerald-500/20">+' + (metrics.search_volume_uplift_pct || 0).toFixed(0) + '%</span>' +
+            '</div>' +
+            '<div class="text-xl font-bold text-zinc-100">' + (metrics.search_volume_optimized || 0).toLocaleString() + '<span class="text-xs text-zinc-400 font-normal"> searches/mo</span></div>' +
+            '<p class="text-[11px] text-zinc-400">Base: ' + (metrics.search_volume_baseline || 0).toLocaleString() + '/mo</p>' +
           '</div>' +
-          '<div class="p-3 rounded-lg bg-[#0d1018] border border-[#181d28] space-y-1">' +
-            '<span class="text-[10px] text-zinc-500 uppercase font-mono font-semibold">Projected SERP CTR</span>' +
-            '<div class="text-lg font-bold text-sky-400">' + (metrics.projected_ctr_optimized || 0) + '%</div>' +
-            '<span class="text-[10px] text-zinc-400">Base: ' + (metrics.projected_ctr_baseline || 0) + '% (+' + (metrics.projected_ctr_uplift_pct || 0) + '%)</span>' +
+          '<div class="p-3.5 rounded-xl bg-sky-950/20 border border-sky-500/20 space-y-1">' +
+            '<div class="flex items-center justify-between">' +
+              '<span class="text-[10px] text-sky-400 uppercase font-mono font-semibold">Projected SERP CTR</span>' +
+              '<span class="text-[10px] text-sky-400 font-bold px-1.5 py-0.5 rounded bg-sky-500/20">+' + (metrics.projected_ctr_uplift_pct || 0).toFixed(0) + '%</span>' +
+            '</div>' +
+            '<div class="text-xl font-bold text-sky-400">' + (metrics.projected_ctr_optimized || 0).toFixed(1) + '%</div>' +
+            '<p class="text-[11px] text-zinc-400">Baseline un-optimized: ' + (metrics.projected_ctr_baseline || 0).toFixed(1) + '%</p>' +
           '</div>' +
-          '<div class="p-3 rounded-lg bg-[#0d1018] border border-[#181d28] space-y-1">' +
-            '<span class="text-[10px] text-zinc-500 uppercase font-mono font-semibold">Local Trust Factor</span>' +
-            '<div class="text-lg font-bold text-emerald-400">' + (metrics.local_trust_score || 0) + '<span class="text-xs text-zinc-500 font-normal">/100</span></div>' +
-            '<span class="text-[10px] text-zinc-400">Readability ' + (metrics.readability_score || 0) + '</span>' +
+          '<div class="p-3.5 rounded-xl bg-purple-950/20 border border-purple-500/20 space-y-1">' +
+            '<div class="flex items-center justify-between">' +
+              '<span class="text-[10px] text-purple-400 uppercase font-mono font-semibold">Local Trust Factor</span>' +
+              '<span class="text-[10px] text-purple-300 font-bold px-1.5 py-0.5 rounded bg-purple-500/20">Native Phrasing</span>' +
+            '</div>' +
+            '<div class="text-xl font-bold text-zinc-100">' + (metrics.local_trust_score || 0) + '<span class="text-xs text-zinc-400 font-normal">/100</span></div>' +
+            '<p class="text-[11px] text-zinc-400">Est. Top 10 Rank: ~' + (metrics.estimated_ranking_days || 30) + ' days</p>' +
           '</div>' +
-          '<div class="p-3 rounded-lg bg-[#0d1018] border border-[#181d28] space-y-1">' +
-            '<span class="text-[10px] text-zinc-500 uppercase font-mono font-semibold">Keyword Density</span>' +
-            '<div class="text-lg font-bold ' + (metrics.density_safe ? 'text-emerald-400' : 'text-amber-400') + '">' + (metrics.keyword_density_pct || 0) + '%</div>' +
-            '<span class="text-[10px] px-1.5 py-0.5 rounded ' + (metrics.density_safe ? 'bg-emerald-500/10 text-emerald-400' : 'bg-amber-500/10 text-amber-400') + ' font-semibold font-mono">' + (metrics.density_safe ? 'Safe (No Stuffing)' : 'High Density') + '</span>' +
+          '<div class="p-3.5 rounded-xl bg-amber-950/20 border border-amber-500/20 space-y-1">' +
+            '<div class="flex items-center justify-between">' +
+              '<span class="text-[10px] text-amber-400 uppercase font-mono font-semibold">Keyword Density</span>' +
+              '<span class="text-[10px] font-bold px-1.5 py-0.5 rounded ' + (metrics.density_safe ? 'bg-emerald-500/20 text-emerald-300' : 'bg-rose-500/20 text-rose-300') + '">' + (metrics.density_safe ? 'Safe & Natural' : 'High Density') + '</span>' +
+            '</div>' +
+            '<div class="text-xl font-bold text-zinc-100">' + (metrics.keyword_density_pct || 0).toFixed(1) + '%</div>' +
+            '<p class="text-[11px] text-zinc-400">' + (metrics.density_safe ? 'Anti-stuffing guard: Clean' : 'Warning: High keyword concentration') + '</p>' +
           '</div>';
       }
 
@@ -4730,7 +5513,10 @@ const InteractiveAppHTML = `<!DOCTYPE html>
       document.getElementById('seoOptCount').innerText = opts.length + ' keys optimized';
       const tbody = document.getElementById('seoOptimizationsTableBody');
       if (opts.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="5" class="py-6 text-center text-zinc-500">No optimized translation keys found.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="5" class="py-8 text-center text-zinc-500 space-y-2">' +
+            '<p>No optimized translation keys found for ' + m.label + ' [' + loc.toUpperCase() + '].</p>' +
+            '<button type="button" onclick="triggerSEOOptimize()" class="text-xs text-indigo-400 hover:text-indigo-300 font-semibold underline cursor-pointer">Run Semantic Copy Weaver</button>' +
+          '</td></tr>';
       } else {
         tbody.innerHTML = opts.map(o => {
           const impactBadge = o.impact_tier === 'high'
@@ -4769,19 +5555,25 @@ const InteractiveAppHTML = `<!DOCTYPE html>
       if (!container) return;
 
       if (!sim) {
-        container.innerHTML = '<p class="text-xs text-zinc-500">No SERP simulation available.</p>';
+        container.innerHTML = '<div class="py-12 text-center space-y-2 max-w-md mx-auto">' +
+            '<p class="text-xs text-zinc-500">No SERP simulation generated yet for [' + loc.toUpperCase() + '].</p>' +
+            '<button type="button" onclick="triggerSEOOptimize()" class="text-xs text-indigo-400 hover:text-indigo-300 font-semibold underline cursor-pointer">Run Semantic Copy Weaver to generate live Google Search & Social snippets</button>' +
+          '</div>';
         return;
       }
 
       if (currentSeoSimMode === 'social') {
-        container.innerHTML = '<div class="rounded-lg overflow-hidden border border-[#2a3040] bg-[#1a1f2c] max-w-[500px] mx-auto shadow-xl">' +
-            '<div class="h-40 bg-gradient-to-tr from-sky-900 to-indigo-900 flex items-center justify-center text-zinc-400 text-xs font-mono">' +
-              '<i class="fa-solid fa-image text-3xl opacity-40"></i>' +
+        container.innerHTML = '<div class="max-w-xl mx-auto rounded-2xl border border-[#2a3040] bg-[#10141f] overflow-hidden shadow-2xl space-y-3 p-4">' +
+            '<div class="h-40 rounded-xl bg-gradient-to-tr from-sky-900 via-indigo-950 to-slate-900 flex items-center justify-center border border-white/10 relative overflow-hidden text-center p-4">' +
+              '<div class="z-10 space-y-1">' +
+                '<span class="text-xs font-mono font-bold text-sky-400 uppercase tracking-widest">' + escapeHtml(lastSeoResult.strategy?.project_name || 'Application') + '</span>' +
+                '<h4 class="text-base font-bold text-white leading-snug">' + escapeHtml(sim.og_card_title || sim.title_tag) + '</h4>' +
+              '</div>' +
             '</div>' +
-            '<div class="p-3.5 space-y-1">' +
-              '<div class="text-[10px] text-zinc-400 uppercase font-mono tracking-wider">' + escapeHtml(sim.display_url || '') + '</div>' +
-              '<div class="text-sm font-bold text-zinc-100 line-clamp-1">' + escapeHtml(sim.og_card_title || sim.title_tag) + '</div>' +
-              '<div class="text-xs text-zinc-400 line-clamp-2">' + escapeHtml(sim.og_card_description || sim.meta_description) + '</div>' +
+            '<div class="space-y-1">' +
+              '<div class="text-[11px] font-mono text-zinc-400 uppercase tracking-wider">' + escapeHtml((sim.display_url || '').replace('https://', '')) + '</div>' +
+              '<h4 class="text-sm font-bold text-zinc-100 line-clamp-1">' + escapeHtml(sim.og_card_title || sim.title_tag) + '</h4>' +
+              '<p class="text-xs text-zinc-400 line-clamp-2">' + escapeHtml(sim.og_card_description || sim.meta_description) + '</p>' +
             '</div>' +
           '</div>';
         return;
@@ -4789,42 +5581,60 @@ const InteractiveAppHTML = `<!DOCTYPE html>
 
       // Desktop & Mobile Google SERP
       const isMobile = currentSeoSimMode === 'mobile';
-      const maxW = isMobile ? 'max-w-[380px]' : 'max-w-[580px]';
-      const truncIndicator = sim.is_title_truncated ? '<span class="ml-1 text-[10px] px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-400 font-mono font-bold">Pixel Truncated (>600px)</span>' : '<span class="ml-1 text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400 font-mono">Safe Width</span>';
+      const maxW = isMobile ? 'max-w-md' : 'max-w-2xl';
+      const truncIndicator = sim.is_title_truncated
+        ? '<span class="text-[11px] font-mono text-rose-400 font-semibold">Pixel Truncated (> 600px)</span>'
+        : '<span class="text-[11px] font-mono text-emerald-400 font-semibold">Desktop Safe Width (≤ 600px)</span>';
 
       const faqItems = (sim.rich_snippet_faq && sim.rich_snippet_faq.length > 0)
-        ? '<div class="pt-2 border-t border-zinc-800 space-y-1">' + sim.rich_snippet_faq.map(f => '<div class="text-[11px] text-zinc-300 flex items-center gap-1.5"><i class="fa-solid fa-angle-right text-[9px] text-sky-400"></i> ' + escapeHtml(f) + '</div>').join('') + '</div>'
+        ? '<div class="pt-2 border-t border-white/[0.06] space-y-1">' + sim.rich_snippet_faq.map(f => '<div class="text-xs text-[#dadce0] flex items-center gap-1.5"><span class="text-sky-400 font-bold">›</span> ' + escapeHtml(f) + '</div>').join('') + '</div>'
         : '';
 
-      container.innerHTML = '<div class="' + maxW + ' mx-auto space-y-2 font-sans">' +
-        '<div class="flex items-center gap-2 text-xs text-zinc-400">' +
-          '<div class="w-4 h-4 rounded-full bg-zinc-800 flex items-center justify-center text-[9px]"><i class="fa-solid fa-globe"></i></div>' +
-          '<span class="text-[11px] truncate text-zinc-300 font-mono">' + escapeHtml(sim.display_url) + '</span>' +
+      const projInitial = (lastSeoResult.strategy?.project_name || 'A')[0].toUpperCase();
+
+      container.innerHTML = '<div class="p-6 rounded-2xl bg-[#202124] border border-white/5 font-sans text-left mx-auto shadow-2xl space-y-2 ' + maxW + '">' +
+        '<div class="flex items-center gap-2">' +
+          '<div class="w-6 h-6 rounded-full bg-slate-700 flex items-center justify-center text-[10px] text-white font-bold">' + projInitial + '</div>' +
+          '<div class="space-y-0.5">' +
+            '<p class="text-xs text-[#dadce0] font-medium">' + escapeHtml(lastSeoResult.strategy?.project_name || 'Application') + '</p>' +
+            '<p class="text-[11px] text-[#bdc1c6] font-mono">' + escapeHtml(sim.display_url) + '</p>' +
+          '</div>' +
+        '</div>' +
+        '<div class="space-y-1">' +
+          '<h3 class="text-lg text-[#8ab4f8] hover:underline cursor-pointer font-medium leading-snug">' + escapeHtml(sim.title_tag) + '</h3>' +
+          '<p class="text-sm text-[#bdc1c6] leading-relaxed">' + escapeHtml(sim.meta_description) + '</p>' +
+        '</div>' +
+        faqItems +
+        '<div class="flex items-center justify-between pt-2 border-t border-white/[0.04] text-[11px] text-zinc-400">' +
+          '<span>Target Market: [' + loc.toUpperCase() + ']</span>' +
           truncIndicator +
         '</div>' +
-        '<div class="text-base font-medium text-sky-400 hover:underline cursor-pointer leading-tight">' + escapeHtml(sim.title_tag) + '</div>' +
-        '<div class="text-xs text-zinc-400 leading-normal">' + escapeHtml(sim.meta_description) + '</div>' +
-        faqItems +
       '</div>';
     }
 
     async function runSEOOptimization() {
       const btn = document.getElementById('btnRunSEO');
+      const label = document.getElementById('btnRunSEOLabel');
       btn.disabled = true;
       btn.classList.add('btn-disabled');
-      btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Scouting & Optimizing...';
+      if (label) label.innerText = 'Scouting & Weaving...';
 
-      const goal = document.getElementById('seoGoalSelect').value;
-      const scope = document.getElementById('seoScopeSelect').value;
-      const compsInput = document.getElementById('seoCompetitorInput').value;
+      await saveSEOStrategy();
+
+      const goal = document.getElementById('seoGoalSelect')?.value || 'traffic';
+      const scope = document.getElementById('seoScopeSelect')?.value || 'high_impact';
+      const compsInput = document.getElementById('seoCompetitorInput')?.value || '';
       const comps = compsInput.split(',').map(s => s.trim()).filter(Boolean);
+
+      const rawLocales = (lastSeoResult?.strategy?.target_locales) || ['en', 'es', 'fr', 'de', 'ja'];
+      const targetLocales = Array.from(new Set(['en', ...rawLocales]));
 
       try {
         const res = await fetch('/api/seo/run', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            locales: ['ja', 'de', 'es'],
+            locales: targetLocales,
             goal: goal,
             scope: scope,
             competitors: comps
@@ -4832,7 +5642,7 @@ const InteractiveAppHTML = `<!DOCTYPE html>
         });
 
         if (!res.ok) throw new Error('Failed to start SEO pipeline');
-        showToast('SEO Studio launched! Scouting competitors & weaving copy...', 'info');
+        showToast('SEO Studio launched! Scouting competitors & weaving copy across all markets...', 'info');
 
         // Poll for results
         let retries = 0;
@@ -4840,27 +5650,27 @@ const InteractiveAppHTML = `<!DOCTYPE html>
           retries++;
           const check = await fetch('/api/seo');
           const data = await check.json();
-          if (data && data.strategy && retries > 1) {
+          if (data && (Object.keys(data.optimizations || {}).length > 0 || retries > 3) && retries > 1) {
             clearInterval(interval);
             lastSeoResult = data;
             loadSEOData();
             showToast('SEO Studio optimization completed successfully!', 'success');
             btn.disabled = false;
             btn.classList.remove('btn-disabled');
-            btn.innerHTML = '<i class="fa-solid fa-wand-magic-sparkles"></i> Run SEO Optimization';
+            if (label) label.innerText = 'Run Full SEO Studio';
           }
           if (retries > 30) {
             clearInterval(interval);
             btn.disabled = false;
             btn.classList.remove('btn-disabled');
-            btn.innerHTML = '<i class="fa-solid fa-wand-magic-sparkles"></i> Run SEO Optimization';
+            if (label) label.innerText = 'Run Full SEO Studio';
           }
         }, 1000);
       } catch (err) {
         showToast('SEO optimization failed: ' + err.message, 'error');
         btn.disabled = false;
         btn.classList.remove('btn-disabled');
-        btn.innerHTML = '<i class="fa-solid fa-wand-magic-sparkles"></i> Run SEO Optimization';
+        if (label) label.innerText = 'Run Full SEO Studio';
       }
     }
 
@@ -4871,16 +5681,21 @@ const InteractiveAppHTML = `<!DOCTYPE html>
       btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Applying...';
 
       try {
-        const res = await fetch('/api/seo/apply', { method: 'POST' });
+        const res = await fetch('/api/seo/apply', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ locale: currentSeoLocale })
+        });
         const data = await res.json();
         if (data.status === 'applied') {
-          showToast('Applied all SEO optimizations directly to locale files!', 'success');
+          showToast('Applied ' + (data.applied_count || 0) + ' SEO optimizations directly to locale files!', 'success');
           loadStudioInit();
+          await loadSEOData();
         } else {
-          showToast('Failed to apply SEO changes', 'error');
+          showToast(data.error || 'Failed to apply SEO changes', 'error');
         }
       } catch (err) {
-        showToast('Error applying SEO changes', 'error');
+        showToast('Error applying SEO changes: ' + err.message, 'error');
       } finally {
         btn.disabled = false;
         btn.classList.remove('btn-disabled');

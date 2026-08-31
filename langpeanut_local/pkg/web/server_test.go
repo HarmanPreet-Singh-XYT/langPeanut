@@ -114,3 +114,88 @@ func TestWebStudio_APIRoutes(t *testing.T) {
 		t.Fatalf("Expected status 200 for /api/chat/reset, got %d", rec.Code)
 	}
 }
+
+func TestWebStudio_SEORoutes(t *testing.T) {
+	demoPath := filepath.Join("..", "..", "examples", "nextjs-app")
+	studio := NewStudioServer(demoPath)
+
+	// 1. GET /api/seo initial overview
+	req := httptest.NewRequest(http.MethodGet, "/api/seo", nil)
+	rec := httptest.NewRecorder()
+	studio.handleGetSEO(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Expected 200 for /api/seo, got %d", rec.Code)
+	}
+	var seoData map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&seoData); err != nil {
+		t.Fatalf("Failed to decode /api/seo: %v", err)
+	}
+	if seoData["configured"] != true {
+		t.Errorf("Expected configured true, got %v", seoData["configured"])
+	}
+	if keyCount, ok := seoData["extracted_keys_count"].(float64); !ok || keyCount <= 0 {
+		t.Errorf("Expected positive extracted_keys_count, got %v", seoData["extracted_keys_count"])
+	}
+
+	// 2. POST /api/seo/strategy
+	stratPayload := map[string]any{
+		"category":            "Developer Tool",
+		"product_description": "Next.js translation platform",
+		"goal":                "traffic",
+		"scope_tier":          "high_impact",
+		"target_locales":      []string{"en", "ja", "de"},
+		"competitor_urls":     []string{"example.com"},
+	}
+	body, _ := json.Marshal(stratPayload)
+	req = httptest.NewRequest(http.MethodPost, "/api/seo/strategy", bytes.NewReader(body))
+	rec = httptest.NewRecorder()
+	studio.handleSaveSEOStrategy(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Expected 200 for /api/seo/strategy, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// 3. POST /api/seo/analyze-domain
+	req = httptest.NewRequest(http.MethodPost, "/api/seo/analyze-domain", nil)
+	rec = httptest.NewRecorder()
+	studio.handleAnalyzeSEODomain(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Expected 200 for /api/seo/analyze-domain, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var domainData map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&domainData); err != nil {
+		t.Fatalf("Failed to decode domain data: %v", err)
+	}
+	if domainData["category"] == "" || domainData["category"] == "Software Platform" {
+		t.Errorf("Expected specific category inferred from strings, got %v", domainData["category"])
+	}
+
+	// 4. POST /api/seo/scout (English)
+	scoutPayload := map[string]string{"locale": "en"}
+	scoutBody, _ := json.Marshal(scoutPayload)
+	req = httptest.NewRequest(http.MethodPost, "/api/seo/scout", bytes.NewReader(scoutBody))
+	rec = httptest.NewRecorder()
+	studio.handleRunSEOScout(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Expected 200 for /api/seo/scout, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// 5. POST /api/seo/optimize (English)
+	optPayload := map[string]string{"locale": "en"}
+	optBody, _ := json.Marshal(optPayload)
+	req = httptest.NewRequest(http.MethodPost, "/api/seo/optimize", bytes.NewReader(optBody))
+	rec = httptest.NewRecorder()
+	studio.handleRunSEOOptimize(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Expected 200 for /api/seo/optimize, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// 6. POST /api/seo/apply
+	applyPayload := map[string]string{"locale": "en"}
+	applyBody, _ := json.Marshal(applyPayload)
+	req = httptest.NewRequest(http.MethodPost, "/api/seo/apply", bytes.NewReader(applyBody))
+	rec = httptest.NewRecorder()
+	studio.handleApplySEO(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Expected 200 for /api/seo/apply, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
