@@ -1,6 +1,6 @@
 # langPeanut — Universal Multi-Agent Localization Workflow
 
-> **micro1 Agentic Workflows Hackathon Project**  
+> **Agentic Workflows Hackathon Project**  
 > A universal, multi-agent AI system that automates end-to-end software localization across any web, mobile, or backend framework with deterministic AST precision, self-correcting reflection loops, and zero-defect code refactoring.
 
 ---
@@ -140,7 +140,7 @@ langPeanut benchmark      # Runs the 10-case evaluation suite comparing baseline
 
 ## 6. Evaluation Benchmark & Measured Improvement
 
-To satisfy the **micro1 Agentic Workflows Hackathon** evaluation criteria, `langPeanut` includes an automated 10-case adversarial benchmark suite:
+To satisfy the **Agentic Workflows Hackathon** evaluation criteria, `langPeanut` includes an automated 10-case adversarial benchmark suite:
 
 ### 10-Case Adversarial Benchmark Suite
 1. **React / TSX** (`CheckoutModal.tsx`): Complex nested JSX + dynamic string interpolation.

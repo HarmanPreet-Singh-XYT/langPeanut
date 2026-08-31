@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -16,6 +17,7 @@ import (
 	"github.com/langPeanut/langPeanut/benchmark"
 	"github.com/langPeanut/langPeanut/pkg/agents"
 	"github.com/langPeanut/langPeanut/pkg/chat"
+	"github.com/langPeanut/langPeanut/pkg/genkit"
 	"github.com/langPeanut/langPeanut/pkg/llm"
 	"github.com/langPeanut/langPeanut/pkg/logger"
 	"github.com/langPeanut/langPeanut/pkg/memory"
@@ -44,6 +46,7 @@ type StudioServer struct {
 	LastSEOResult *seo.SEOResult                     `json:"last_seo_result"`
 	RefactorPlans map[string]*types.FileRefactorPlan `json:"refactor_plans"`
 	ChatEngine    *chat.Engine                       `json:"-"`
+	GenkitEngine  *genkit.GenkitEngine               `json:"-"`
 }
 
 func findRepoRoot(startDir string) string {
@@ -102,6 +105,8 @@ func NewStudioServer(projectRoot string) *StudioServer {
 
 	chatEngine, _ := chat.NewEngine(targetPath, nil)
 	s.ChatEngine = chatEngine
+	genkitEngine, _ := genkit.NewGenkitEngine(targetPath, nil)
+	s.GenkitEngine = genkitEngine
 
 	// Trigger initial scan
 	s.performScan()
@@ -197,6 +202,7 @@ func (s *StudioServer) handleSwitchProject(w http.ResponseWriter, r *http.Reques
 	s.LastResult = nil
 	s.RefactorPlans = make(map[string]*types.FileRefactorPlan)
 	s.ChatEngine, _ = chat.NewEngine(absRoot, nil)
+	s.GenkitEngine, _ = genkit.NewGenkitEngine(absRoot, nil)
 	s.Logs = append(s.Logs, fmt.Sprintf("[%s] Switched project to: %s (%s)",
 		time.Now().Format("15:04:05"), absRoot, platform.DisplayName()))
 	s.mu.Unlock()
@@ -1515,6 +1521,10 @@ func (s *StudioServer) handleChatStream(w http.ResponseWriter, r *http.Request) 
 
 	var req struct {
 		Message string `json:"message"`
+		History []struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		} `json:"history"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Message) == "" {
 		http.Error(w, "Message is required", http.StatusBadRequest)
@@ -1531,17 +1541,38 @@ func (s *StudioServer) handleChatStream(w http.ResponseWriter, r *http.Request) 
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("X-Genkit-Framework", "Google Genkit Go")
+	w.Header().Set("X-Genkit-Version", "v1.12.0")
 
-	if s.ChatEngine == nil {
-		s.ChatEngine, _ = chat.NewEngine(s.ProjectRoot, nil)
+	if s.GenkitEngine == nil {
+		s.GenkitEngine, _ = genkit.NewGenkitEngine(s.ProjectRoot, nil)
+	}
+	if s.ChatEngine == nil && s.GenkitEngine != nil {
+		s.ChatEngine = s.GenkitEngine.UnderlyingEngine
 	}
 
-	eventChan := make(chan chat.ChatEvent, 100)
+	if s.GenkitEngine != nil && len(req.History) > 0 && len(s.GenkitEngine.UnderlyingEngine.History) == 0 {
+		for _, hMsg := range req.History {
+			if strings.TrimSpace(hMsg.Content) == "" {
+				continue
+			}
+			role := chat.RoleUser
+			if hMsg.Role == "assistant" || hMsg.Role == "model" {
+				role = chat.RoleAssistant
+			}
+			s.GenkitEngine.UnderlyingEngine.History = append(s.GenkitEngine.UnderlyingEngine.History, chat.ChatMessage{
+				Role:    role,
+				Content: hMsg.Content,
+			})
+		}
+	}
+
+	streamChan := make(chan genkit.GenkitStreamEvent, 100)
 	doneChan := make(chan struct{})
 
 	go func() {
 		defer close(doneChan)
-		_, _ = s.ChatEngine.SendMessage(r.Context(), req.Message, eventChan)
+		_, _ = s.GenkitEngine.SendChatMessage(r.Context(), req.Message, streamChan)
 	}()
 
 	for {
@@ -1549,14 +1580,14 @@ func (s *StudioServer) handleChatStream(w http.ResponseWriter, r *http.Request) 
 		case <-r.Context().Done():
 			return
 		case <-doneChan:
-			for len(eventChan) > 0 {
-				ev := <-eventChan
+			for len(streamChan) > 0 {
+				ev := <-streamChan
 				data, _ := json.Marshal(ev)
 				fmt.Fprintf(w, "data: %s\n\n", data)
 				flusher.Flush()
 			}
 			return
-		case ev := <-eventChan:
+		case ev := <-streamChan:
 			data, _ := json.Marshal(ev)
 			fmt.Fprintf(w, "data: %s\n\n", data)
 			flusher.Flush()
@@ -1564,10 +1595,35 @@ func (s *StudioServer) handleChatStream(w http.ResponseWriter, r *http.Request) 
 	}
 }
 
+func (s *StudioServer) handleGenkitRuntime(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if s.GenkitEngine == nil {
+		s.GenkitEngine, _ = genkit.NewGenkitEngine(s.ProjectRoot, nil)
+	}
+	_ = json.NewEncoder(w).Encode(s.GenkitEngine.GetRuntimeInfo())
+}
+
+func (s *StudioServer) handleGenkitFlows(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if s.GenkitEngine == nil {
+		s.GenkitEngine, _ = genkit.NewGenkitEngine(s.ProjectRoot, nil)
+	}
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"framework": "Google Genkit Go",
+		"version":   "v1.12.0",
+		"flows":     s.GenkitEngine.ListFlows(),
+		"tools":     s.GenkitEngine.ListTools(),
+	})
+}
+
 func (s *StudioServer) handleChatHistory(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if s.ChatEngine == nil {
-		s.ChatEngine, _ = chat.NewEngine(s.ProjectRoot, nil)
+		if s.GenkitEngine != nil {
+			s.ChatEngine = s.GenkitEngine.UnderlyingEngine
+		} else {
+			s.ChatEngine, _ = chat.NewEngine(s.ProjectRoot, nil)
+		}
 	}
 	_ = json.NewEncoder(w).Encode(s.ChatEngine.GetHistory())
 }
@@ -1582,9 +1638,6 @@ func (s *StudioServer) handleChatReset(w http.ResponseWriter, r *http.Request) {
 
 // StartInteractiveWebStudio launches the full interactive project-aware Web Studio
 func StartInteractiveWebStudio(projectRoot string, port int, autoOpen bool) error {
-	addr := fmt.Sprintf(":%d", port)
-	url := fmt.Sprintf("http://localhost:%d", port)
-
 	studio := NewStudioServer(projectRoot)
 
 	mux := http.NewServeMux()
@@ -1625,12 +1678,27 @@ func StartInteractiveWebStudio(projectRoot string, port int, autoOpen bool) erro
 	mux.HandleFunc("/api/chat", studio.handleChatStream)
 	mux.HandleFunc("/api/chat/history", studio.handleChatHistory)
 	mux.HandleFunc("/api/chat/reset", studio.handleChatReset)
+	mux.HandleFunc("/api/genkit/runtime", studio.handleGenkitRuntime)
+	mux.HandleFunc("/api/genkit/flows", studio.handleGenkitFlows)
 
-	server := &http.Server{
-		Addr:    addr,
-		Handler: mux,
+	var ln net.Listener
+	var activePort int = port
+	for p := port; p < port+20; p++ {
+		l, err := net.Listen("tcp", fmt.Sprintf(":%d", p))
+		if err == nil {
+			ln = l
+			activePort = p
+			break
+		}
+	}
+	if ln == nil {
+		return fmt.Errorf("could not find an open port starting from %d", port)
 	}
 
+	url := fmt.Sprintf("http://localhost:%d", activePort)
+	if activePort != port {
+		fmt.Printf("⚠️  Port %d was already in use; automatically bound to %s\n", port, url)
+	}
 	fmt.Printf("\nlangPeanut Web Studio running at %s\n", url)
 	fmt.Printf("Attached to local project: %s\n", studio.ProjectRoot)
 
@@ -1641,7 +1709,11 @@ func StartInteractiveWebStudio(projectRoot string, port int, autoOpen bool) erro
 		}()
 	}
 
-	return server.ListenAndServe()
+	server := &http.Server{
+		Handler: mux,
+	}
+
+	return server.Serve(ln)
 }
 
 // StartInteractiveWebDemo launches the live interactive website on the specified port
@@ -2166,8 +2238,11 @@ const InteractiveAppHTML = `<!DOCTYPE html>
             <div class="flex items-center gap-2.5">
               <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse-slow"></span>
               <div>
-                <div class="text-xs font-semibold text-zinc-100" style="font-family:'Geist',sans-serif;letter-spacing:-0.01em">Autonomous Orchestrator</div>
-                <div class="text-[11px]" style="color:var(--clr-text-muted);font-family:'Geist Mono',monospace">6-agent localization pipeline</div>
+                <div class="flex items-center gap-1.5">
+                  <span class="text-xs font-semibold text-zinc-100" style="font-family:'Geist',sans-serif;letter-spacing:-0.01em">Autonomous Copilot</span>
+                  <span class="badge badge-sky" style="font-size:9px;padding:1px 6px">Genkit Go</span>
+                </div>
+                <div class="text-[11px]" style="color:var(--clr-text-muted);font-family:'Geist Mono',monospace">Google Genkit Flows & Autonomous Multi-Agent Tools</div>
               </div>
             </div>
             <div class="flex items-center gap-2">

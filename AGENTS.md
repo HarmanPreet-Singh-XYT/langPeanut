@@ -8,7 +8,7 @@
 ## 1. Project Overview & Scope
 
 **Project Name**: `langPeanut`  
-**Purpose**: Universal Multi-Agent Localization Workflow & CLI tool for software developers, built for the **micro1 Agentic Workflows Hackathon**.  
+**Purpose**: Universal Multi-Agent Localization Workflow & CLI tool for software developers, built for the **Agentic Workflows Hackathon**.  
 **Language & Stack**: 
 - **Go** (Single static binary, sub-10ms startup, native goroutines for concurrency).
 - **CLI Framework**: Cobra (`cmd/langPeanut`).
@@ -56,7 +56,7 @@ Every agent working on this codebase must adhere to the 6-agent separation of co
 ## 3. Mandatory Agent Operating Protocols
 
 ### Protocol 1: Continuous Changelog Maintenance (Strictly Enforced)
-* Every agent **MUST** update the active log [CHANGELOG1.md](file:///Users/harmanpreetsingh/Public/Code/langpeanut_local/CHANGELOG1.md) (continuation from [CHANGELOG.md](file:///Users/harmanpreetsingh/Public/Code/langpeanut_local/CHANGELOG.md)) on every meaningful interaction, user directive, bug fix, or architectural change.
+* Every agent **MUST** update the active log [CHANGELOG2.md](file:///Users/harmanpreetsingh/Public/Code/langpeanut_local/CHANGELOG2.md) (continuation from [CHANGELOG1.md](file:///Users/harmanpreetsingh/Public/Code/langpeanut_local/CHANGELOG1.md) and [CHANGELOG.md](file:///Users/harmanpreetsingh/Public/Code/langpeanut_local/CHANGELOG.md)) on every meaningful interaction, user directive, bug fix, or architectural change.
 * When the user gives instructions, redirects architecture, or points out a flaw:
   1. Note the user's directive and why it was given.
   2. Document the action taken and files modified.
@@ -65,9 +65,9 @@ Every agent working on this codebase must adhere to the 6-agent separation of co
 
 ### Protocol 2: Context Preservation Across Agents
 * When initializing new subagents or beginning a new task, agents must read:
-  1. [idea.md](file:///Users/harmanpreetsingh/Public/Code/langTranslate/idea.md) — Core problem, solution, and hackathon requirements.
-  2. [PLAN.md](file:///Users/harmanpreetsingh/Public/Code/langTranslate/PLAN.md) — Current implementation milestones and technical design.
-  3. [CHANGELOG.md](file:///Users/harmanpreetsingh/Public/Code/langTranslate/CHANGELOG.md) — Chronological history of user directives and learnings.
+  1. [idea.md](file:///Users/harmanpreetsingh/Public/Code/langpeanut_local/idea.md) — Core problem, solution, and hackathon requirements.
+  2. [PLAN.md](file:///Users/harmanpreetsingh/Public/Code/langpeanut_local/PLAN.md) — Current implementation milestones and technical design.
+  3. [CHANGELOG2.md](file:///Users/harmanpreetsingh/Public/Code/langpeanut_local/CHANGELOG2.md) & [CHANGELOG1.md](file:///Users/harmanpreetsingh/Public/Code/langpeanut_local/CHANGELOG1.md) — Chronological history of user directives and learnings.
 
 ### Protocol 3: Deterministic Verification & No Whole-File Hallucinations
 * Agents must **NEVER** ask an LLM to rewrite a full source code file from scratch.
@@ -75,7 +75,7 @@ Every agent working on this codebase must adhere to the 6-agent separation of co
 * All translated strings must undergo **4-Tier verification** (Syntax, ICU variable matching, character expansion estimation, and key parity diffs).
 
 ### Protocol 4: Trajectory & Benchmark Logging
-* All multi-agent runs, tool calls, critic reflections, and retry attempts must be structured and loggable into `/trajectories/` for the micro1 Hackathon Deliverable 04.
+* All multi-agent runs, tool calls, critic reflections, and retry attempts must be structured and loggable into `/trajectories/` for the Hackathon Deliverable 04.
 * Benchmark cases must be tested against the baseline under `benchmark/`.
 
 ---
@@ -85,7 +85,8 @@ Every agent working on this codebase must adhere to the 6-agent separation of co
 | File | Purpose |
 | :--- | :--- |
 | [AGENTS.md](file:///Users/harmanpreetsingh/Public/Code/langpeanut_local/AGENTS.md) | System guidelines and operating protocols for agents. |
-| [CHANGELOG.md](file:///Users/harmanpreetsingh/Public/Code/langpeanut_local/CHANGELOG.md) | Live log of user directives, AI actions, fixes, and improvement iterations. |
-| [CHANGELOG1.md](file:///Users/harmanpreetsingh/Public/Code/langpeanut_local/CHANGELOG1.md) | Historical interaction archive (Session Entries 1–97). |
+| [CHANGELOG2.md](file:///Users/harmanpreetsingh/Public/Code/langpeanut_local/CHANGELOG2.md) | **Active live log** of user directives, AI actions, fixes, and improvement iterations (Session Entries 112+). |
+| [CHANGELOG1.md](file:///Users/harmanpreetsingh/Public/Code/langpeanut_local/CHANGELOG1.md) | Historical interaction archive (Session Entries 98–111). |
+| [CHANGELOG.md](file:///Users/harmanpreetsingh/Public/Code/langpeanut_local/CHANGELOG.md) | Foundational hackathon archive (Session Entries 1–97, Hot Takes, Improvement Progression). |
 | [idea.md](file:///Users/harmanpreetsingh/Public/Code/langpeanut_local/idea.md) | Product specification, multi-agent architecture, and hackathon alignment. |
 | [PLAN.md](file:///Users/harmanpreetsingh/Public/Code/langpeanut_local/PLAN.md) | Technical implementation milestones and task tracking. |

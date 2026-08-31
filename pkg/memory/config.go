@@ -23,6 +23,8 @@ type AppConfig struct {
 	CustomInstallCmd         string            `json:"custom_install_cmd,omitempty"` // Custom shell command to install dependencies (e.g. "pnpm install", "yarn add react-i18next i18next", "flutter pub get")
 	CustomBuildCmd           string            `json:"custom_build_cmd,omitempty"`   // Custom shell command for compiler/build/typecheck diagnostics (e.g. "pnpm typecheck", "npm run build", "tsc --noEmit", "flutter analyze")
 	ExistingTranslationsMode string            `json:"existing_translations_mode,omitempty"` // "skip" (default), "replace" (regenerate all), "prompt"
+	RootDir                  string            `json:"root_dir,omitempty"`                   // Relative project subdirectory
+	UserDirective            string            `json:"user_directive,omitempty"`             // Custom tone/developer instruction
 }
 
 var (

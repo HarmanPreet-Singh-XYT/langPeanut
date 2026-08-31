@@ -36,20 +36,26 @@ EXAMPLES:
 			targetDir = args[0]
 		}
 
-		providerType := llm.ProviderClaude
+		var client llm.Client
 		if chatProvider != "" {
-			providerType = llm.ProviderType(chatProvider)
-		}
-		modelName := chatModel
-		if modelName == "" {
-			if providerType == llm.ProviderClaude {
-				modelName = "claude-sonnet-5"
-			} else if providerType == llm.ProviderOpenAI {
-				modelName = "gpt-5.4-mini"
+			providerType := llm.ProviderType(chatProvider)
+			modelName := chatModel
+			if modelName == "" {
+				if providerType == llm.ProviderClaude {
+					modelName = "claude-sonnet-5"
+				} else if providerType == llm.ProviderOpenAI {
+					modelName = "gpt-5.4-mini"
+				} else if providerType == llm.ProviderGemini {
+					modelName = "gemini-3.5-flash"
+				}
 			}
+			client = llm.NewClient(providerType, modelName)
+		} else if chatModel != "" {
+			client = llm.NewClient(llm.ProviderOpenAI, chatModel)
+		} else {
+			client = llm.AutoDetectClient()
 		}
 
-		client := llm.NewClient(providerType, modelName)
 		p := tea.NewProgram(tui.NewChatUIModel(targetDir, client), tea.WithAltScreen())
 		if _, err := p.Run(); err != nil {
 			return fmt.Errorf("error running Chat Copilot: %w", err)
@@ -59,7 +65,7 @@ EXAMPLES:
 }
 
 func init() {
-	chatCmd.Flags().StringVarP(&chatProvider, "provider", "p", "claude", "LLM provider (claude, openai, gemini, ollama, deepl, nllb)")
+	chatCmd.Flags().StringVarP(&chatProvider, "provider", "p", "", "LLM provider (claude, openai, gemini, ollama, deepl, nllb)")
 	chatCmd.Flags().StringVarP(&chatModel, "model", "m", "", "Model identifier (e.g. claude-sonnet-5, gpt-5.4-mini, qwen2.5:7b)")
 	chatCmd.Flags().StringVarP(&chatTone, "tone", "t", "default", "Tone style preset (default, casual, formal, gen_z, pirate)")
 	rootCmd.AddCommand(chatCmd)

@@ -1,6 +1,6 @@
 # langPeanut — Implementation & Execution Plan
 
-> **micro1 Agentic Workflows Hackathon Submission Plan**  
+> **Agentic Workflows Hackathon Submission Plan**  
 > Target: Production-ready Universal Multi-Agent Localization CLI with 10-Case Adversarial Benchmark Suite, Trajectory Logging, and Self-Correction Reflection Loops.
 
 ---

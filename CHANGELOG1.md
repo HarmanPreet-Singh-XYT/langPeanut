@@ -1,12 +1,78 @@
 # CHANGELOG1.md — Improvement & Interaction Continuation Log
 
-> **micro1 Agentic Workflows Hackathon Record (Part 2)**  
+> **Agentic Workflows Hackathon Record (Part 2)**  
 > This file is the direct continuation of [`CHANGELOG.md`](file:///Users/harmanpreetsingh/Public/Code/langpeanut_local/CHANGELOG.md) (which contains the formal Hackathon Improvement Progression, Measured Improvements, Hot Takes, and Session Entries 1 through 97).  
 > All new session entries continue chronologically in this file starting from Session Entry 98.
 
 ---
 
 ## Interactive Development & User Directives Log (Continued)
+
+### Session Entry 111: Fix Translation Matrix & SEO Studio PR Creation + UI Emoji Cleanup
+
+* **User Directive**: *"dont have emojis there, and pr isn't created in a specific scenerio, so lets say i made my first job and ran it, pr was made, but then I went to SEO & Growth Studio and saved the translation matrix then when i tried to have run it, it didnt create PR, only showed like up to date, coz no new language was added there, it was same"*
+
+* **Why It Was Given**:
+  1. **Job Skipping Flaw**: When a user ran a first job, the target commit SHA and settings hash were marked `succeeded`. If the user then updated the translation matrix in the Translation Matrix editor or SEO & Market Growth Studio without adding new languages or pushing new code to GitHub, running a subsequent job caused the worker deduplication check (`HasDuplicateSuccessfulJob`) to immediately mark the job `skipped_no_changes` ("Up to date") because deduplication previously applied unconditionally to all triggers, including manual runs.
+  2. **Translation Matrix Application in Sandbox**: The sandboxed runner did not receive custom translation edits and SEO optimizations stored in SQLite (`repo_translation_matrix`), meaning updated matrix entries were not written to target locale catalogs before creating commits and PRs.
+  3. **Empty Diff Commit Handling**: If no source strings were extracted on a re-run, `git diff --cached --quiet` prevented committing and pushing.
+  4. **UI Emoji Polish**: Emojis in the Web UI, status badges, buttons, and toast notifications were requested to be stripped for a clean, modern design.
+
+* **Actions Taken**:
+  1. **Worker Deduplication Scoping (`langpeanut-cloud/internal/worker/worker.go`)**:
+     - Restricted deduplication skipping strictly to automated background webhook push events (`if job.TriggerType == "webhook_push"`).
+     - Ensured manual runs, on-demand PR bot commands, and matrix update jobs **always execute** and create/update Pull Requests.
+  2. **Translation Matrix Passing (`langpeanut-cloud/internal/worker/worker.go` & `cmd/runner/main.go`)**:
+     - Worker retrieves the latest `repo_translation_matrix` from SQLite via `cfg.DB.GetTranslationMatrix(repo.ID)` and forwards `TRANSLATION_MATRIX` (JSON) into the runner container and process fallback.
+     - Runner parses `TRANSLATION_MATRIX` and merges all customized/SEO-optimized translations directly into the target framework locale catalogs (`locales/*.json`, `*.arb`, `strings.xml`, etc.).
+  3. **Reliable Sync Commits & Descriptive PR Titles (`cmd/runner/main.go` & `pkg/github/pr_template.go`)**:
+     - In `commitAndPush`, if all locale files are already up-to-date, a synchronization marker `.langpeanut-sync` is staged and committed so `git push` and `OpenLocalizationPR` succeed without error.
+     - Updated PR title formatting to `i18n: sync translation matrix & locale catalogs (<locales>)` when syncing existing catalogs without new source code extractions.
+  4. **UI Emoji Cleanup (`langpeanut-cloud/web/app/repo/page.tsx`)**:
+     - Cleaned up emojis across Tab 2 (Settings), Tab 5 (PR Bot & Webhook Control Center), doctor diagnostics cards, and toast notifications.
+  5. **Verification**:
+     - Executed full test suite (`go test ./...` in `langpeanut-cloud` and `pkg/github` in `langpeanut_local`) and Next.js static production build (`npm run build`) — 100% pass with 0 errors.
+
+* **Files Modified**:
+  - `langpeanut-cloud/internal/worker/worker.go`
+  - `langpeanut-cloud/cmd/runner/main.go`
+  - `pkg/github/pr_template.go`
+  - `langpeanut-cloud/web/app/repo/page.tsx`
+  - `CHANGELOG1.md`
+
+### Session Entry 110: GitHub Webhook Push Autopilot & PR Bot Customization Settings
+
+* **User Directive**: *"we seem to be having github push to repo, like on commit github uses webhook and then we trigger a job through cloud, i don't see any setting of that in the repo settings, like if u wanna have, customization and etc"*
+
+* **Why It Was Given**: While the backend had a GitHub webhook endpoint (`POST /api/webhook`), repository settings lacked customization controls for webhook push autopilot (turning push triggers ON/OFF, branch strategies, target action types, custom branch globs, PR comment bot toggles, custom PR branch prefixes, and path filters). Tab 5 (PR Bot & Webhook Triggers) was also a static information panel without live control toggles or testing simulators.
+
+* **Actions Taken**:
+  1. **Database Schema & Migrations (`langpeanut-cloud/internal/db/migrations/009_webhook_push_settings.sql`)**:
+     - Added `webhook_push_enabled` (INTEGER default 1), `webhook_branch_filter` (TEXT default 'default_branch'), `webhook_custom_branches` (TEXT default ''), `webhook_action` (TEXT default 'auto_pr'), `webhook_pr_comments_enabled` (INTEGER default 1), `webhook_custom_branch_prefix` (TEXT default 'langpeanut/i18n-'), and `webhook_path_filter` (TEXT default '').
+  2. **Data Layer (`langpeanut-cloud/internal/db/queries.go`)**:
+     - Extended `RepoSettings` model and updated `UpsertRepoSettings` and `GetRepoSettings` with full fallback defaults.
+  3. **API & Webhook Engine (`langpeanut-cloud/internal/api/handlers.go`)**:
+     - Updated `handleGetRepoSettings` and `handleUpsertSettings` to serialize and validate webhook settings.
+     - Upgraded `handleWebhook` (`push` event) to respect `WebhookPushEnabled` and evaluate `WebhookBranchFilter` (`default_branch`, `all`, or `custom` glob matching) before queueing jobs.
+     - Upgraded `handleWebhook` (`issue_comment` event) to check `WebhookPRCommentsEnabled`.
+     - Added simulation/dry-run test endpoints: `POST /api/repos/{repoID}/webhook/test-push` and `POST /api/repos/{repoID}/webhook/test-bot`.
+  4. **Worker Pipeline (`langpeanut-cloud/internal/worker/worker.go`)**:
+     - Configured worker to dynamically use the repository's `WebhookCustomBranchPrefix` when formatting PR branch names.
+  5. **Web UI & Repository Control Center (`langpeanut-cloud/web/app/repo/page.tsx`)**:
+     - **Tab 2 (Settings & Strategy)**: Added **Section 5: GitHub Push & Webhook Autopilot Engine** with master ON/OFF toggle switch, branch strategy dropdown, target action selector, custom branch glob inputs, PR bot mentions switch, branch prefix inputs, and path filter inputs.
+     - **Tab 5 (PR Bot & Webhook Control Center)**: Overhauled into an interactive command center with live status cards, 1-click master pause/resume button, 1-click webhook payload URL copy, interactive Git push webhook dry-run simulator, interactive `@langpeanut` PR bot command parser test, and structured cheat sheets with 1-click command copying.
+  6. **Automated Verification**:
+     - Added `TestAPI_WebhookBranchFilterAndSettings` in `langpeanut-cloud/internal/api/handlers_test.go` covering settings persistence, branch filter evaluation, and simulation endpoints.
+     - Executed full test suite (`go test ./...` in both `langpeanut-cloud` and `langpeanut_local`) and Next.js static build (`npm run build`) — 100% pass with 0 errors.
+
+* **Files Modified**:
+  - `langpeanut-cloud/internal/db/migrations/009_webhook_push_settings.sql` (new)
+  - `langpeanut-cloud/internal/db/queries.go`
+  - `langpeanut-cloud/internal/api/handlers.go`
+  - `langpeanut-cloud/internal/api/handlers_test.go`
+  - `langpeanut-cloud/internal/worker/worker.go`
+  - `langpeanut-cloud/web/app/repo/page.tsx`
+  - `CHANGELOG1.md`
 
 ### Session Entry 109: 1-Click First-Time Setup & CLI Installation Script (`install.sh` & `Makefile`)
 
@@ -1172,11 +1238,11 @@
 ## Session Entry 136 — Cloud Web Layout Footer Branding Normalization
 
 * **User Directives**:
-  > *"remove this Built for the micro1 Agentic Workflows Hackathon."*
+  > *"remove this Built for the Agentic Workflows Hackathon."*
 
 * **Actions Taken & System-Wide Updates**:
   1. **Layout Footer Branding ([`web/app/layout.tsx`](file:///Users/harmanpreetsingh/Public/Code/langpeanut-cloud/web/app/layout.tsx))**:
-     - Removed `Built for the micro1 Agentic Workflows Hackathon.` from the global footer.
+     - Removed `Built for the Agentic Workflows Hackathon.` from the global footer.
      - Updated copyright string to `© 2026 langPeanut — Universal Multi-Agent Localization Workflow & Studio.`
   2. **Production Bundle & Container Rebuild**:
      - Statically compiled Next.js 15 app with `npm run build` (100% clean export).
@@ -1526,3 +1592,585 @@
     3. Quick macro suggestions use `<PromptSuggestion>` pills.
     4. Input uses `<PromptInput>` with auto-resizing `<PromptInputTextarea>` and `<PromptInputActions>`.
   - Rebuilt Next.js production app (`npm run build`) and verified 100% pass across all tests and builds.
+
+---
+
+## Session Entry 152 — Google Genkit Go SDK Implementation for Cloud and Local AI Chat
+
+* **User Directive (Verbatim)**:
+  > *"we have this AI chat in both cloud and local, cloud is in ../langpeanut-cloud, now i want you to implement GenKit there"*
+
+* **Architectural Enhancements**:
+  1. **Dedicated Google Genkit Go Subsystem (`pkg/genkit`)**:
+     - **[`types.go`](file:///Users/harmanpreetsingh/Public/Code/langpeanut_local/pkg/genkit/types.go)**: Formulated typed schemas for Genkit flows, registered tools, chat requests/responses, stream events (`thought`, `reasoning`, `tool_start`, `tool_end`, `card`, `chunk`, `done`, `error`), and runtime telemetry.
+     - **[`tools.go`](file:///Users/harmanpreetsingh/Public/Code/langpeanut_local/pkg/genkit/tools.go)**: Registered 11 deterministic Genkit Tools (`scan_repository`, `plan_localization`, `execute_localization`, `verify_translations`, `apply_ast_patch`, `seo_simulate_serp`, `seo_analyze_competitor`, `manage_checkpoints`, `manage_config`, `diagnose_system`, `explain_tool_or_concept`) with full JSON schema parameter definitions.
+     - **[`flows.go`](file:///Users/harmanpreetsingh/Public/Code/langpeanut_local/pkg/genkit/flows.go)**: Defined 4 core Genkit flows:
+       * `repoCopilotChatFlow`: The central autonomous supervisor flow coordinating AST Scout, Context Agent, Translator, 4-Tier Critic, and Patch Engine with streaming intermediate reasoning and Generative UI cards.
+       * `scanRepositoryFlow`: Standalone AST audit flow computing locale coverage matrices.
+       * `verifyTranslationsFlow`: 4-Tier Critic verification flow checking AST syntax, ICU variable parity, layout expansion risk, and key parity.
+       * `seoSimulateFlow`: Google SERP simulation flow with 600px desktop/mobile checks.
+     - **[`engine.go`](file:///Users/harmanpreetsingh/Public/Code/langpeanut_local/pkg/genkit/engine.go)**: Built `GenkitEngine` with multi-provider plugin architecture (`googleai/gemini`, `anthropic/claude`, `openai/gpt`, `ollama/local`, `genkit/tracing`).
+     - **[`genkit_test.go`](file:///Users/harmanpreetsingh/Public/Code/langpeanut_local/pkg/genkit/genkit_test.go)**: Added comprehensive unit test suite covering initialization, streaming chat flows, standalone flows, and tool registries.
+
+  2. **Cloud Backend Genkit Integration (`langpeanut-cloud/internal/api/handlers.go`)**:
+     - Upgraded `handleRepoChat` (`POST /api/repos/{repoID}/chat`) to be fully powered by `genkit.NewGenkitEngine`, streaming Genkit thoughts, tool invocations, cards, and text chunks via SSE with `X-Genkit-Framework` and `X-Genkit-Version` headers.
+     - Added `GET /api/repos/{repoID}/genkit/runtime` returning active Genkit framework version, active plugins, registered flows, and tools.
+     - Added `GET /api/repos/{repoID}/genkit/flows` listing flow and tool metadata.
+     - Added `POST /api/repos/{repoID}/genkit/flow/{flowName}` for direct Genkit flow executions.
+     - Added automated API test cases in [`handlers_test.go`](file:///Users/harmanpreetsingh/Public/Code/langpeanut-cloud/internal/api/handlers_test.go) verifying all Genkit endpoints.
+
+  3. **Cloud Web Dashboard UI Integration (`langpeanut-cloud/web/app/repo/page.tsx`)**:
+     - Added **Google Genkit Go** status badges to the Autonomous Copilot header.
+     - Integrated Prompt-Kit `<Reasoning>` collapsible block to render intermediate Genkit thought and reasoning streams.
+     - Integrated Prompt-Kit `<Tool>` accordion with live state transitions (`running`, `completed`, `error`) and parameter/output inspectors.
+     - Preserved inline Generative UI cards (Coverage Matrix, AST Diff, Critic scorecard, SERP preview, Cost estimator).
+
+  4. **Local Web Studio Parity (`pkg/web/server.go`)**:
+     - Connected `GenkitEngine` to local Web Studio endpoints (`/api/chat`, `/api/genkit/runtime`, `/api/genkit/flows`).
+     - Added `Genkit Go` badge to local interactive UI copilot header.
+
+* **Verification**:
+  - `go test -v ./pkg/genkit/...` passed 100%.
+  - `go test ./...` in `langpeanut_local` passed 100%.
+  - `go test -v ./internal/api/...` in `langpeanut-cloud` passed 100%.
+  - `npm run build` in `langpeanut-cloud/web` passed 100% with 0 TypeScript/ESLint errors.
+
+---
+
+## Session Entry 154 — Comprehensive Cross-Stack Architectural, Security & UX Audit (Cloud, CLI, TUI, Web)
+
+* **User Directive (Verbatim)**:
+  > *"can you go through the cloud and cli/tui/web and identify issues, UX problems also, cloud is in ../langpeanut-cloud"*
+
+* **Audit Scope & Subsystems Analyzed**:
+  1. **Cloud Backend & Infrastructure (`langpeanut-cloud/cmd/server`, `langpeanut-cloud/cmd/runner`, `langpeanut-cloud/internal/*`)**
+  2. **Cloud Web Next.js 15 Application (`langpeanut-cloud/web/app/*`, `dashboard`, `repo`, `login`, Prompt-Kit components)**
+  3. **Local CLI Command Suite (`langpeanut_local/cmd/langPeanut/*`)**
+  4. **Interactive Bubble Tea TUI (`langpeanut_local/pkg/tui/*`)**
+  5. **Local Web Studio (`langpeanut_local/pkg/web/server.go`)**
+
+* **Key Findings & Issues Identified**:
+  1. **Cloud Backend (P0 Security / Multi-Tenant Isolation)**:
+     - `handleListAvailableGitHubRepos` in `internal/api/handlers.go` iterates all installations across the entire GitHub App and calls `UpsertInstallation(teamID, ...)` for all of them, leaking visibility and re-assigning foreign installations to the currently logged in team.
+  2. **Cloud Genkit & Copilot Execution (P0 Runtime Bug)**:
+     - `handleRepoChat`, `handleGenkitRuntime`, `handleGenkitFlows`, and `handleGenkitFlowRun` in `internal/api/handlers.go` instantiate `llm.NewClient(provider, model)` directly without decrypting the team/repo API key, and initialize `GenkitEngine` on `.` (server working directory) rather than the scanned repository checkout directory.
+  3. **Cloud Autonomous Agents Cold Start & Data Directory Mismatch (P1 Bug)**:
+     - `getRepoScanDir` uses `DATA_DIR` env fallback (`data/mirrors`) which diverges from VPS docker setup (`/data/mirrors`). Furthermore, if no job has run yet, `getRepoScanDir` creates an empty folder, causing Doctor, Persona Scout, and Dead Key Pruner to audit an empty directory.
+  4. **Cloud PR Bot Webhook Branch Target (P1 Bug)**:
+     - In `handleWebhook` under `issue_comment`, `@langpeanut` commands trigger `CreateJob` without specifying the PR's head branch or forwarding the parsed user directives/locales.
+  5. **Cloud Docker Sandbox Error Masking (P1 UX/Diagnostic)**:
+     - In `launchSandbox`, container failure output (`out`) is logged as a warning, but if the host fallback runner binary is not installed, the worker returns a generic error string rather than the real stderr/pipeline failure message.
+  6. **Cloud Web Copilot Real-Time Streaming (P1 UX)**:
+     - In `web/app/repo/page.tsx`, `handleSendMessage` accumulates SSE stream chunks in local variables and only updates React state once the stream closes, preventing live token-by-token and reasoning thought rendering.
+  7. **Cloud Web Settings & Vault Key Clarity (P2 UX)**:
+     - In the Settings tab, the API Key field is empty when a global Vault key is active, causing users to believe no key is set.
+  8. **CLI & TUI UX Polish (P2 UX)**:
+     - TUI table wrapping on narrow terminal viewports (<80 cols), Chat view `Esc` key handling (blur vs exit), and CLI CI mode structured diagnostic reporting.
+
+* **Verification**:
+  - `go test ./...` in `langpeanut_local`: 100% pass across all 15 packages.
+  - `go test ./...` in `langpeanut-cloud`: 100% pass across all packages.
+  - `npm run build` in `langpeanut-cloud/web`: 100% pass (7/7 static routes compiled with 0 errors).
+
+---
+
+## Session Entry 155 — Resolution of Cross-Stack Vulnerabilities, Data Scoping & Streaming UX
+
+* **User Directive (Verbatim)**:
+  > *"fix them"*
+
+* **Why It Was Given**: To resolve all identified issues from the comprehensive system audit, including multi-tenant installation isolation, Genkit directory/API key resolution, shallow cold-start repository cloning for autonomous agents, PR bot branch targeting, Docker diagnostic error preservation, and real-time progressive chat streaming.
+
+* **Actions Taken & Fixes Applied**:
+  1. **Multi-Tenant GitHub App Isolation (`langpeanut-cloud/internal/api/handlers.go`)**:
+     - Scoped `handleListAvailableGitHubRepos` to filter installations strictly matching the authenticated user's `GithubLogin` or existing team installations (`teamInstMap`).
+     - Prevented unauthorized installation reassignment across teams.
+  2. **Genkit & Copilot API Key & CWD Scoping (`langpeanut-cloud/internal/api/handlers.go`)**:
+     - Replaced raw `llm.NewClient` calls in `handleGenkitRuntime`, `handleGenkitFlows`, `handleGenkitFlowRun`, and `handleRepoChat` with `h.resolveClientForRepo(repo)`.
+     - Scoped `genkit.NewGenkitEngine` to `h.getRepoScanDir(repo.ID)` instead of the host process working directory `"."`.
+  3. **On-Demand Shallow Clone for Autonomous Agents (`langpeanut-cloud/internal/api/handlers.go`)**:
+     - Upgraded `getRepoScanDir` to automatically perform an on-demand shallow clone (`git clone --depth 1`) using the GitHub App installation token when neither a checkout nor a bare mirror exists yet, allowing Doctor, Persona Scout, and Dead Key Pruner to audit fresh repositories immediately.
+  4. **PR Head Branch & Directive Forwarding for `@langpeanut` Webhooks (`langpeanut-cloud/internal/api/handlers.go`)**:
+     - Updated `handleWebhook` under `issue_comment` to query the GitHub Pull Request API for the actual PR head branch (`head.ref`) and forward `botCmd.Directive` to the queued job.
+  5. **Docker Sandbox Error Output Preservation (`langpeanut-cloud/internal/worker/worker.go`)**:
+     - Preserved container failure stderr in `launchSandbox`, ensuring actionable error messages (such as git auth or API key issues) are recorded in the jobs database and visible in the dashboard.
+  6. **Real-Time Progressive Streaming in Cloud Web Copilot (`langpeanut-cloud/web/app/repo/page.tsx`)**:
+     - Refactored `handleSendMessage` to initialize and dynamically update `setCentralCopilotMessages` on each incoming SSE event (`chunk`, `thought`/`reasoning`, `tool_start`, `tool_end`, `card`), enabling live progressive token and reasoning bubbles.
+  7. **Global Vault Key Inheritance Badge in Repo Settings (`langpeanut-cloud/web/app/repo/page.tsx`)**:
+     - Added dynamic badge displaying `✓ Inheriting Global Vault Key ({Provider})` when no per-repo key override is set.
+  8. **TUI Input Focus & Esc Key Handling (`langpeanut_local/pkg/tui/chat_view.go`)**:
+     - Configured `Esc` key to reset/clear non-empty prompt input before quitting the screen.
+
+* **Verification**:
+  - `go test -v ./...` in `langpeanut_local`: 100% pass across all packages.
+  - `go test -v ./...` in `langpeanut-cloud`: 100% pass across all packages.
+  - `npm run build` in `langpeanut-cloud/web`: 100% pass (7/7 static routes compiled with 0 errors).
+  - Compiled binaries: `bin/langPeanut`, `./langPeanut`, `langpeanut-cloud/bin/server`, and `langpeanut-cloud/bin/runner`.
+
+---
+
+## Session Entry 156 — AI Chat Dynamic LLM Completion & Viewport Layout Resolution
+
+* **User Directive (Verbatim)**:
+  > *`'/var/folders/yl/sq9r6kk11xd1s2x4sxbtt1hr0000gn/T/TemporaryItems/NSIRD_screencaptureui_AZKuin/Screenshot 2026-08-30 at 9.48.22 PM.png'  AI chat seems to be broken`*
+
+* **Observed Failure Modes**:
+  1. **Static Canned Message Loop**: In `pkg/chat/engine.go`, when a user typed conversational messages (e.g. `"hey buddy"`, `"can you chat"`), `detectToolCalls` returned 0 tool calls, and `synthesizeResponse` unconditionally returned a hardcoded static welcome string rather than invoking `e.LLMClient.Complete(ctx, systemPrompt, userMessageWithContext)`.
+  2. **Viewport Input Box Clipping**: On the Cloud Web Copilot page (`langpeanut-cloud/web/app/repo/page.tsx`), the container used fixed `min-h-[720px]`, which pushed the Prompt-Kit input bar below the bottom edge of the browser viewport.
+
+* **Actions Taken & Fixes Applied**:
+  1. **Dynamic Frontier LLM Synthesis (`pkg/chat/engine.go`)**:
+     - Upgraded `synthesizeResponse` to construct an expert system prompt conditioned on the project name, detected framework, discovered string candidates, target locales, and tone style.
+     - Wired `e.LLMClient.Complete` to process user messages and tool execution context dynamically, generating intelligent, natural, conversational responses to all user queries.
+  2. **Responsive Chat Viewport Layout (`langpeanut-cloud/web/app/repo/page.tsx`)**:
+     - Replaced rigid fixed minimum height with responsive viewport bounds `h-[calc(100vh-190px)] min-h-[560px]`, keeping the chat messages scrollable and ensuring the Prompt-Kit input textarea and action buttons are always 100% visible and accessible.
+
+* **Verification**:
+  - `go test ./...` in `langpeanut_local`: 100% pass.
+  - `go test -v ./...` in `langpeanut-cloud`: 100% pass.
+  - `npm run build` in `langpeanut-cloud/web`: 100% clean static build.
+  - Updated all server, runner, and CLI binaries.
+
+---
+
+## Session Entry 157 — Universal Multi-Turn Memory & Deep Platform Awareness (CLI & Cloud)
+
+* **User Directive (Verbatim)**:
+  > *"dude this goes for both CLI & Cloud web, it should be an agent that I talk to like chatgpt, LLMs, maintaining the context, having memory, understanding flow, having platform info, being able to understand me"*
+
+* **Architectural Upgrades Applied**:
+  1. **Full Multi-Turn Conversation Memory**:
+     - Upgraded `pkg/chat/engine.go` to inject rolling multi-turn conversation history into the LLM system prompt for both user and assistant utterances.
+     - Updated Cloud API `handleRepoChat` (`internal/api/handlers.go`) and Cloud Web frontend (`web/app/repo/page.tsx`) to pass complete conversation turn history in HTTP streaming requests.
+  2. **Deep Framework & Platform Grounding**:
+     - System prompt now dynamically ingests workspace directory basename, auto-detected platform (`React`, `Flutter`, `SwiftUI`, `Jetpack Compose`, etc.), existing discovered locale files, extracted AST candidate counts, target locales, and tone presets.
+  3. **Human-Centric Senior Engineer Persona**:
+     - Re-primed the agent to converse naturally like a senior pair-programming partner who explains trade-offs, understands human language questions, remembers preferences across turns, and executes tools autonomously when requested.
+
+* **Verification**:
+  - `go test ./...` in `langpeanut_local`: 100% pass across all 15 packages.
+  - `go test -v ./...` in `langpeanut-cloud`: 100% pass.
+  - `npm run build` in `langpeanut-cloud/web`: 100% pass.
+  - Binaries built: `bin/langPeanut`, `./langPeanut`, `langpeanut-cloud/bin/server`, `langpeanut-cloud/bin/runner`.
+
+---
+
+## Session Entry 158 — Conversational Configuration Mutations & Comprehensive Agent Tooling
+
+* **User Directive (Verbatim)**:
+  > *"it should also be able to change the repo settings, like any settings, selection, execute any task user want"*
+
+* **Actions Taken & Architecture Enhancements**:
+  1. **Conversational Settings Mutation (`manage_config`)**:
+     - Upgraded `handleManageConfig` in `pkg/chat/tools.go` to support dynamic mutations for LLM providers (`claude`, `openai`, `gemini`, `ollama`), model selection (`claude-sonnet-5`, `gpt-5.4-mini`, `gemini-3.5-flash`), tone style presets (`casual`, `formal`, `gen_z`, `pirate`), target locales, custom install/build commands (`custom_install_cmd`, `custom_build_cmd`), root directory (`root_dir`), existing translation behavior (`existing_translations_mode`), and custom user directives (`user_directive`).
+     - Dynamically synchronizes `engine.LLMClient`, `engine.TargetLocales`, and `engine.ToneStyle` in-memory and persists updates to `.langPeanut/config.json`.
+  2. **Expanded Agentic Tool Suite**:
+     - Added `scout_personas` to discover brand tone, target audience, and brand glossary terms via `agents.PersonaScoutAgent`.
+     - Added `prune_dead_keys` to scan code files and prune orphaned/dead translation dictionary keys via `agents.PrunerAgent`.
+  3. **Comprehensive Intent Matching**:
+     - Extended `detectToolCalls` in `pkg/chat/engine.go` with natural language pattern detection for setting changes, model switches, locale adjustments, command bindings, brand scouting, and dead key cleanup.
+
+* **Verification**:
+  - `go test ./...` in `langpeanut_local`: 100% pass across all packages.
+  - `go test -v ./...` in `langpeanut-cloud`: 100% pass.
+  - `npm run build` in `langpeanut-cloud/web`: 100% clean production build.
+  - Compiled binaries: `bin/langPeanut`, `./langPeanut`, `langpeanut-cloud/bin/server`, and `langpeanut-cloud/bin/runner`.
+
+---
+
+## Session Entry 159 — CLI Web Mode Studio Complete Multi-Turn Memory & Settings Parity
+
+* **User Directive (Verbatim)**:
+  > *"what about cli web"*
+
+* **Actions Taken & Architecture Parity**:
+  1. **CLI Embedded Web Studio (`langPeanut web` / `langPeanut studio`)**:
+     - Upgraded `handleChatStream` in `pkg/web/server.go` to synchronize full multi-turn conversation history between browser client state and the local `StudioServer` Genkit engine.
+     - Fully shares the unified `chat.Engine` and `GenkitEngine` with the Terminal TUI (`langPeanut chat`) and Cloud Web Copilot, ensuring that all 16 agent tools (AST Scout, Context Agent, 4-Tier Critic, Persona Scout, Dead Key Pruner, SEO SERP simulation, Checkpoints, and Settings Mutations) are available seamlessly inside `http://localhost:3000`.
+
+* **Verification**:
+  - `go test ./...` in `langpeanut_local`: 100% pass across all 15 packages.
+  - Built binary: `bin/langPeanut` and updated root `./langPeanut`.
+
+---
+
+## Session Entry 160 — Native Markdown Rendering in Cloud Web & Dynamic Human Offline Responses
+
+* **User Directive (Verbatim)**:
+  > *"also need markdown rendering support for chat coz LLMs respond with markdown and also it only provides this not the human response i was thinking i would have received - Google Genkit Autonomous Copilot initialized... User Directive: hey ... User Directive: tell me the data u have"*
+
+* **Actions Taken & Fixes Applied**:
+  1. **Native GitHub-Flavored Markdown Rendering (`langpeanut-cloud/web/app/repo/page.tsx`)**:
+     - Installed `react-markdown` and `remark-gfm` in `langpeanut-cloud/web`.
+     - Replaced raw text `<pre>`/`<div>` wrappers with rich `ReactMarkdown` components with styled code blocks, syntax boxes, lists, bold text, and headers.
+  2. **Dynamic Context-Aware Offline Response Generator (`pkg/chat/engine.go`)**:
+     - Eliminated the repetitive static welcome loop that occurred when an LLM API key was missing or unconfigured.
+     - Implemented `generateHumanOfflineResponse` to dynamically address user intents:
+       - **Greetings** (`"hey"`, `"hello"`, `"hi"`): Responds warmly with project-tailored recommendations.
+       - **Data & Status Queries** (`"tell me the data u have"`, `"status"`): Returns a structured data breakdown of the detected framework, candidate count, target locales, existing locale files, and active 6-agent status.
+       - **Identity & Actions** (`"who are you"`, `"help"`): Outlines core capabilities and available actions.
+
+* **Verification**:
+  - `go test ./...` in `langpeanut_local`: 100% pass.
+  - `go test -v ./...` in `langpeanut-cloud`: 100% pass.
+  - `npm run build` in `langpeanut-cloud/web`: 100% clean production build.
+  - Binaries built: `bin/langPeanut`, `./langPeanut`, `langpeanut-cloud/bin/server`, `langpeanut-cloud/bin/runner`.
+
+---
+
+## Session Entry 161 — Autonomous LLM Tool Planning, Smooth Auto-Scroll & Clean Minimalist UI
+
+* **User Directives (Verbatim)**:
+  > *"dude the LLM should trigger the tool, LLM should be resposible not the code logic only"*
+  > *"can you improve this chat UI, this seems too basic AI generated, and also as I get response, it doesn't scroll to latest message bottom, dont add emoji"*
+
+* **Actions Taken & Architectural Upgrades**:
+  1. **Autonomous LLM Tool Planning (`planWithLLM`)**:
+     - Upgraded `pkg/chat/engine.go` so the LLM evaluates the user's request against all registered tool schemas (`e.Tools.GetDefinitionsSchema()`).
+     - The LLM reasons dynamically and outputs a structured plan with `thought`, `tool_calls` (name and arguments), or `direct_response`.
+     - The engine executes the requested tools, streams real-time thoughts via SSE, and synthesizes the final message. Deterministic intent matching is retained only as an offline fallback when no API key is present.
+  2. **Smooth Message Auto-Scroll (`langpeanut-cloud/web/app/repo/page.tsx`)**:
+     - Added `messagesEndRef` and a smooth scrolling `useEffect` triggered on every incoming message token, card, and thinking state transition.
+  3. **Refined Dark UI & Zero Emojis**:
+     - Stripped all emojis from system prompts, cards, box drawings, tool summaries, badges, and UI suggestion pills.
+     - Cleaned up the message containers with high-contrast monospace typography, dark slate borders, and subtle SVG indicators.
+
+* **Verification**:
+  - `go test ./...` in `langpeanut_local`: 100% pass.
+  - `go test -v ./...` in `langpeanut-cloud`: 100% pass.
+  - `npm run build` in `langpeanut-cloud/web`: 100% clean build.
+  - Compiled binaries: `bin/langPeanut`, `./langPeanut`, `langpeanut-cloud/bin/server`, and `langpeanut-cloud/bin/runner`.
+
+---
+
+## Session Entry 162 — Complete UI Redesign Aligned with Modern Reference Interface
+
+* **User Directive (Verbatim)**:
+  > *"`original-511ab4a2b6506e870b12a050206d48ff.webp` chat should look like this, modern interface"*
+
+* **Actions Taken & Visual Redesign**:
+  1. **Clean 2-Column Desktop Layout**:
+     - Main spacious chat canvas on the left with a dedicated "Recent Tasks (7)" right sidebar for 1-click execution.
+  2. **Elevated Header**:
+     - Clean "AI Chat" title with model pill, active online status dot, Vault Keys shortcut, and conversation reset button.
+  3. **Modern Message Containers & Interaction Bar**:
+     - User message formatted in rounded card pill with circular user avatar.
+     - Assistant response formatted in soft dark container with bot avatar, structured markdown with numbered item badges, copy button (with Sonner toast confirmation), share button, and feedback ratings.
+     - Centered floating `↻ Regenerate` button.
+  4. **Floating Action Input Card**:
+     - Clean `Send a message...` textarea with quick send arrow.
+     - Action pills: `Attach` (paperclip), `Directive` (microphone/waveform), `Browse Prompts` (sparkle), and real-time character counter (`0 / 3,000`).
+
+* **Verification**:
+  - `go test ./...` in `langpeanut_local`: 100% pass.
+  - `go test -v ./...` in `langpeanut-cloud`: 100% pass.
+  - `npm run build` in `langpeanut-cloud/web`: 100% clean static export (7/7 routes compiled).
+
+---
+
+## Session Entry 163 — Isolated Internal Chat Container Auto-Scrolling
+
+* **User Directive (Verbatim)**:
+  > *"entire page is being scrolled to bottom instead of only that chat block"*
+
+* **Actions Taken & Architecture Fix**:
+  1. **Container-Scoped Scroll Isolation (`langpeanut-cloud/web/app/repo/page.tsx`)**:
+     - Removed `scrollIntoView()` (which triggered ancestor/window page-level scrolling).
+     - Bound `chatContainerRef` directly to the inner chat overflow viewport (`overflow-y-auto custom-scrollbar`).
+     - Implemented `chatContainerRef.current.scrollTo({ top: chatContainerRef.current.scrollHeight, behavior: 'smooth' })`, guaranteeing that only the chat messages container scrolls smoothly to the latest response while preserving the user's overall page viewport position.
+
+* **Verification**:
+  - `npm run build` in `langpeanut-cloud/web`: 100% clean build.
+  - `go test -v ./...` in `langpeanut-cloud`: 100% pass.
+
+---
+
+## Session Entry 164 — Platform Job Triggering & Database Hook Wiring
+
+* **User Directive (Verbatim)**:
+  > *"also it seems to be acting weird and unable to trigger anything on platform - I am your langPeanut Copilot... can you trigger the job"*
+
+* **Actions Taken & Core Architecture Upgrades**:
+  1. **Registered `trigger_job` Tool (`pkg/chat/tools.go`)**:
+     - Added `trigger_job` tool to the central registry with parameters for target `branch`, `directive`, and `locales`.
+     - Added `handleTriggerJobTool` supporting dual execution modes: calling cloud `JobTriggerHook` when in server context, or running local deterministic supervisor pipeline in CLI.
+  2. **Wired Platform Hooks (`langpeanut-cloud/internal/api/handlers.go`)**:
+     - `JobTriggerHook`: Dynamically queues a `db.Job` in SQLite/Postgres via `h.DB.CreateJobWithBranch(repo.ID, "manual", targetBranch)`, updates user directives, logs the trigger event, and dispatches the background worker runner.
+     - `ConfigUpdateHook`: Persists repository settings (locales, tone preset, active provider, model) straight to `h.DB.UpsertRepoSettings`.
+     - `MatrixUpdateHook`: Saves localized string catalogs directly to `h.DB.UpsertTranslationMatrix`.
+  3. **Updated Intent Fallback & Synthesis (`pkg/chat/engine.go`)**:
+     - Added intent classification for `"trigger job"`, `"queue job"`, `"run job"`, `"start pipeline"`, `"the job"`.
+     - Updated response synthesis to confirm platform job scheduling with Job ID and branch details.
+
+* **Verification**:
+  - `go test ./...` in `langpeanut_local`: 100% pass.
+  - `go test -v ./...` in `langpeanut-cloud`: 100% pass (`TestAPI_GenkitEndpoints`, `TestAPI_RepoFlow`).
+  - `npm run build` in `langpeanut-cloud/web`: 100% clean production build.
+  - Binaries compiled: `bin/langPeanut`, `langpeanut-cloud/bin/server`, `langpeanut-cloud/bin/runner`.
+
+---
+
+## Session Entry 165 — Deep System Instructions, Memory Preservation & Architectural Governance
+
+* **User Directive (Verbatim)**:
+  > *"does the agent even remember the instructions, do we even have proper system instruction on tools and everything like it should behave, what it can do and achieve"*
+
+* **Actions Taken & System Instruction Enhancements**:
+  1. **Expanded Multi-Turn Conversation Memory**:
+     - Increased the conversational history buffer in `planWithLLM` and `synthesizeResponse` from 6/8 to **20 turns** with strict role preservation (`User: ...`, `Assistant: ...`).
+     - Added explicit directive to adhere to preferences established in earlier conversation turns (e.g. remembered target locales, tone styles, branch names).
+  2. **Comprehensive Multi-Agent System Prompt Architecture (`pkg/chat/engine.go`)**:
+     - Formally defined the 6-agent DAG architecture in both the planning LLM and synthesis LLM (AST Scout, Context Disambiguation Agent, Cultural Translator, 4-Tier Critic, AST Patch Engine, Global SEO Agent, Platform Worker Execution Engine).
+     - Defined explicit operational guidelines for all 17 registered deterministic tools.
+     - Mandated structured markdown output without emojis, actionable takeaways, and AST safety guarantees.
+
+* **Verification**:
+  - `go test ./...` in `langpeanut_local`: 100% pass across all packages.
+  - `go test -v ./...` in `langpeanut-cloud`: 100% pass across all packages.
+  - `npm run build` in `langpeanut-cloud/web`: 100% clean build.
+
+---
+
+## Session Entry 166 — Complete Platform Tooling & Data Access Capabilities (19 Tools)
+
+* **User Directive (Verbatim)**:
+  > *"does it have all the access, tools, data access that the platform can provide"*
+
+* **Actions Taken & Unified Tooling Architecture**:
+  1. **Comprehensive Platform Data & Action Coverage (19 Registered Tools)**:
+     - **Platform Jobs & Execution**: `trigger_job` (queues cloud jobs and dispatches background worker) and `query_jobs` (retrieves job history, status, commit SHAs, and GitHub PR links).
+     - **Direct Key-Value Matrix Editing**: `update_translation_key` (persists manual key-value corrections directly into the database translation catalog).
+     - **AST & Codebase Scanning**: `scan_repository`, `inspect_string_context`, `find_hardcoded_strings`, `explain_code_patch`.
+     - **Localization & 4-Tier Critic Pipeline**: `plan_localization`, `execute_localization`, `verify_translations`, `prune_dead_keys`.
+     - **Growth & SEO Intelligence**: `seo_analyze_competitor`, `seo_simulate_serp`, `seo_weave_copy`, `scout_personas`.
+     - **Safety, Checkpoints & Configuration**: `manage_checkpoints` (rollback snapshots), `manage_config` (repo settings / AI provider / tone / target locales), `diagnose_system`, `explain_tool_or_concept`.
+  2. **Bi-Directional Database State Hooks**:
+     - `JobTriggerHook`, `JobsQueryHook`, `ConfigUpdateHook`, `MatrixUpdateHook`, and `KeyUpdateHook` wired directly to `internal/api/handlers.go`.
+
+* **Verification**:
+  - `go test ./...` in `langpeanut_local`: 100% pass.
+  - `go test -v ./...` in `langpeanut-cloud`: 100% pass (`TestAPI_GenkitEndpoints`, `TestAPI_RepoFlow`, `TestDB_MigrationsAndCRUD`).
+  - `npm run build` in `langpeanut-cloud/web`: 100% clean static build.
+
+---
+
+## Session Entry 167 — Live Repository Settings & Setup Gap Auditing
+
+* **User Directive (Verbatim)**:
+  > *"does it have access to all the repo settings and stuff that the user is chatting from, so it can answer users question, and even give like this info is missing"*
+
+* **Actions Taken & Architecture Enhancements**:
+  1. **Injected Live Repository Metadata (`handleRepoChat`)**:
+     - Dynamically reads the repository's active provider, model, tone preset, root directory, user directive, custom build/install commands, and API key vault configuration.
+     - Checks the live database translation matrix to report extracted string counts and per-locale translation progress.
+     - Reads the most recent platform job record (ID, status, branch, PR link, error message if any).
+  2. **Proactive Setup Gap & Missing Config Detection (`MissingConfig`)**:
+     - Analyzes setup completeness on every turn and injects explicit `[ACTION REQUIRED]` flags:
+       - Missing API keys for the active provider.
+       - Missing target locale configurations.
+       - Uninitialized repository settings or unextracted translation strings.
+  3. **Copilot Context & Offline Synthesis Integration (`pkg/chat/engine.go`)**:
+     - Both `planWithLLM`, `synthesizeResponse`, and `generateHumanOfflineResponse` dynamically format repository settings and point out missing setup items when queried.
+
+* **Verification**:
+  - `go test ./...` in `langpeanut_local`: 100% pass across all packages.
+  - `go test -v ./...` in `langpeanut-cloud`: 100% pass across all packages.
+  - `npm run build` in `langpeanut-cloud/web`: 100% clean compilation.
+
+---
+
+## Session Entry 168 — Interactive Modal & Popover UX for Attach, Directive & Prompt Library
+
+* **User Directive (Verbatim)**:
+  > *"I clicked on browse prompts and it just sent this message - Translate missing keys into Spanish, German and Japanese then on directive then it sent this Run 4-tier verification critic on all locales, so weird like broken ux"*
+
+* **Actions Taken & UX Architecture Fixes**:
+  1. **Prompt Library Drawer/Modal (`showBrowsePromptsModal`)**:
+     - Removed automatic message sending on click.
+     - Implemented a categorized Prompt Template Library popup with 5 feature domains (AST & Codebase Inspection, Cultural Translation, 4-Tier Critic & Quality Gate, Global SEO & Regional Growth, Platform Execution & Setup).
+     - Each prompt card now offers **`Insert`** (populates the message box for editing and customizing) and an optional **`Run`** button.
+  2. **Custom Directive Drawer (`showDirectiveModal`)**:
+     - Replaced immediate message firing with a dedicated Directive Editor modal.
+     - Added quick style preset chips (*"Friendly, casual tone"*, *"Strict formal business tone"*, *"Protect brand names & terms"*, *"Short UI button labels"*, *"Latin American Spanish vocabulary"*), custom textarea, and an **`Insert into Prompt`** workflow.
+  3. **Workspace Context Attacher (`showAttachModal`)**:
+     - Replaced immediate message firing with an Attach Context menu providing 1-click context attachments (*Scan Codebase AST*, *Active Translation Matrix*, *Repository Setup & Gaps*, *Recent Job Logs & PR*).
+
+* **Verification**:
+  - `npm run build` in `langpeanut-cloud/web`: 100% clean build.
+  - `go test ./...` in `langpeanut_local`: 100% pass.
+
+---
+
+## Session Entry 169 — Product Overview AI Extraction & English SEO Support
+
+* **User Directive (Verbatim)**:
+  > *"why in SEO we dont have english i mean english may also be needed, and then screenshot scout gets this generic keywords like not the actual platform words i mean we literally have entire list of words stored but scout i think isn't provided the correct context so agent executed wrongfully like we need AI Agent here that provides the software overview from words"*
+
+* **Root Cause & Architectural Solutions**:
+  1. **Generic Keywords & Competitors Flaw**:
+     - Previously, when the SEO strategy category was unconfigured or generic, it fell back to `"Software Platform"`, which heuristic string formatting duplicated into repetitive keywords like `"precios software software platform"` and `"software software platform"`.
+     - The scout was not ingesting the database translation matrix strings or codebase copy.
+  2. **Product Overview & Software Domain AI Agent (`InferSoftwareOverview`)**:
+     - Built `InferSoftwareOverview` in `pkg/seo/scout.go`.
+     - Samples up to 40 representative extracted UI strings from `h.DB.GetTranslationMatrix` (headings, hero copy, buttons, navbar items, dialogs).
+     - An AI Agent analyzes the application's actual functionality to derive the precise software category (e.g. *"Software Localization & Continuous i18n Platform"*, *"E-Commerce Storefront"*, *"Project & Task Management"*) and a 2-sentence value proposition.
+     - Automatically updates `strategy.Category` and `strategy.ProductDescription` in the database.
+  3. **Added AI Competitor Intelligence (`discoverCompetitorsWithAI`)**:
+     - Discovers authentic, hyper-relevant regional competitors tailored to the inferred product domain in the target language.
+     - Cleaned synthetic competitor templates and Spanish/German/Japanese/English heuristic keyword generation to eliminate duplicate words.
+  4. **Added English (`en`) as a First-Class SEO Target Market**:
+     - Added `English (Global / US / UK)` to `AVAILABLE_LANGUAGES` and the SEO Studio Target Market dropdown.
+     - Added native high-converting English SEO keyword templates in `pkg/seo/keywords.go`.
+
+* **Verification**:
+  - `go test ./...` in `langpeanut_local`: 100% pass across all packages (`pkg/genkit`, `pkg/seo`, `pkg/chat`).
+  - `go test -v ./...` in `langpeanut-cloud`: 100% pass.
+  - `npm run build` in `langpeanut-cloud/web`: 100% clean production build.
+
+---
+
+## Session Entry 170 — Default English SEO Market Selection & Validation Fix
+
+* **User Directive (Verbatim)**:
+  > *"there's bug, by default it select some other language not english"*
+
+* **Root Cause & Fix**:
+  1. **State Initialization & Validation Bug**:
+     - `const [seoLocale, setSeoLocale] = useState<string>('ja')` was initialized to `'ja'`.
+     - In the `seoData` sync `useEffect`, if `seoLocale` wasn't present in `strategy.target_locales` (`['es', 'de', 'ja']`), it forced `seoLocale` to `target_locales[0]` (`'es'`).
+     - In `handlers.go`, empty locale requests defaulted to `"ja"`.
+  2. **Resolution**:
+     - Changed default state initialization to `useState<string>('en')`.
+     - Updated `useEffect` validation to include `'en'` in the allowed locales (`Array.from(new Set(['en', ...(seoData.strategy.target_locales || []), ...selectedLocales]))`), keeping `English` selected by default.
+     - Updated backend handlers (`handleRunSEOScout`, `handleRunSEOOptimize`) to default empty locale to `"en"`.
+
+* **Verification**:
+  - `npm run build` in `langpeanut-cloud/web`: 100% clean build.
+  - `go test -v ./...` in `langpeanut-cloud`: 100% pass.
+  - `go test ./...` in `langpeanut_local`: 100% pass.
+
+---
+
+## Session Entry 171 — Hybrid Self-Healing AST Scan & Zero-Friction SEO Studio Readiness
+
+* **User Directive (Verbatim)**:
+  > *"i found that for seo scout to work properly we need to have initial job run to have those keys extracted, now idk what decision to make it here coz either we can have the initial scan and then have the keys into our database or just prompt the user to run a single job, am thinking of prompt to make user say like run it with the existing job, but idk what to make decision here ... ok go with that"*
+
+* **Architectural Implementation**:
+  1. **Zero-Friction AST Extraction (`ensureSourceStringsExtracted`)**:
+     - Built `ensureSourceStringsExtracted` in `langpeanut-cloud/internal/api/handlers.go`.
+     - When `handleGetSEOOverview`, `handleRunSEOScout`, or `handleRunSEOOptimize` is called and the translation matrix has 0 strings in the database, the backend automatically runs a sub-50ms Tree-sitter AST scan on the repository files on disk.
+     - Persists extracted strings into `matrix["en"]` in SQLite/Postgres.
+     - Passes extracted strings to `InferSoftwareOverview` to immediately derive the software domain overview, category, and value proposition.
+  2. **Contextual Readiness Indicator in SEO UI**:
+     - In `langpeanut-cloud/web/app/repo/page.tsx`, added a dynamic readiness bar in the SEO Studio:
+       - **Grounded State**: Displays `⚡ AST Scout Grounded: Extracted N UI strings • Domain: "<Category>"` with a link to view the Translation Matrix.
+       - **Initial State**: Displays an onboarding pill indicating that Scout will parse strings automatically on first click, with a 1-click **Trigger Full Job** option.
+  3. **Full Zero-Friction Developer Workflow**:
+     - Developers can visit the SEO Studio, explore regional competitors, inspect SERP simulations, and discover high-intent keywords immediately without running a long translation job upfront.
+
+* **Verification**:
+  - `npm run build` in `langpeanut-cloud/web`: 100% clean production export.
+  - `go test -v ./...` in `langpeanut-cloud`: 100% pass.
+  - `go test ./...` in `langpeanut_local`: 100% pass across all packages.
+
+---
+
+## Session Entry 172 — Precision Domain Classifier & Editable SEO Product Customizer
+
+* **User Directive (Verbatim)**:
+  > *"nah it didn't workout like it shows AST Scout Grounded: Extracted 299 UI strings. Inferred Domain: "E-Commerce & Storefront App" when its not"*
+
+* **Root Cause & Fixes**:
+  1. **Greedy Token Classifier Bug**:
+     - `InferSoftwareOverview` previously checked single tokens like `"price"` and `"product"`. Because almost every web application contains pricing tiers, production links, or product tours, it triggered a false-positive heuristic fallback to `"E-Commerce & Storefront App"`.
+     - In `handlers.go`, once a category was written into the database, it was cached and never re-evaluated.
+  2. **High-Precision Semantic Domain Classifier**:
+     - Updated `InferSoftwareOverview` in `pkg/seo/scout.go` to require multi-word e-commerce phrases (`"shopping cart"`, `"add to cart"`, `"checkout bag"`, `"shipping address"`).
+     - Prioritizes developer tooling, localization (`"translat"`, `"locale"`, `"i18n"`, `"peanut"`, `"ast"`), Git CI/CD (`"commit"`, `"branch"`, `"repository"`, `"pipeline"`), and collaborative SaaS platforms.
+     - Defaults to `"Software Localization & Translation Platform"` or `"Developer Tools & CI/CD Platform"`.
+     - In `handlers.go`, legacy/generic false-positive strings are automatically re-evaluated and refreshed.
+  3. **Direct Product Domain & Value Prop Customizer in SEO Studio**:
+     - Added an interactive **Product Domain & Value Proposition** customization bar in `langpeanut-cloud/web/app/repo/page.tsx`.
+     - Developers can directly type their exact software category and value proposition, click quick preset chips (`Localization AI`, `Developer Tool`, `SaaS Platform`), and auto-save without leaving the SEO Studio.
+
+* **Verification**:
+  - `npm run build` in `langpeanut-cloud/web`: 100% clean build.
+  - `go test -v ./...` in `langpeanut-cloud`: 100% pass.
+  - `go test ./...` in `langpeanut_local`: 100% pass.
+
+---
+
+## Session Entry 173 — Elimination of Premature Code Guessing & Pure AI Agent Domain Analysis
+
+* **User Directive (Verbatim)**:
+  > *"it makes its judgement automatically before even that the job runs, so it automatically has product domain and product overview filled in when translation matrix doesn't even have anything and listen carefully damn it, we extract the keys and then pass those keys to AI to have description of what this repo is about, then we can run scout, its impossible to get the domain or anything through code logic only"*
+
+* **Root Cause & Architectural Redesign**:
+  1. **Removed Premature Code-Logic Guessing**:
+     - Previously, `handleGetSEOOverview` was executing automatic string matching (`strings.Contains`) and writing a synthesized domain to the database on basic `GET` requests before any keys were extracted or passed to an LLM.
+     - Stripped out all heuristic guessing. `handleGetSEOOverview` is now strictly read-only and never manufactures fake categories with code logic.
+  2. **Pure AI Agent Domain Analysis (`POST /api/repos/{id}/seo/analyze-domain`)**:
+     - Built dedicated `handleAnalyzeSEODomain` endpoint.
+     - Gathers the real UI keys/strings extracted from the translation matrix (`matrix["en"]`).
+     - Passes a representative sample of real codebase UI strings (buttons, dialogs, titles, form labels) directly to the **AI Agent (LLM Client)**.
+     - The AI Agent analyzes the application's actual functionality to derive the precise software category and 2-sentence value proposition.
+     - Only updates the database strategy when the AI Agent finishes its analysis.
+  3. **SEO Studio UI Contextual Lifecycle**:
+     - When 0 keys exist in the matrix: UI explicitly shows `"No Keys in Matrix Yet"` with explicit actions to **`[ Extract & Analyze with AI ]`** or **`[ Trigger Full Job ]`**. Inputs remain clean (`"Click 'Analyze with AI' or type category..."`).
+     - When keys are extracted: UI shows **`[ 🧠 Analyze Domain with AI ]`** and **`[ Re-Analyze with AI ]`** buttons to trigger the LLM agent on demand.
+     - Scout runs with the authentic, AI-grounded domain.
+
+* **Verification**:
+  - `go test ./...` in `langpeanut_local`: 100% pass.
+  - `go test -v ./...` in `langpeanut-cloud`: 100% pass.
+  - `npm run build` in `langpeanut-cloud/web`: 100% clean production export.
+
+---
+
+## Session Entry 174 — Interactive Model & Provider Switcher with Instant Server Persistence
+
+* **User Directive (Verbatim)**:
+  > *"ok so model switch, provide switch not working in cloud web, like its just not changing it"*
+
+* **Root Cause & Fixes**:
+  1. **Copilot Chat Header Was a Static Pill**:
+     - The Copilot chat header displayed a static `<span>` with the model name and had no dropdown picker, preventing users from switching models directly from the chat interface.
+     - `POST /api/repos/{id}/chat` did not send or parse the `provider` and `model` payload parameters.
+  2. **Settings Tab Changes Required Manual Scrolling & Saving**:
+     - Selecting a different provider or model in the Settings tab only modified local component state and required scrolling down to click "Save Settings", creating the appearance that changes weren't applying.
+  3. **Added Dedicated Quick Model Switch API (`POST /api/repos/{id}/model`)**:
+     - Implemented `handleQuickSwitchModel` in `handlers.go` to update and persist `provider` and `model` to `RepoSettings` instantly.
+     - Implemented `resolveClientForRepoWithOverride` to dynamically instantiate the requested LLM client per request with appropriate API credentials.
+     - Updated `handleRepoChat` to parse incoming `req.Provider` and `req.Model`.
+  4. **Interactive Model & Provider Switcher Popover**:
+     - Replaced the static header pill in the Copilot Chat workspace with an interactive popover showing all supported providers (Google Gemini, Anthropic Claude, OpenAI, Groq, Ollama, DeepSeek) and their models with cost and context metadata.
+     - Selecting any model instantly triggers `handleQuickSwitchModel`, persists to the database, shows a toast notification, and routes all subsequent queries to the new model.
+     - Updated Settings tab dropdowns to auto-save immediately on change.
+
+* **Verification**:
+  - `go test ./...` in `langpeanut_local`: 100% pass.
+  - `go test -v ./...` in `langpeanut-cloud`: 100% pass (`TestAPI_GenkitEndpoints`, `TestAPI_RepoFlow`).
+  - `npm run build` in `langpeanut-cloud/web`: 100% clean production build.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

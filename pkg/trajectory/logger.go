@@ -11,7 +11,7 @@ import (
 	"github.com/langPeanut/langPeanut/pkg/types"
 )
 
-// Logger records structured agent trajectories for the micro1 Hackathon submission
+// Logger records structured agent trajectories for the Hackathon submission
 type Logger struct {
 	mu          sync.Mutex
 	steps       []types.TrajectoryStep

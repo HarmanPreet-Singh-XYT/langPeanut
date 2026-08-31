@@ -1,6 +1,6 @@
 # REPRODUCE.md — Reproduction Guide
 
-> **micro1 Agentic Workflows Hackathon (Deliverable 02)**  
+> **Agentic Workflows Hackathon (Deliverable 02)**  
 > This guide walks reviewers and judges through setting up `langPeanut` from a clean environment, executing the solution, running the 10-case adversarial benchmark, and inspecting agent trajectories.
 
 ---
@@ -52,7 +52,7 @@ Run the automated evaluation harness comparing the Single-Prompt Zero-Shot Basel
 The `langPeanut` column is deterministic — it will always show 100.0% across all 10 cases, because the multi-agent pipeline's own AST-derived patches are validated before being counted. The **Regex Tool** column is live-measured every run (a real regex-only extractor is patched and re-parsed with the real tree-sitter grammars) and is expected to land around 20% — only the simplest single-string-literal cases survive naive text substitution unbroken. The **Baseline** column falls back to a labeled historical estimate (`42.0%`) without an API key:
 
 ```
-🚀 micro1 Hackathon — Running 10-Case Adversarial Benchmark Suite...
+🚀 Hackathon — Running 10-Case Adversarial Benchmark Suite...
 
 ┌────┬─────────────────────────────┬───────────┬──────────────┬──────────────┬──────────────┬──────────────┐
 │ #  │ Test Case Name              │ Framework │ Baseline Win │ Regex Tool   │ langPeanut   │ Token Saved  │
@@ -65,7 +65,7 @@ The `langPeanut` column is deterministic — it will always show 100.0% across a
 └────┴─────────────────────────────┴───────────┴──────────────┴──────────────┴──────────────┴──────────────┘
 
 🏆 Overall Multi-Agent Pass Rate: 100.0% (Zero-Shot Baseline: 42.0% [historical estimate — set GEMINI_API_KEY to measure live] | Naive Regex: 20.0% [measured live])
-✓ Trajectories exported to `/trajectories/` for micro1 Hackathon Deliverable 04.
+✓ Trajectories exported to `/trajectories/` for Hackathon Deliverable 04.
 ```
 
 With a working `GEMINI_API_KEY` in `.env`, the Baseline column becomes a real per-case Gemini call instead — expect it to be low (single-digit to double-digit percent) and to vary run-to-run, since it reflects genuine LLM non-determinism rather than a fixed number. Free-tier Gemini keys are rate-limited (~20 requests/minute); if you see `429` errors in that column's underlying calls, wait a minute between runs.

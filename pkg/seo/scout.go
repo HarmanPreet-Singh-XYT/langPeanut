@@ -74,6 +74,23 @@ func (s *SERPScoutAgent) ScoutLocale(ctx context.Context, strategy *SEOStrategy,
 		}
 	}
 
+	// 2.5. If search grounding returned fewer than 2 competitors and LLM is available, generate authentic AI competitor intelligence
+	if len(profiles) < 2 && s.LLMClient != nil {
+		aiComps, err := s.discoverCompetitorsWithAI(ctx, strategy, locale)
+		if err == nil && len(aiComps) > 0 {
+			for _, p := range aiComps {
+				if !seenDomains[p.Domain] {
+					p.Rank = len(profiles) + 1
+					profiles = append(profiles, p)
+					seenDomains[p.Domain] = true
+					if len(profiles) >= 3 {
+						break
+					}
+				}
+			}
+		}
+	}
+
 	// 3. If offline or no search returned, supply high-quality synthetic regional competitors
 	if len(profiles) == 0 {
 		profiles = s.generateSyntheticCompetitors(strategy, locale)
@@ -275,13 +292,138 @@ Find 3 top ranking competitor websites in this country. Return ONLY a valid JSON
 	return nil, fmt.Errorf("could not parse search grounded json")
 }
 
+// discoverCompetitorsWithAI generates realistic, domain-tailored competitor intelligence using LLM
+func (s *SERPScoutAgent) discoverCompetitorsWithAI(ctx context.Context, strategy *SEOStrategy, locale string) ([]CompetitorProfile, error) {
+	if s.LLMClient == nil {
+		return nil, fmt.Errorf("no llm client")
+	}
+
+	systemPrompt := fmt.Sprintf(`You are langPeanut Regional SERP & Competitor Intelligence Agent for locale "%s".
+Analyze the product, domain category ("%s"), and description to identify or synthesize 2 to 3 realistic, top-ranking competitor websites in this regional market.
+Return competitor profiles with authentic localized titles, meta descriptions, headings, keywords, and value propositions matching the target country and language.
+
+Return ONLY a valid JSON array matching:
+[
+  {
+    "url": "https://competitor.domain",
+    "domain": "competitor.domain",
+    "title": "Localized SEO Title",
+    "meta_description": "Localized meta description",
+    "h1s": ["Main value heading"],
+    "h2s": ["Feature heading"],
+    "keywords": ["specific regional keyword 1", "specific keyword 2"],
+    "value_props": ["Key differentiator 1", "Key differentiator 2"]
+  }
+]`, locale, strategy.Category)
+
+	userPrompt := fmt.Sprintf("Product: %s\nCategory: %s\nDescription: %s\nTarget Market: %s",
+		strategy.ProjectName, strategy.Category, strategy.ProductDescription, locale)
+
+	out, err := s.LLMClient.Complete(ctx, systemPrompt, userPrompt)
+	if err != nil {
+		return nil, err
+	}
+
+	cleanOut := ExtractJSONArray(out)
+	if cleanOut == "" {
+		cleanOut = strings.TrimSpace(out)
+	}
+
+	var comps []CompetitorProfile
+	if err := json.Unmarshal([]byte(cleanOut), &comps); err != nil || len(comps) == 0 {
+		return nil, fmt.Errorf("failed to parse AI competitor profiles: %w", err)
+	}
+
+	for i := range comps {
+		comps[i].IsDiscovered = true
+		if comps[i].Domain == "" && comps[i].URL != "" {
+			if u, err := url.Parse(comps[i].URL); err == nil {
+				comps[i].Domain = u.Hostname()
+			}
+		}
+	}
+	return comps, nil
+}
+
+// InferSoftwareOverview analyzes extracted UI strings using an AI Agent (LLM) to produce an accurate software domain category & description.
+// It strictly requires real extracted strings and an active LLM client; it never makes premature guesses via code logic.
+func InferSoftwareOverview(ctx context.Context, client llm.Client, projectName string, extractedStrings []string, defaultCategory, defaultDesc string) (string, string) {
+	// If user already specified an explicit category, preserve it
+	if defaultCategory != "" && defaultCategory != "Software Platform" {
+		return defaultCategory, defaultDesc
+	}
+
+	if client == nil || len(extractedStrings) == 0 {
+		return defaultCategory, defaultDesc
+	}
+
+	// Gather up to 50 distinct, representative UI strings from the extracted matrix
+	var sample []string
+	seen := make(map[string]bool)
+	for _, s := range extractedStrings {
+		s = strings.TrimSpace(s)
+		if s != "" && len(s) > 2 && len(s) < 250 && !seen[s] {
+			seen[s] = true
+			sample = append(sample, s)
+			if len(sample) >= 50 {
+				break
+			}
+		}
+	}
+
+	if len(sample) == 0 {
+		return defaultCategory, defaultDesc
+	}
+
+	systemPrompt := `You are an expert Software Product Analyst and SEO Domain Strategist.
+Analyze the following actual hardcoded UI strings, component labels, button actions, and dialog text extracted from an application codebase.
+Based SOLELY on these extracted UI strings, determine what this software application is, its specific product category, and a concise 2-sentence value proposition.
+
+OUTPUT FORMAT:
+Return ONLY a valid JSON object matching:
+{
+  "category": "Specific Software Product Category (e.g. 'Software Localization & Translation AI', 'Real-Time Team Collaboration Workspace', 'Fintech Asset Tracker')",
+  "description": "2-sentence product description explaining what the software does and its target users based on the UI copy."
+}`
+
+	userPrompt := fmt.Sprintf("Repository / Project Name: %s\nExtracted UI Strings (%d strings):\n- %s",
+		projectName, len(sample), strings.Join(sample, "\n- "))
+
+	out, err := client.Complete(ctx, systemPrompt, userPrompt)
+	if err != nil {
+		return defaultCategory, defaultDesc
+	}
+
+	cleanJSON := strings.TrimSpace(out)
+	if strings.HasPrefix(cleanJSON, "```json") {
+		cleanJSON = strings.TrimPrefix(cleanJSON, "```json")
+	} else if strings.HasPrefix(cleanJSON, "```") {
+		cleanJSON = strings.TrimPrefix(cleanJSON, "```")
+	}
+	cleanJSON = strings.TrimSuffix(cleanJSON, "```")
+	cleanJSON = strings.TrimSpace(cleanJSON)
+
+	var res struct {
+		Category    string `json:"category"`
+		Description string `json:"description"`
+	}
+	if json.Unmarshal([]byte(cleanJSON), &res) == nil && res.Category != "" {
+		return strings.TrimSpace(res.Category), strings.TrimSpace(res.Description)
+	}
+
+	return defaultCategory, defaultDesc
+}
+
 // generateSyntheticCompetitors produces realistic regional market profiles dynamically tailored to project category
 func (s *SERPScoutAgent) generateSyntheticCompetitors(strategy *SEOStrategy, locale string) []CompetitorProfile {
 	lang := strings.ToLower(strings.Split(locale, "-")[0])
-	cat := strategy.Category
-	if cat == "" {
-		cat = "Software Platform"
+	cat := strings.TrimSpace(strategy.Category)
+	if cat == "" || cat == "Software Platform" {
+		cat = "Cloud Platform"
 	}
+	cat = strings.ReplaceAll(cat, "Software Software", "Software")
+	cat = strings.ReplaceAll(cat, "software software", "software")
+
 	cleanSlug := strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(cat, " ", "-"), "/", "-"))
 	if len(cleanSlug) > 16 {
 		cleanSlug = cleanSlug[:16]
@@ -349,10 +491,10 @@ func (s *SERPScoutAgent) generateSyntheticCompetitors(strategy *SEOStrategy, loc
 				Domain:          fmt.Sprintf("cloud-%s.es", cleanSlug),
 				Rank:            1,
 				Title:           fmt.Sprintf("%s en la Nube | Líder en España y Latinoamérica", cat),
-				MetaDescription: fmt.Sprintf("Software de %s intuitivo y potente para empresas y profesionales. Prueba gratis.", cat),
+				MetaDescription: fmt.Sprintf("Solución de %s intuitiva y potente para empresas y profesionales. Prueba gratis.", cat),
 				H1s:             []string{fmt.Sprintf("La plataforma de %s que impulsa tu crecimiento", cat)},
 				H2s:             []string{"Cumplimiento normativo integral", "Informes y análisis en tiempo real"},
-				Keywords:        []string{fmt.Sprintf("software %s", strings.ToLower(cat)), fmt.Sprintf("programa %s", strings.ToLower(cat)), "plataforma online", "gestión empresas"},
+				Keywords:        []string{fmt.Sprintf("plataforma de %s", cat), fmt.Sprintf("solución %s", cat), "herramienta online", "gestión empresas"},
 				ValueProps:      []string{"Adaptado a la normativa local", "Soporte experto en español", "Escalabilidad garantizada"},
 				IsDiscovered:    true,
 			},
@@ -367,7 +509,7 @@ func (s *SERPScoutAgent) generateSyntheticCompetitors(strategy *SEOStrategy, loc
 				MetaDescription: fmt.Sprintf("Optimisez vos processus avec notre logiciel de %s conforme RGPD. Essai gratuit sans engagement.", cat),
 				H1s:             []string{fmt.Sprintf("Le logiciel de %s de référence pour booster votre productivité", cat)},
 				H2s:             []string{"Conformité RGPD et sécurité certifiée", "Déploiement rapide et support réactif"},
-				Keywords:        []string{fmt.Sprintf("logiciel %s", strings.ToLower(cat)), fmt.Sprintf("solution %s", strings.ToLower(cat)), "RGPD conforme", "outil en ligne"},
+				Keywords:        []string{fmt.Sprintf("solution %s", strings.ToLower(cat)), fmt.Sprintf("logiciel %s", strings.ToLower(cat)), "RGPD conforme", "outil en ligne"},
 				ValueProps:      []string{"Hébergement souverain en France", "Support client en français 5j/7", "Sans engagement de durée"},
 				IsDiscovered:    true,
 			},
@@ -375,10 +517,10 @@ func (s *SERPScoutAgent) generateSyntheticCompetitors(strategy *SEOStrategy, loc
 	default:
 		return []CompetitorProfile{
 			{
-				URL:             fmt.Sprintf("https://www.market-leading-%s.com", cleanSlug),
-				Domain:          fmt.Sprintf("market-leading-%s.com", cleanSlug),
+				URL:             fmt.Sprintf("https://www.top-%s.com", cleanSlug),
+				Domain:          fmt.Sprintf("top-%s.com", cleanSlug),
 				Rank:            1,
-				Title:           fmt.Sprintf("Top %s Platform | #1 Rated Solution for Teams", cat),
+				Title:           fmt.Sprintf("Leading %s Platform | #1 Rated Solution for Teams", cat),
 				MetaDescription: fmt.Sprintf("Discover the leading %s platform designed for modern speed, enterprise reliability, and seamless workflows.", cat),
 				H1s:             []string{fmt.Sprintf("The #1 %s Platform Built to Scale", cat)},
 				H2s:             []string{"Enterprise-Grade Security", "Sub-second Realtime Sync"},

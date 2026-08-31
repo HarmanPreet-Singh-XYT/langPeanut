@@ -46,8 +46,14 @@ func BuildPullRequest(result *agents.PipelineResult, meta RunMetadata) (title, b
 	fileCount := len(result.RefactoredFiles)
 	localeList := strings.Join(meta.Locales, ", ")
 
-	title = fmt.Sprintf("i18n: localize %d string(s) across %d file(s) (%s)",
-		result.ExtractedCandidates, fileCount, localeList)
+	if result.ExtractedCandidates > 0 {
+		title = fmt.Sprintf("i18n: localize %d string(s) across %d file(s) (%s)",
+			result.ExtractedCandidates, fileCount, localeList)
+	} else if len(result.TargetLocaleFiles) > 0 || len(result.Translations) > 0 {
+		title = fmt.Sprintf("i18n: sync translation matrix & locale catalogs (%s)", localeList)
+	} else {
+		title = fmt.Sprintf("i18n: automated localization check (%s)", localeList)
+	}
 	if needsReview {
 		unresolvedFiles := countUnresolvedFiles(result.UnresolvedErrors)
 		title += fmt.Sprintf(" — %d file(s) need review", unresolvedFiles)

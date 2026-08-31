@@ -11,10 +11,14 @@ import (
 )
 
 var initCmd = &cobra.Command{
-	Use:   "init",
+	Use:   "init [directory]",
 	Short: "Detect framework and initialize langPeanut configuration",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		absRoot, err := filepath.Abs(projectRoot)
+		targetDir := projectRoot
+		if len(args) > 0 {
+			targetDir = args[0]
+		}
+		absRoot, err := filepath.Abs(targetDir)
 		if err != nil {
 			return err
 		}

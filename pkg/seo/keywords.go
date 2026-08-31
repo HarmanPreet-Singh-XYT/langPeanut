@@ -101,10 +101,12 @@ func (k *KeywordIntelligenceAgent) generateHeuristicKeywords(strategy *SEOStrate
 	var pool []KeywordInsight
 	seen := make(map[string]bool)
 
-	cat := strategy.Category
-	if cat == "" {
-		cat = "Software Platform"
+	cat := strings.TrimSpace(strategy.Category)
+	if cat == "" || cat == "Software Platform" {
+		cat = "Productivity Platform"
 	}
+	cat = strings.ReplaceAll(cat, "Software Software", "Software")
+	cat = strings.ReplaceAll(cat, "software software", "software")
 
 	// 1. Collect unique competitor keywords first
 	for i, c := range competitors {
@@ -141,6 +143,26 @@ func (k *KeywordIntelligenceAgent) generateHeuristicKeywords(strategy *SEOStrate
 	// 2. Synthesize domain & goal-specific keywords tailored to project category
 	var defaults []KeywordInsight
 	switch lang {
+	case "en":
+		switch strategy.Goal {
+		case GoalConversion:
+			defaults = []KeywordInsight{
+				{Keyword: fmt.Sprintf("best %s pricing & plans", strings.ToLower(cat)), Locale: locale, Intent: "commercial", VolumeTier: "high", EstMonthlyVolume: 24000, Difficulty: 44, Relevance: 98, IsPrimary: true},
+				{Keyword: fmt.Sprintf("try %s free online", strings.ToLower(cat)), Locale: locale, Intent: "transactional", VolumeTier: "high", EstMonthlyVolume: 18500, Difficulty: 38, Relevance: 96, IsPrimary: true},
+				{Keyword: fmt.Sprintf("top %s comparison for teams", strings.ToLower(cat)), Locale: locale, Intent: "commercial", VolumeTier: "medium", EstMonthlyVolume: 8900, Difficulty: 32, Relevance: 92, IsPrimary: false},
+			}
+		case GoalTrust:
+			defaults = []KeywordInsight{
+				{Keyword: fmt.Sprintf("enterprise %s security & compliance", strings.ToLower(cat)), Locale: locale, Intent: "informational", VolumeTier: "medium", EstMonthlyVolume: 7400, Difficulty: 29, Relevance: 96, IsPrimary: true},
+				{Keyword: fmt.Sprintf("SOC-2 certified %s solution", strings.ToLower(cat)), Locale: locale, Intent: "commercial", VolumeTier: "medium", EstMonthlyVolume: 6100, Difficulty: 26, Relevance: 93, IsPrimary: true},
+			}
+		default: // GoalTopTraffic
+			defaults = []KeywordInsight{
+				{Keyword: fmt.Sprintf("best %s software for modern teams", strings.ToLower(cat)), Locale: locale, Intent: "commercial", VolumeTier: "high", EstMonthlyVolume: 28000, Difficulty: 49, Relevance: 97, IsPrimary: true},
+				{Keyword: fmt.Sprintf("top rated %s tools in 2026", strings.ToLower(cat)), Locale: locale, Intent: "commercial", VolumeTier: "high", EstMonthlyVolume: 19800, Difficulty: 42, Relevance: 95, IsPrimary: true},
+				{Keyword: fmt.Sprintf("how to automate %s workflow", strings.ToLower(cat)), Locale: locale, Intent: "informational", VolumeTier: "medium", EstMonthlyVolume: 9200, Difficulty: 30, Relevance: 89, IsPrimary: false},
+			}
+		}
 	case "ja":
 		switch strategy.Goal {
 		case GoalConversion:
@@ -188,25 +210,25 @@ func (k *KeywordIntelligenceAgent) generateHeuristicKeywords(strategy *SEOStrate
 		switch strategy.Goal {
 		case GoalConversion:
 			defaults = []KeywordInsight{
-				{Keyword: fmt.Sprintf("precios software %s", strings.ToLower(cat)), Locale: locale, Intent: "commercial", VolumeTier: "high", EstMonthlyVolume: 13500, Difficulty: 38, Relevance: 97, IsPrimary: true},
+				{Keyword: fmt.Sprintf("precios de %s", strings.ToLower(cat)), Locale: locale, Intent: "commercial", VolumeTier: "high", EstMonthlyVolume: 13500, Difficulty: 38, Relevance: 97, IsPrimary: true},
 				{Keyword: fmt.Sprintf("probar %s gratis online", strings.ToLower(cat)), Locale: locale, Intent: "transactional", VolumeTier: "high", EstMonthlyVolume: 10400, Difficulty: 33, Relevance: 95, IsPrimary: true},
-				{Keyword: fmt.Sprintf("mejor programa %s empresas", strings.ToLower(cat)), Locale: locale, Intent: "commercial", VolumeTier: "medium", EstMonthlyVolume: 6100, Difficulty: 30, Relevance: 91, IsPrimary: false},
+				{Keyword: fmt.Sprintf("mejor solución de %s empresas", strings.ToLower(cat)), Locale: locale, Intent: "commercial", VolumeTier: "medium", EstMonthlyVolume: 6100, Difficulty: 30, Relevance: 91, IsPrimary: false},
 			}
 		case GoalTrust:
 			defaults = []KeywordInsight{
-				{Keyword: fmt.Sprintf("software %s seguro certificado", strings.ToLower(cat)), Locale: locale, Intent: "informational", VolumeTier: "medium", EstMonthlyVolume: 5800, Difficulty: 26, Relevance: 94, IsPrimary: true},
-				{Keyword: fmt.Sprintf("plataforma %s normativa local", strings.ToLower(cat)), Locale: locale, Intent: "commercial", VolumeTier: "medium", EstMonthlyVolume: 4900, Difficulty: 22, Relevance: 92, IsPrimary: true},
+				{Keyword: fmt.Sprintf("plataforma de %s segura", strings.ToLower(cat)), Locale: locale, Intent: "informational", VolumeTier: "medium", EstMonthlyVolume: 5800, Difficulty: 26, Relevance: 94, IsPrimary: true},
+				{Keyword: fmt.Sprintf("solución de %s normativa local", strings.ToLower(cat)), Locale: locale, Intent: "commercial", VolumeTier: "medium", EstMonthlyVolume: 4900, Difficulty: 22, Relevance: 92, IsPrimary: true},
 			}
 		default: // GoalTopTraffic
 			defaults = []KeywordInsight{
-				{Keyword: fmt.Sprintf("mejor software de %s", strings.ToLower(cat)), Locale: locale, Intent: "commercial", VolumeTier: "high", EstMonthlyVolume: 17200, Difficulty: 43, Relevance: 96, IsPrimary: true},
-				{Keyword: fmt.Sprintf("programa %s en la nube", strings.ToLower(cat)), Locale: locale, Intent: "commercial", VolumeTier: "high", EstMonthlyVolume: 12600, Difficulty: 37, Relevance: 94, IsPrimary: true},
-				{Keyword: fmt.Sprintf("herramienta %s online pymes", strings.ToLower(cat)), Locale: locale, Intent: "informational", VolumeTier: "medium", EstMonthlyVolume: 6900, Difficulty: 31, Relevance: 89, IsPrimary: false},
+				{Keyword: fmt.Sprintf("mejor plataforma de %s", strings.ToLower(cat)), Locale: locale, Intent: "commercial", VolumeTier: "high", EstMonthlyVolume: 17200, Difficulty: 43, Relevance: 96, IsPrimary: true},
+				{Keyword: fmt.Sprintf("solución de %s en la nube", strings.ToLower(cat)), Locale: locale, Intent: "commercial", VolumeTier: "high", EstMonthlyVolume: 12600, Difficulty: 37, Relevance: 94, IsPrimary: true},
+				{Keyword: fmt.Sprintf("herramienta de %s online", strings.ToLower(cat)), Locale: locale, Intent: "informational", VolumeTier: "medium", EstMonthlyVolume: 6900, Difficulty: 31, Relevance: 89, IsPrimary: false},
 			}
 		}
 	default:
 		defaults = []KeywordInsight{
-			{Keyword: fmt.Sprintf("best %s software platform", strings.ToLower(cat)), Locale: locale, Intent: "commercial", VolumeTier: "high", EstMonthlyVolume: 22000, Difficulty: 47, Relevance: 97, IsPrimary: true},
+			{Keyword: fmt.Sprintf("best %s platform", strings.ToLower(cat)), Locale: locale, Intent: "commercial", VolumeTier: "high", EstMonthlyVolume: 22000, Difficulty: 47, Relevance: 97, IsPrimary: true},
 			{Keyword: fmt.Sprintf("top rated %s tool", strings.ToLower(cat)), Locale: locale, Intent: "commercial", VolumeTier: "high", EstMonthlyVolume: 15400, Difficulty: 41, Relevance: 95, IsPrimary: true},
 			{Keyword: fmt.Sprintf("cloud %s pricing comparison", strings.ToLower(cat)), Locale: locale, Intent: "commercial", VolumeTier: "medium", EstMonthlyVolume: 7800, Difficulty: 34, Relevance: 91, IsPrimary: false},
 			{Keyword: fmt.Sprintf("automate %s workflow", strings.ToLower(cat)), Locale: locale, Intent: "informational", VolumeTier: "medium", EstMonthlyVolume: 5200, Difficulty: 28, Relevance: 88, IsPrimary: false},

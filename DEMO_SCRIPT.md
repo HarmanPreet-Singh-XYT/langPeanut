@@ -1,6 +1,6 @@
 # DEMO_SCRIPT.md — 5-Minute Hackathon Video Walkthrough Script
 
-> **micro1 Agentic Workflows Hackathon (Deliverable 03)**  
+> **Agentic Workflows Hackathon (Deliverable 03)**  
 > Use this turn-by-turn video presentation guide to record your 5-minute solution video.
 
 ---
@@ -20,7 +20,7 @@
 ## 🎙️ Step-by-Step Spoken Script
 
 ### [0:00 - 0:45] Problem & Bottleneck
-> *"Hi everyone, welcome to our presentation for the micro1 Agentic Workflows Hackathon. Today, we're introducing **langPeanut** — the Universal Multi-Agent Localization System.*
+> *"Hi everyone, welcome to our presentation for the Agentic Workflows Hackathon. Today, we're introducing **langPeanut** — the Universal Multi-Agent Localization System.*
 >
 > *Every developer knows the pain of internationalizing software. Retrofitting localization onto an existing mobile or web app requires finding hundreds of hardcoded strings, creating boilerplate locale catalogs, and rewriting source code. When developers try using simple LLM prompts or regex tools, they encounter severe failure modes: LLMs rewrite the entire file, deleting comments, mangling nested JSX trees, and corrupting variable placeholders like `{userName}`.*
 >

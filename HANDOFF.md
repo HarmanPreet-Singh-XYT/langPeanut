@@ -7,7 +7,7 @@
 ## What This Is
 
 Extending the existing `langPeanut` CLI/TUI (a Go multi-agent localization tool built for the
-micro1 Agentic Workflows Hackathon) into a hosted, self-sufficient VPS service ("langPeanut
+Agentic Workflows Hackathon) into a hosted, self-sufficient VPS service ("langPeanut
 Cloud"): a team connects GitHub, picks any repo they have access to, and the service
 automatically clones it, runs the existing 6-agent localization pipeline, and opens a PR — all
 running on the VPS, with the user's PC only ever loading a web page.

@@ -3,10 +3,12 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 
 	"github.com/langPeanut/langPeanut/pkg/agents"
 	"github.com/langPeanut/langPeanut/pkg/platforms"
+	"github.com/langPeanut/langPeanut/pkg/types"
 	"github.com/spf13/cobra"
 )
 
@@ -31,25 +33,61 @@ var extractCmd = &cobra.Command{
 
 		fmt.Printf("langPeanut Extract — Processing %s (%s)...\n\n", absRoot, platform.DisplayName())
 
-		supervisor, err := agents.NewSupervisorAgent(absRoot, platform)
+		scout := agents.NewASTScoutAgent(platform)
+		contextAgent := agents.NewContextAgent()
+
+		scanReport, err := scout.ScanProject(absRoot, "")
 		if err != nil {
-			return err
+			return fmt.Errorf("scout failed: %w", err)
 		}
 
-		result, err := supervisor.RunEndToEnd(context.Background(), sourceLang, []string{}, dryRun)
-		if err != nil {
-			return err
+		candidates := contextAgent.EnhanceFast(scanReport.Candidates)
+		sourceEntries := make(map[string]string)
+		for _, c := range candidates {
+			if c.Classification == types.ClassLocalizable && (c.Approved || autoApprove || c.Confidence >= 0.8) {
+				sourceEntries[c.Key] = c.CleanValue
+			}
 		}
 
-		fmt.Printf("✓ Scanned %d files, extracted %d candidate strings.\n", result.ScannedFilesCount, result.ExtractedCandidates)
-		fmt.Printf("✓ Created base locale file for: %s\n", sourceLang)
+		// Merge with existing on-disk source catalog if present
+		existingFiles, _ := platform.DiscoverExistingLocales(absRoot)
+		if srcPath, found := existingFiles[sourceLang]; found {
+			if data, err := os.ReadFile(srcPath); err == nil {
+				if locData, err := platform.ParseLocaleFileForLocale(data, sourceLang); err == nil && locData != nil {
+					for k, v := range locData.Entries {
+						sourceEntries[k] = v
+					}
+				}
+			}
+		}
+
+		rawDir := platform.DefaultLocaleDir(absRoot)
+		localeDir := rawDir
+		if !filepath.IsAbs(localeDir) {
+			localeDir = filepath.Join(absRoot, rawDir)
+		}
+
+		sourcePath := platform.DefaultSourceFile(absRoot, sourceLang)
+		if !filepath.IsAbs(sourcePath) {
+			sourcePath = filepath.Join(absRoot, sourcePath)
+		}
+
+		sourceLocaleData := types.LocaleData{
+			LocaleCode: sourceLang,
+			Entries:    sourceEntries,
+		}
+
+		if !dryRun {
+			_ = os.MkdirAll(localeDir, 0755)
+			srcBytes, _ := platform.FormatLocaleFile(sourceLocaleData)
+			_ = os.WriteFile(sourcePath, srcBytes, 0644)
+		}
+
+		fmt.Printf("✓ Scanned %d files, extracted %d candidate strings (%d localizable keys).\n", scanReport.TotalFilesScanned, scanReport.TotalCandidates, len(sourceEntries))
+		fmt.Printf("✓ Base locale catalog written to: %s\n", sourcePath)
 
 		if dryRun {
 			fmt.Println("\n[Dry Run] No files were modified on disk.")
-		} else {
-			if result.CheckpointID != "" {
-				fmt.Printf("✓ Checkpoint saved: %s (run `langPeanut rollback` to revert)\n", result.CheckpointID)
-			}
 		}
 
 		return nil

@@ -1,6 +1,6 @@
 # CHANGELOG.md — Improvement & Interaction Changelog
 
-> **micro1 Agentic Workflows Hackathon Record**  
+> **Agentic Workflows Hackathon Record**  
 > This file tracks the chronological evolution of the project, including user directives, agent actions, problems encountered, fixes applied, and the formal hackathon iteration progression.
 
 ---

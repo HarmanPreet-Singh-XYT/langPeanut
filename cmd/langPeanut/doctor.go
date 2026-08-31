@@ -17,11 +17,15 @@ var (
 )
 
 var doctorCmd = &cobra.Command{
-	Use:   "doctor",
+	Use:   "doctor [directory]",
 	Short: "Autonomous Framework & i18n Readiness Diagnostic Doctor",
 	Long:  "Inspects repository dependencies, manifests, i18n configurations, and untranslated literals to produce an actionable health score and 1-click bootstrap.",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		absRoot, err := filepath.Abs(projectRoot)
+		targetDir := projectRoot
+		if len(args) > 0 {
+			targetDir = args[0]
+		}
+		absRoot, err := filepath.Abs(targetDir)
 		if err != nil {
 			return err
 		}

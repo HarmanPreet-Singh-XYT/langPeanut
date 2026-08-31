@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/langPeanut/langPeanut/pkg/agents"
+	"github.com/langPeanut/langPeanut/pkg/llm"
 	"github.com/langPeanut/langPeanut/pkg/memory"
 	"github.com/langPeanut/langPeanut/pkg/orchestrator"
 	"github.com/langPeanut/langPeanut/pkg/seo"
@@ -370,6 +371,99 @@ func (r *ToolRegistry) registerBuiltins() {
 		},
 		Handler: handleExplainConcept,
 	})
+
+	// 15. scout_personas
+	r.Register(&ToolDefinition{
+		Name:        "scout_personas",
+		Description: "Scouts the repository to infer brand voice, audience persona, recommended tone style, and key brand glossary terms.",
+		Parameters: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
+		},
+		Handler: handleScoutPersonas,
+	})
+
+	// 16. prune_dead_keys
+	r.Register(&ToolDefinition{
+		Name:        "prune_dead_keys",
+		Description: "Analyzes all translation dictionary keys and prunes orphaned/dead keys no longer referenced in the source code.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"prune": map[string]any{
+					"type":        "boolean",
+					"description": "Whether to prune dead keys from disk or only analyze.",
+				},
+			},
+		},
+		Handler: handlePruneDeadKeys,
+	})
+
+	// 17. trigger_job
+	r.Register(&ToolDefinition{
+		Name:        "trigger_job",
+		Description: "Triggers an asynchronous localization pipeline job or queues a background translation run on the platform for a specified Git branch with user directives.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"branch": map[string]any{
+					"type":        "string",
+					"description": "Target Git branch to run the job against (e.g. main, staging).",
+				},
+				"directive": map[string]any{
+					"type":        "string",
+					"description": "Optional translation instructions or tone preferences for the job.",
+				},
+				"locales": map[string]any{
+					"type":        "array",
+					"items":       map[string]any{"type": "string"},
+					"description": "Target locales to translate.",
+				},
+			},
+		},
+		Handler: handleTriggerJobTool,
+	})
+
+	// 18. query_jobs
+	r.Register(&ToolDefinition{
+		Name:        "query_jobs",
+		Description: "Lists recent platform localization jobs, execution status (queued, running, completed, failed), target branches, commit SHAs, and GitHub Pull Request URLs.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"limit": map[string]any{
+					"type":        "integer",
+					"description": "Maximum number of recent jobs to retrieve (default: 5).",
+				},
+			},
+		},
+		Handler: handleQueryJobsTool,
+	})
+
+	// 19. update_translation_key
+	r.Register(&ToolDefinition{
+		Name:        "update_translation_key",
+		Description: "Directly updates or manually corrects a specific translation key in a target locale dictionary or cloud translation matrix.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"locale": map[string]any{
+					"type":        "string",
+					"description": "Target locale code (e.g. 'es', 'ja', 'de', 'fr').",
+				},
+				"key": map[string]any{
+					"type":        "string",
+					"description": "Translation key identifier.",
+				},
+				"value": map[string]any{
+					"type":        "string",
+					"description": "New translated text value.",
+				},
+			},
+			"required": []string{"locale", "key", "value"},
+		},
+		Handler: handleUpdateTranslationKeyTool,
+	})
 }
 
 // Handler implementations
@@ -490,7 +584,7 @@ func handleInspectStringContext(ctx context.Context, args map[string]any, engine
 		Title:       fmt.Sprintf("String Context: %s", match.Key),
 		Description: fmt.Sprintf("File: %s (Line %d)", match.FilePath, match.StartLine),
 		Data:        match,
-		RenderedText: fmt.Sprintf(`┌─── 🔍 Context Inspector: %s ──────────────────────────────
+		RenderedText: fmt.Sprintf(`┌─── Context Inspector: %s ──────────────────────────────
 │ Key:             %s
 │ Raw Value:       "%s"
 │ Clean Value:     "%s"
@@ -661,6 +755,10 @@ func handleExecuteLocalization(ctx context.Context, args map[string]any, engine 
 		Diagnostics: diagnostics,
 	}
 
+	if engine.MatrixUpdateHook != nil && res.Translations != nil {
+		_ = engine.MatrixUpdateHook(ctx, res.Translations)
+	}
+
 	card := FormatCriticCard(criticData)
 	return map[string]any{
 		"success":          res.RefactoredFiles != nil,
@@ -669,6 +767,145 @@ func handleExecuteLocalization(ctx context.Context, args map[string]any, engine 
 		"refactored_files": res.RefactoredFiles,
 		"checkpoint_id":    res.CheckpointID,
 	}, &card, nil
+}
+
+func handleTriggerJobTool(ctx context.Context, args map[string]any, engine *Engine) (any, *UICard, error) {
+	branch := ""
+	if b, ok := args["branch"].(string); ok {
+		branch = strings.TrimSpace(b)
+	}
+	directive := ""
+	if d, ok := args["directive"].(string); ok {
+		directive = strings.TrimSpace(d)
+	}
+	if locsRaw, ok := args["locales"].([]any); ok && len(locsRaw) > 0 {
+		var locs []string
+		for _, l := range locsRaw {
+			if s, ok := l.(string); ok && s != "" {
+				locs = append(locs, s)
+			}
+		}
+		if len(locs) > 0 {
+			engine.TargetLocales = locs
+		}
+	} else if locs, ok := args["locales"].([]string); ok && len(locs) > 0 {
+		engine.TargetLocales = locs
+	}
+
+	// Case 1: Running in Cloud platform (JobTriggerHook is wired)
+	if engine.JobTriggerHook != nil {
+		res, err := engine.JobTriggerHook(ctx, branch, directive)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to queue platform job: %w", err)
+		}
+
+		jobID := res["job_id"]
+		targetBranch := res["branch"]
+		status := res["status"]
+
+		var sb strings.Builder
+		sb.WriteString("┌─── PLATFORM BACKGROUND JOB QUEUED ───────────────────────────────────┐\n")
+		sb.WriteString(fmt.Sprintf("│ Job ID:        #%v\n", jobID))
+		sb.WriteString(fmt.Sprintf("│ Status:        %v\n", status))
+		sb.WriteString(fmt.Sprintf("│ Target Branch: %v\n", targetBranch))
+		if directive != "" {
+			sb.WriteString(fmt.Sprintf("│ Directive:     %s\n", directive))
+		}
+		sb.WriteString(fmt.Sprintf("│ Target Locales: %v\n", engine.TargetLocales))
+		sb.WriteString("│ Runner:        Autonomous worker runner actively executing in cloud\n")
+		sb.WriteString("└──────────────────────────────────────────────────────────────────────┘")
+
+		card := &UICard{
+			Type:         "job_status",
+			Title:        fmt.Sprintf("Platform Job #%v Queued", jobID),
+			RenderedText: sb.String(),
+			Data:         res,
+		}
+		return res, card, nil
+	}
+
+	// Case 2: Running locally in CLI/TUI (execute local pipeline deterministically)
+	return handleExecuteLocalization(ctx, map[string]any{
+		"locales": engine.TargetLocales,
+		"tone":    engine.ToneStyle,
+		"dry_run": false,
+	}, engine)
+}
+
+func handleQueryJobsTool(ctx context.Context, args map[string]any, engine *Engine) (any, *UICard, error) {
+	limit := 5
+	if l, ok := args["limit"].(float64); ok && l > 0 {
+		limit = int(l)
+	}
+
+	if engine.JobsQueryHook != nil {
+		jobs, err := engine.JobsQueryHook(ctx, limit)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed querying jobs: %w", err)
+		}
+
+		var sb strings.Builder
+		sb.WriteString(fmt.Sprintf("┌─── PLATFORM RECENT JOBS (%d found) ───────────────────────────────────┐\n", len(jobs)))
+		for i, j := range jobs {
+			id := j["id"]
+			status := j["status"]
+			branch := j["branch"]
+			prURL := j["pr_url"]
+			sb.WriteString(fmt.Sprintf("│ [%d] Job #%-4v | Status: %-10v | Branch: %-10v\n", i+1, id, status, branch))
+			if prURL != nil && prURL != "" {
+				sb.WriteString(fmt.Sprintf("│     GitHub PR: %v\n", prURL))
+			}
+		}
+		sb.WriteString("└──────────────────────────────────────────────────────────────────────┘")
+
+		card := &UICard{
+			Type:         "jobs_list",
+			Title:        fmt.Sprintf("Recent Platform Jobs (%d)", len(jobs)),
+			RenderedText: sb.String(),
+			Data:         jobs,
+		}
+		return jobs, card, nil
+	}
+
+	return map[string]any{
+		"message": "Local CLI execution environment (no cloud jobs history). Use 'manage_checkpoints' to view local snapshots.",
+	}, nil, nil
+}
+
+func handleUpdateTranslationKeyTool(ctx context.Context, args map[string]any, engine *Engine) (any, *UICard, error) {
+	locale, _ := args["locale"].(string)
+	key, _ := args["key"].(string)
+	val, _ := args["value"].(string)
+
+	if locale == "" || key == "" || val == "" {
+		return nil, nil, fmt.Errorf("locale, key, and value are all required")
+	}
+
+	if engine.KeyUpdateHook != nil {
+		if err := engine.KeyUpdateHook(ctx, locale, key, val); err != nil {
+			return nil, nil, fmt.Errorf("failed updating key in matrix: %w", err)
+		}
+	}
+
+	var sb strings.Builder
+	sb.WriteString("┌─── TRANSLATION KEY UPDATED ──────────────────────────────────────────┐\n")
+	sb.WriteString(fmt.Sprintf("│ Locale: %s\n", locale))
+	sb.WriteString(fmt.Sprintf("│ Key:    %s\n", key))
+	sb.WriteString(fmt.Sprintf("│ Value:  \"%s\"\n", val))
+	sb.WriteString("│ Status: Persisted to active translation catalog and database.\n")
+	sb.WriteString("└──────────────────────────────────────────────────────────────────────┘")
+
+	card := &UICard{
+		Type:         "key_updated",
+		Title:        fmt.Sprintf("Updated [%s] %s", locale, key),
+		RenderedText: sb.String(),
+		Data: map[string]any{
+			"locale": locale,
+			"key":    key,
+			"value":  val,
+		},
+	}
+	return map[string]any{"status": "updated", "locale": locale, "key": key, "value": val}, card, nil
 }
 
 func handleVerifyTranslations(ctx context.Context, args map[string]any, engine *Engine) (any, *UICard, error) {
@@ -885,7 +1122,7 @@ func handleSEOWeaveCopy(ctx context.Context, args map[string]any, engine *Engine
 		Title:       fmt.Sprintf("SEO Weaving Completed (%s)", strings.ToUpper(locale)),
 		Description: fmt.Sprintf("%d keys enhanced with target keywords", len(opts)),
 		Data:        opts,
-		RenderedText: fmt.Sprintf("┌─── 🚀 SEO Copy Weaving: %s ──────────────────────────\n│ Enhanced %d keys with high-intent keywords: %s\n│ Verified ICU variable preservation: 100%%\n└──────────────────────────────────────────────────────────────────────",
+		RenderedText: fmt.Sprintf("┌─── SEO Copy Weaving: %s ──────────────────────────\n│ Enhanced %d keys with high-intent keywords: %s\n│ Verified ICU variable preservation: 100%%\n└──────────────────────────────────────────────────────────────────────",
 			strings.ToUpper(locale), len(opts), strings.Join(keywords, ", ")),
 	}
 
@@ -920,7 +1157,7 @@ func handleManageCheckpoints(ctx context.Context, args map[string]any, engine *E
 			Type:        CardTypeCheckpoints,
 			Title:       "Rollback Successful",
 			Description: fmt.Sprintf("Reverted files to snapshot %s", ckptID),
-			RenderedText: fmt.Sprintf("┌─── ⏪ Rollback Executed ─────────────────────────────────────────────\n│ Reverted files back to snapshot: %s\n│ Clean build restored.\n└──────────────────────────────────────────────────────────────────────", ckptID),
+			RenderedText: fmt.Sprintf("┌─── Rollback Executed ─────────────────────────────────────────────\n│ Reverted files back to snapshot: %s\n│ Clean build restored.\n└──────────────────────────────────────────────────────────────────────", ckptID),
 		}
 		return map[string]any{"restored_checkpoint": ckptID}, &card, nil
 
@@ -958,6 +1195,37 @@ func handleManageConfig(ctx context.Context, args map[string]any, engine *Engine
 		}
 		if t, ok := args["tone"].(string); ok && t != "" {
 			cfg.StylePreset = t
+			engine.ToneStyle = t
+		}
+		if locs, ok := args["locales"].([]string); ok && len(locs) > 0 {
+			cfg.SelectedLocales = locs
+			engine.TargetLocales = locs
+		} else if locSlice, ok := args["locales"].([]any); ok && len(locSlice) > 0 {
+			var parsed []string
+			for _, item := range locSlice {
+				if s, ok := item.(string); ok && s != "" {
+					parsed = append(parsed, s)
+				}
+			}
+			if len(parsed) > 0 {
+				cfg.SelectedLocales = parsed
+				engine.TargetLocales = parsed
+			}
+		}
+		if cmd, ok := args["custom_build_cmd"].(string); ok && cmd != "" {
+			cfg.CustomBuildCmd = cmd
+		}
+		if cmd, ok := args["custom_install_cmd"].(string); ok && cmd != "" {
+			cfg.CustomInstallCmd = cmd
+		}
+		if rd, ok := args["root_dir"].(string); ok && rd != "" {
+			cfg.RootDir = rd
+		}
+		if em, ok := args["existing_translations_mode"].(string); ok && em != "" {
+			cfg.ExistingTranslationsMode = em
+		}
+		if dir, ok := args["user_directive"].(string); ok && dir != "" {
+			cfg.UserDirective = dir
 		}
 		if c, ok := args["concurrency"].(float64); ok && c > 0 {
 			cfg.Concurrency = int(c)
@@ -969,6 +1237,23 @@ func handleManageConfig(ctx context.Context, args map[string]any, engine *Engine
 			cfg.AutoGitignore = &g
 		}
 		_ = cfg.Save(engine.ProjectRoot)
+
+		if engine.ConfigUpdateHook != nil {
+			_, _ = engine.ConfigUpdateHook(ctx, args)
+		}
+
+		// Synchronize Engine LLMClient if provider/model updated
+		if cfg.ActiveProvider != "" || cfg.ActiveModel != "" {
+			prov := llm.ProviderClaude
+			if cfg.ActiveProvider != "" {
+				prov = llm.ProviderType(cfg.ActiveProvider)
+			}
+			mod := "claude-sonnet-5"
+			if cfg.ActiveModel != "" {
+				mod = cfg.ActiveModel
+			}
+			engine.LLMClient = llm.NewClient(prov, mod)
+		}
 	}
 
 	apiKeyStatus := map[string]bool{
@@ -1007,6 +1292,73 @@ func handleManageConfig(ctx context.Context, args map[string]any, engine *Engine
 	return cfgData, &card, nil
 }
 
+func handleScoutPersonas(ctx context.Context, args map[string]any, engine *Engine) (any, *UICard, error) {
+	scout := agents.NewPersonaScoutAgent(engine.LLMClient)
+	report, err := scout.DiscoverPersona(engine.ProjectRoot)
+	if err != nil {
+		return nil, nil, fmt.Errorf("persona discovery failed: %w", err)
+	}
+
+	var sb strings.Builder
+	sb.WriteString("┌─── Brand Persona & Audience Intelligence ─────────────────────────\n")
+	sb.WriteString(fmt.Sprintf("│ Detected Brand Tone: %s (Confidence: %.0f%%)\n", report.RecommendedTone, report.ConfidenceScore*100))
+	sb.WriteString(fmt.Sprintf("│ Recommended Locales: %s\n", strings.Join(report.LocalesSuggested, ", ")))
+	sb.WriteString(fmt.Sprintf("│ Brand Glossary:      %s\n", strings.Join(report.BrandLexicon, ", ")))
+	sb.WriteString("└──────────────────────────────────────────────────────────────────────")
+
+	card := UICard{
+		Type:         CardTypeHelp,
+		Title:        fmt.Sprintf("Brand Persona: %s", report.RecommendedTone),
+		Description:  fmt.Sprintf("Suggested Locales: %s", strings.Join(report.LocalesSuggested, ", ")),
+		Data:         report,
+		RenderedText: sb.String(),
+	}
+
+	return report, &card, nil
+}
+
+func handlePruneDeadKeys(ctx context.Context, args map[string]any, engine *Engine) (any, *UICard, error) {
+	pruneMode, _ := args["prune"].(bool)
+	pruner := agents.NewPrunerAgent(engine.Platform)
+
+	var report *agents.PruneReport
+	var err error
+	if pruneMode {
+		report, err = pruner.PruneDeadKeys(engine.ProjectRoot)
+	} else {
+		report, err = pruner.AnalyzeDeadKeys(engine.ProjectRoot)
+	}
+
+	if err != nil {
+		return nil, nil, fmt.Errorf("dead key pruning failed: %w", err)
+	}
+
+	var sb strings.Builder
+	actionLabel := "Analysis"
+	if pruneMode {
+		actionLabel = "Pruning"
+	}
+	sb.WriteString(fmt.Sprintf("┌─── Dead Key %s Report ──────────────────────────────────────────\n", actionLabel))
+	sb.WriteString(fmt.Sprintf("│ Scanned Files: %d | Active In-Code Keys: %d\n", report.TotalFilesScanned, report.ActiveKeysCount))
+	sb.WriteString(fmt.Sprintf("│ Total Dead/Orphaned Keys: %d\n", report.TotalDeadKeys))
+	for loc, keys := range report.DeadKeysByLocale {
+		if len(keys) > 0 {
+			sb.WriteString(fmt.Sprintf("│  • Locale [%s]: %d dead keys (%s)\n", loc, len(keys), strings.Join(keys[:min(len(keys), 3)], ", ")))
+		}
+	}
+	sb.WriteString("└──────────────────────────────────────────────────────────────────────")
+
+	card := UICard{
+		Type:         CardTypeHelp,
+		Title:        fmt.Sprintf("Dead Keys: %d Found", report.TotalDeadKeys),
+		Description:  fmt.Sprintf("Scanned %d files against locale dictionaries", report.TotalFilesScanned),
+		Data:         report,
+		RenderedText: sb.String(),
+	}
+
+	return report, &card, nil
+}
+
 func handleDiagnoseSystem(ctx context.Context, args map[string]any, engine *Engine) (any, *UICard, error) {
 	doc := agents.NewDoctorAgent(engine.Platform)
 	report, err := doc.DiagnoseProject(engine.ProjectRoot)
@@ -1015,17 +1367,17 @@ func handleDiagnoseSystem(ctx context.Context, args map[string]any, engine *Engi
 	}
 
 	var sb strings.Builder
-	sb.WriteString("┌─── 🩺 System Health & Doctor Diagnostics ───────────────────────────\n")
+	sb.WriteString("┌─── System Health & Diagnostics ───────────────────────────\n")
 	sb.WriteString(fmt.Sprintf("│ Overall Status: %s (Health Score: %d/100)\n│\n", report.Status, report.HealthScore))
 	for _, issue := range report.Issues {
-		badge := "⚠️ WARN"
+		badge := "WARN"
 		if issue.Severity == "ERROR" {
-			badge = "❌ ERR"
+			badge = "ERROR"
 		}
-		sb.WriteString(fmt.Sprintf("│  [%-6s] %-28s • %s\n", badge, issue.Title, issue.Description))
+		sb.WriteString(fmt.Sprintf("│  [%-5s] %-28s • %s\n", badge, issue.Title, issue.Description))
 	}
 	if len(report.Issues) == 0 {
-		sb.WriteString("│  ✓ All system checks passed cleanly. Framework and locales ready.\n")
+		sb.WriteString("│  All system checks passed cleanly. Framework and locales ready.\n")
 	}
 	sb.WriteString("└──────────────────────────────────────────────────────────────────────")
 
@@ -1049,7 +1401,7 @@ func handleExplainConcept(ctx context.Context, args map[string]any, engine *Engi
 		Title:        fmt.Sprintf("Knowledge Guide: %s", topic),
 		Description:  "Platform architecture & best practices",
 		Data:         map[string]string{"topic": topic, "explanation": explanation},
-		RenderedText: fmt.Sprintf("┌─── 📚 Knowledge Guide: %s ───────────────────────────────\n│ %s\n└──────────────────────────────────────────────────────────────────────", topic, explanation),
+		RenderedText: fmt.Sprintf("┌─── Knowledge Guide: %s ───────────────────────────────\n│ %s\n└──────────────────────────────────────────────────────────────────────", topic, explanation),
 	}
 
 	return map[string]string{"topic": topic, "explanation": explanation}, &card, nil

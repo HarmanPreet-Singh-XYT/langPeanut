@@ -287,20 +287,34 @@ func NewApp(projectRoot string) *Model {
 			{Number: "3", Title: "Interactive Review Queue", Desc: "Review, approve, or skip synthesized keys with variable hints", State: ViewReview},
 			{Number: "4", Title: "Multi-Locale Translation", Desc: "Translate to 36+ languages with 4-tier critic & reflection", State: ViewTranslate},
 			{Number: "5", Title: "Switch Target Project / Directory", Desc: "Target real apps (e.g. pingroute-web, your workspace, or demos) [p]", State: ViewProjectSelect},
-			{Number: "6", Title: "Run 10-Case Adversarial Benchmark", Desc: "Execute the official micro1 evaluation test harness (100% pass)", State: ViewBenchmark},
+			{Number: "6", Title: "Run 10-Case Adversarial Benchmark", Desc: "Execute the official evaluation test harness (100% pass)", State: ViewBenchmark},
 			{Number: "7", Title: "Checkpoints & Rollback", Desc: "Browse snapshots and restore files with 1-click", State: ViewCheckpoints},
 			{Number: "8", Title: "Settings & Style Memory", Desc: "Configure LLM providers, API keys, tone presets, and glossaries", State: ViewSettings},
 			{Number: "9", Title: "AI Token Usage & Cost Analytics", Desc: "Inspect real-time prompt/completion token consumption, model breakdowns & cost metrics [t]", State: ViewTokenStats},
 		},
-		projectPresets: []ProjectPreset{
-			{Name: "Current Directory (.)", RelPath: ".", Framework: "Auto-Detect", Desc: "Scan the current working directory"},
-			{Name: "pingroute-web (Real App)", RelPath: "/Users/harmanpreetsingh/Public/Code/pingroute-web", Framework: "React / Next.js", Desc: "Live Next.js production web app (300+ keys)"},
-			{Name: "React / Next.js Demo App", RelPath: "examples/nextjs-app", Framework: "React / TSX", Desc: "Full web storefront with Navbar, Hero, Cart modal & i18next hooks"},
-			{Name: "Flutter Mobile Demo App", RelPath: "examples/flutter-app", Framework: "Flutter / Dart", Desc: "Dart widget tree with const-stripping & ARB catalogs"},
-			{Name: "iOS SwiftUI Demo App", RelPath: "examples/swiftui-app", Framework: "iOS SwiftUI", Desc: "SwiftUI views with String Catalog .xcstrings format"},
-			{Name: "Android Compose Demo App", RelPath: "examples/android-app", Framework: "Android Kotlin", Desc: "Jetpack Compose UI with strings.xml and XML entity escaping"},
-			{Name: "10-Case Adversarial Benchmark", RelPath: "benchmark/workspace", Framework: "Multi-Platform", Desc: "10 edge-case test components for micro1 evaluation suite"},
-		},
+		projectPresets: func() []ProjectPreset {
+			presets := []ProjectPreset{
+				{Name: "Current Directory (.)", RelPath: ".", Framework: "Auto-Detect", Desc: "Scan the current working directory"},
+			}
+			// Dynamically discover sibling projects or demo examples
+			siblingPingroute := filepath.Join(repoRoot, "..", "pingroute-web")
+			if _, err := os.Stat(siblingPingroute); err == nil {
+				presets = append(presets, ProjectPreset{
+					Name:      "pingroute-web (Real App)",
+					RelPath:   siblingPingroute,
+					Framework: "React / Next.js",
+					Desc:      "Live Next.js production web app (300+ keys)",
+				})
+			}
+			presets = append(presets, []ProjectPreset{
+				{Name: "React / Next.js Demo App", RelPath: filepath.Join(repoRoot, "examples", "nextjs-app"), Framework: "React / TSX", Desc: "Full web storefront with Navbar, Hero, Cart modal & i18next hooks"},
+				{Name: "Flutter Mobile Demo App", RelPath: filepath.Join(repoRoot, "examples", "flutter-app"), Framework: "Flutter / Dart", Desc: "Dart widget tree with const-stripping & ARB catalogs"},
+				{Name: "iOS SwiftUI Demo App", RelPath: filepath.Join(repoRoot, "examples", "swiftui-app"), Framework: "iOS SwiftUI", Desc: "SwiftUI views with String Catalog .xcstrings format"},
+				{Name: "Android Compose Demo App", RelPath: filepath.Join(repoRoot, "examples", "android-app"), Framework: "Android Kotlin", Desc: "Jetpack Compose UI with strings.xml and XML entity escaping"},
+				{Name: "10-Case Adversarial Benchmark", RelPath: filepath.Join(repoRoot, "benchmark", "workspace"), Framework: "Multi-Platform", Desc: "10 edge-case test components for evaluation suite"},
+			}...)
+			return presets
+		}(),
 	}
 
 	return m
@@ -637,8 +651,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.textInput.SetValue(presets[nextIdx])
 				return m, nil
 			case "esc":
-				m.state = ViewMainMenu
-				m.wizardStep = 0
+				m.wizardStep = 1
+				m.cursor = 0
 				m.textInput.Blur()
 				return m, nil
 			case "ctrl+c":
@@ -2254,10 +2268,10 @@ func (m *Model) renderRunWizardView() string {
 		s.WriteString(inputBox + "\n\n")
 
 		s.WriteString(lipgloss.NewStyle().Foreground(dimTextColor).Render(
-			"Examples / Directives you can type:\n"+
-				"  • \"Add a language switcher dropdown in Navbar.tsx with a globe icon and Tailwind styling\"\n"+
-				"  • \"Add a language picker option in the app Settings screen\"\n"+
-				"  • \"Add a floating language toggle button in bottom-right corner with flag emojis\"\n"+
+			"Examples / Directives you can type:\n" +
+				"  • \"Add a language switcher dropdown in Navbar.tsx with a globe icon and Tailwind styling\"\n" +
+				"  • \"Add a language picker option in the app Settings screen\"\n" +
+				"  • \"Add a floating language toggle button in bottom-right corner with flag emojis\"\n" +
 				"  • (Leave blank and press [Enter] to skip and only localize existing strings)\n\n",
 		))
 
@@ -2736,7 +2750,7 @@ func (m *Model) renderExampleFlowView() string {
 
 func (m *Model) renderBenchmarkView() string {
 	var s strings.Builder
-	s.WriteString(lipgloss.NewStyle().Bold(true).Render("micro1 Hackathon — 10-Case Adversarial Benchmark Suite") + "\n\n")
+	s.WriteString(lipgloss.NewStyle().Bold(true).Render("Hackathon — 10-Case Adversarial Benchmark Suite") + "\n\n")
 
 	if len(m.benchResults) == 0 {
 		s.WriteString("Running benchmark suite...\n")
